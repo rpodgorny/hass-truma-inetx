@@ -45,6 +45,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: TrumaConfigEntry) -> boo
 
     async def _async_stop(_event: Event) -> None:
         """Close the BLE link before Home Assistant exits."""
+        # Logged so a later wedge can be told apart at a glance: this line
+        # present means we closed the link and the panel should have freed its
+        # slot; absent means the link was dropped by the process exiting.
+        LOGGER.debug("Truma %s: Home Assistant stopping, closing the BLE link", address)
         await coordinator.async_stop()
 
     # Home Assistant does NOT unload config entries when it shuts down — on

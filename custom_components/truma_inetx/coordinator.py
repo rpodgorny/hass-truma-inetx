@@ -130,9 +130,11 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         client = self._client
         self._client = None
         if client is None:
+            LOGGER.debug("Truma %s: no live BLE link to close", self.unique_id)
             return
         try:
             await client.disconnect()
+            LOGGER.debug("Truma %s: BLE link closed cleanly", self.unique_id)
         except Exception as exc:  # noqa: BLE001 - teardown must not raise
             LOGGER.debug("Truma %s disconnect: %s", self.unique_id, exc)
 
