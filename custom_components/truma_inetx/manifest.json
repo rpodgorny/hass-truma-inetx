@@ -13,5 +13,5 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/rpodgorny/hass-truma-inetx/issues",
   "requirements": ["cbor2==5.6.5"],
-  "version": "0.1.1"
+  "version": "0.1.2"
 }

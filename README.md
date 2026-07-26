@@ -81,7 +81,11 @@ Or manually:
 ### Icon
 
 The integration ships its own artwork in `custom_components/truma_inetx/brand/`
-(`icon.png` 256×256, `icon@2x.png` 512×512). Since
+(`icon.png` 256×256, `icon@2x.png` 512×512) — the Truma iNet X system mark,
+with the "iNet X" wordmark removed and the mark re-centred. It is **Truma's
+trademark, not covered by this repository's GPL-3.0 licence**; see
+[`brand/ATTRIBUTION.md`](custom_components/truma_inetx/brand/ATTRIBUTION.md)
+for the source, what was changed and the trademark notice. Since
 [Home Assistant 2026.3](https://developers.home-assistant.io/blog/2026/02/24/brands-proxy-api/)
 these are served straight from the integration through HA's brands proxy and
 take priority over the brands CDN — no submission to
@@ -170,4 +174,12 @@ GPL-3.0 above does **not** apply to those files. They are kept unmodified and
 isolated in their own subpackage; if upstream adds a licence and ships an
 installable package, that subpackage will be replaced by a dependency.
 
-Not affiliated with or endorsed by Truma Gerätetechnik GmbH & Co. KG.
+The integration icon is the Truma iNet X system mark, used descriptively to
+identify the device this integration talks to — see
+[`brand/ATTRIBUTION.md`](custom_components/truma_inetx/brand/ATTRIBUTION.md).
+It is excluded from the GPL-3.0 licence above.
+
+"Truma" and the Truma iNet X mark are trademarks of Truma Gerätetechnik GmbH &
+Co. KG. This project is not affiliated with, endorsed, sponsored by or
+supported by Truma.
+
