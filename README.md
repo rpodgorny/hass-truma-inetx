@@ -114,10 +114,17 @@ Pairing normally completes in a few seconds.
 
 ### If pairing fails
 
-- **The panel's Bluetooth device list is full.** It stores only ~4 devices and
-  silently rejects new bonds when full. Clear the list in the app and retry.
-- **Still failing → power-cycle the panel.** It then advertises a fresh address
-  that pairs cleanly. This also clears "ghost" connections holding a slot.
+Work through these in order — always re-entering add-device mode before each
+attempt, since the panel only accepts a bond while its pairing screen is up:
+
+1. **Clear the panel's saved Bluetooth device list.** It stores only ~4 devices
+   and silently rejects new bonds once full. Clear it in the Truma iNet X app,
+   re-arm add-device mode, and try again.
+2. **If clearing the list did not help, power-cycle the panel and start over.**
+   Switch it off and on, put it back into add-device mode, and repeat the whole
+   pairing step. This drops "ghost" connections that hold one of the panel's
+   connection slots, and makes it advertise a fresh Bluetooth address that
+   pairs cleanly. It resolves most stubborn cases.
 
 You do **not** need to clear any bonds on the Bluetooth proxy. If the proxy
 still holds a bond the panel has forgotten, the panel rejects it on that one

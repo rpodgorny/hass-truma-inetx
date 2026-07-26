@@ -14,11 +14,11 @@
       },
       "pair": {
         "title": "Pair with the Truma panel",
-        "description": "Put the panel {name} into add-device mode (in the Truma InetX app, or on the panel itself), then select **Submit**. Pairing can take up to a minute.\n\nIf it fails, clear the panel's saved Bluetooth device list — its bond storage may be full — and try again. If it still fails, power-cycle the panel: it then advertises a fresh Bluetooth address that pairs cleanly."
+        "description": "Put the panel {name} into add-device mode (in the Truma InetX app, or on the panel itself), then select **Submit** once. Pairing can take up to a minute.\n\n**If pairing fails, work through these in order:**\n\n1. **Clear the panel's saved Bluetooth device list.** It stores only about four devices and silently rejects new bonds once full. Put the panel back into add-device mode and try again.\n2. **If clearing the list did not help, power-cycle the panel and start over** — switch it off, back on, put it into add-device mode again, and repeat this step. A power-cycle drops stale connections that hold a slot and makes the panel advertise a fresh Bluetooth address, which pairs cleanly. This resolves most stubborn cases.\n\nAlways re-enter add-device mode before each attempt: the panel only accepts a bond while its pairing screen is up."
       }
     },
     "error": {
-      "pairing_failed": "Could not pair with the panel. Make sure it is in add-device mode and its Bluetooth device list has free slots, then try again. If it keeps failing, power-cycle the panel and retry."
+      "pairing_failed": "Could not pair with the panel. Put it back into add-device mode and try again. If that fails, clear its saved Bluetooth device list (it holds only about four devices); if clearing the list does not help either, power-cycle the panel, put it into add-device mode again and start over."
     },
     "abort": {
       "no_devices_found": "No Truma iNet X panels found. Make sure the panel is powered on and in Bluetooth range.",
