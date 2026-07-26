@@ -1,0 +1,35 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Add Truma iNet X",
+        "description": "Select the Truma panel to add.",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "confirm": {
+        "description": "Do you want to add the Truma panel {name}?"
+      },
+      "pair": {
+        "title": "Pair with the Truma panel",
+        "description": "Put the panel {name} into add-device mode (in the Truma InetX app, or on the panel itself), then select **Submit**. Pairing can take up to a minute.\n\nIf it fails, clear the panel's saved Bluetooth device list — its bond storage may be full — and try again. If it still fails, power-cycle the panel: it then advertises a fresh Bluetooth address that pairs cleanly."
+      }
+    },
+    "error": {
+      "pairing_failed": "Could not pair with the panel. Make sure it is in add-device mode and its Bluetooth device list has free slots, then try again. If it keeps failing, power-cycle the panel and retry."
+    },
+    "abort": {
+      "no_devices_found": "No Truma iNet X panels found. Make sure the panel is powered on and in Bluetooth range.",
+      "already_configured": "This Truma panel is already configured.",
+      "awaiting_name": "Waiting for the Truma panel to advertise its name before pairing.",
+      "reconfigure_successful": "Re-paired with the Truma panel successfully."
+    }
+  },
+  "exceptions": {
+    "control_not_ready": {
+      "message": "Truma BLE control is not available yet (transport is wired in a later build stage)."
+    }
+  }
+}
