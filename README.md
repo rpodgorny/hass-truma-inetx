@@ -80,11 +80,18 @@ Or manually:
 
 ### Icon
 
-The integration ships its artwork in `custom_components/truma_inetx/brand/`.
-Home Assistant only renders integration icons that live in the
-[home-assistant/brands](https://github.com/home-assistant/brands) repository
-(under `custom_integrations/`), so until `truma_inetx` is submitted there the
-UI shows a default icon. This is cosmetic only.
+The integration ships its own artwork in `custom_components/truma_inetx/brand/`
+(`icon.png` 256×256, `icon@2x.png` 512×512). Since
+[Home Assistant 2026.3](https://developers.home-assistant.io/blog/2026/02/24/brands-proxy-api/)
+these are served straight from the integration through HA's brands proxy and
+take priority over the brands CDN — no submission to
+[home-assistant/brands](https://github.com/home-assistant/brands) and no
+manifest entry required.
+
+On Home Assistant older than 2026.3 the UI falls back to a default icon. The
+HACS store listing may also still show a placeholder, since it fetches icons
+from the HACS CDN rather than from the repository
+([hacs/integration#5223](https://github.com/hacs/integration/issues/5223)).
 
 ### Manual
 

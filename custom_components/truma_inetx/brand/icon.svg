@@ -1,3 +1,6 @@
+<!-- Source for brand/icon.png (256x256) and icon@2x.png (512x512).
+     Re-render with: rsvg-convert -w 256 -h 256 icon.svg -o icon.png
+                     rsvg-convert -w 512 -h 512 icon.svg -o icon@2x.png -->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <rect width="512" height="512" rx="115" fill="#e8590c"/>
   <g transform="translate(136,136) scale(10)" fill="#ffffff">
