@@ -1,5 +1,9 @@
 # Truma iNet X (BLE) — Home Assistant integration
 
+[![HACS: custom](https://img.shields.io/badge/HACS-custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories)
+[![Validate](https://github.com/rpodgorny/hass-truma-inetx/actions/workflows/validate.yml/badge.svg)](https://github.com/rpodgorny/hass-truma-inetx/actions/workflows/validate.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 Local push integration for the **Truma iNet X** control panel over Bluetooth LE.
 Reads room/water/internal temperatures and supply voltage, and controls heating
 mode, target temperature, water heating, electric heating level, the diesel
@@ -64,9 +68,23 @@ polled.
 
 ### HACS (custom repository)
 
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rpodgorny&repository=hass-truma-inetx&category=integration)
+
+Or manually:
+
 1. HACS → ⋮ → **Custom repositories**
 2. Add `https://github.com/rpodgorny/hass-truma-inetx`, category **Integration**
 3. Install **Truma iNet X (BLE)**, then restart Home Assistant
+4. Settings → Devices & Services → the panel should be discovered; see
+   [Pairing](#pairing)
+
+### Icon
+
+The integration ships its artwork in `custom_components/truma_inetx/brand/`.
+Home Assistant only renders integration icons that live in the
+[home-assistant/brands](https://github.com/home-assistant/brands) repository
+(under `custom_integrations/`), so until `truma_inetx` is submitted there the
+UI shows a default icon. This is cosmetic only.
 
 ### Manual
 
