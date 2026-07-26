@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from homeassistant.components import bluetooth
-from homeassistant.const import CONF_ADDRESS, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.const import CONF_ADDRESS, EVENT_HOMEASSISTANT_STOP, Platform
+from homeassistant.core import Event, HomeAssistant
 
 from .const import DOMAIN, LOGGER
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
@@ -42,6 +42,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: TrumaConfigEntry) -> boo
     await coordinator.async_config_entry_first_refresh()
     await coordinator.async_start()
     entry.runtime_data = coordinator
+
+    async def _async_stop(_event: Event) -> None:
+        """Close the BLE link before Home Assistant exits."""
+        await coordinator.async_stop()
+
+    # Home Assistant does NOT unload config entries when it shuts down — on
+    # EVENT_HOMEASSISTANT_STOP it only calls ConfigEntry.async_shutdown(), so
+    # async_unload_entry below runs on reload/removal but never on a restart.
+    # Without this listener the process exits with the BLE link still open: the
+    # panel never sees a disconnect, waits out its supervision timeout, and can
+    # keep the session (and one of its ~4 connection slots) allocated. It then
+    # answers the next connect with ESP_GATT_CONN_FAIL_ESTABLISH until it is
+    # power-cycled. Disconnecting while HA is still alive sends a proper
+    # link-layer terminate instead, so the panel frees the slot immediately.
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_stop)
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
