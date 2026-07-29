@@ -49,7 +49,7 @@ Put the proxy **within a few metres of the panel**. Distance shows up as
 
 | Entity | Platform | Notes |
 |---|---|---|
-| Truma iNet X | `climate` | Off / Heat / Fan-only, target temperature, fan level |
+| Truma iNet X | `climate` | Off / Heat / Fan-only. Offers only the control the current mode uses: the target temperature while heating, the fan speed as the fan mode (`off`, `1`–`10`) while venting |
 | Room temperature | `sensor` | °C |
 | Water temperature | `sensor` | °C |
 | Internal temperature | `sensor` | °C |
@@ -63,6 +63,42 @@ Put the proxy **within a few metres of the panel**. Distance shows up as
 
 Updates are pushed as the panel sends them (roughly 25 frames/minute), not
 polled.
+
+The panel drives its own fan while heating and has no setpoint at all while
+venting, so exactly one of the two controls is meaningful at any time. The
+climate entity reflects that: `supported_features` follows the mode rather than
+advertising both at once.
+
+## Optional dashboard card
+
+`lovelace/truma-climate-dial-card.js` is a thermostat card whose dial follows
+the mode: it sets the temperature while heating and the fan speed while
+venting, and is disabled while off. Home Assistant's own climate dial is bound
+to temperature and humidity only, and climate fan modes are arbitrary strings
+rather than a numeric range, so core cannot put fan speed on an arc.
+
+The card does not reimplement the dial — it instantiates Home Assistant's own
+`ha-control-circular-slider` and `ha-outlined-icon-button` and reuses the
+frontend's layout CSS, so it inherits upstream's appearance and behaviour.
+Those are internal frontend components with no stability guarantee: upstream
+restyling arrives for free, an upstream rename breaks the card (it then renders
+an explicit error naming the missing component).
+
+Install:
+
+1. Copy the file to `<config>/www/`.
+2. Settings → Dashboards → ⋮ → Resources → add
+   `/local/truma-climate-dial-card.js` as a **JavaScript module**.
+3. Add to a dashboard:
+
+   ```yaml
+   type: custom:truma-climate-dial-card
+   entity: climate.truma_inetx_ffb4d1
+   ```
+
+When updating the file, bump a `?v=` query on the resource URL. Home
+Assistant's frontend service worker caches `/local/` aggressively, and a
+browser hard-refresh does not bypass it.
 
 ## Installation
 
