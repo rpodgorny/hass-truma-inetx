@@ -69,13 +69,34 @@ venting, so exactly one of the two controls is meaningful at any time. The
 climate entity reflects that: `supported_features` follows the mode rather than
 advertising both at once.
 
-## Optional dashboard card
+## Dashboard card
 
-`lovelace/truma-climate-dial-card.js` is a thermostat card whose dial follows
-the mode: it sets the temperature while heating and the fan speed while
-venting, and is disabled while off. Home Assistant's own climate dial is bound
-to temperature and humidity only, and climate fan modes are arbitrary strings
-rather than a numeric range, so core cannot put fan speed on an arc.
+The integration ships a thermostat card whose dial follows the mode: it sets
+the temperature while heating and the fan speed while venting, and is disabled
+while off. Home Assistant's own climate dial is bound to temperature and
+humidity only, and climate fan modes are arbitrary strings rather than a
+numeric range, so core cannot put fan speed on an arc.
+
+**There is nothing to install.** The integration serves the card at
+`/truma_inetx/truma-climate-dial-card.js` and registers it with the frontend,
+so it arrives and updates with the integration. Just add it to a dashboard:
+
+```yaml
+type: custom:truma-climate-dial-card
+entity: climate.truma_inetx_ffb4d1
+name: Heating          # optional
+```
+
+A HACS repository belongs to exactly one category, so this repository cannot
+also be published as a HACS *plugin*. Serving the card from the integration
+avoids a second repository to version and tag, and avoids a manual copy into
+`www/` plus a dashboard resource entry. The integration version is appended to
+the URL as a query string, because the frontend service worker caches assets
+for weeks and a browser hard-refresh does not bypass it — without a changing
+URL an updated card would never reach the browser.
+
+The trade-off: `add_extra_js_url` loads the module on every page load for every
+user, not only when the card is on screen. It is about 13 KB.
 
 The card does not reimplement the dial — it instantiates Home Assistant's own
 `ha-control-circular-slider` and `ha-outlined-icon-button` and reuses the
@@ -84,21 +105,12 @@ Those are internal frontend components with no stability guarantee: upstream
 restyling arrives for free, an upstream rename breaks the card (it then renders
 an explicit error naming the missing component).
 
-Install:
+### Upgrading from a manual install
 
-1. Copy the file to `<config>/www/`.
-2. Settings → Dashboards → ⋮ → Resources → add
-   `/local/truma-climate-dial-card.js` as a **JavaScript module**.
-3. Add to a dashboard:
-
-   ```yaml
-   type: custom:truma-climate-dial-card
-   entity: climate.truma_inetx_ffb4d1
-   ```
-
-When updating the file, bump a `?v=` query on the resource URL. Home
-Assistant's frontend service worker caches `/local/` aggressively, and a
-browser hard-refresh does not bypass it.
+If you previously copied the card into `www/` and added a dashboard resource,
+remove both — Settings → Dashboards → ⋮ → Resources, then delete
+`<config>/www/truma-climate-dial-card.js`. The card guards its
+`customElements.define`, so having both loaded briefly is harmless.
 
 ## Installation
 

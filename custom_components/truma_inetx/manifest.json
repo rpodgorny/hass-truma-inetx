@@ -2,16 +2,28 @@
   "domain": "truma_inetx",
   "name": "Truma iNet X (BLE)",
   "bluetooth": [
-    { "local_name": "Truma iNetX*" },
-    { "service_uuid": "fc310002-f3b2-11e8-8eb2-f2801f1b9fd1" }
+    {
+      "local_name": "Truma iNetX*"
+    },
+    {
+      "service_uuid": "fc310002-f3b2-11e8-8eb2-f2801f1b9fd1"
+    }
   ],
-  "codeowners": ["@rpodgorny"],
+  "codeowners": [
+    "@rpodgorny"
+  ],
   "config_flow": true,
-  "dependencies": ["bluetooth_adapters"],
+  "dependencies": [
+    "bluetooth_adapters",
+    "frontend",
+    "http"
+  ],
   "documentation": "https://github.com/rpodgorny/hass-truma-inetx",
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/rpodgorny/hass-truma-inetx/issues",
-  "requirements": ["cbor2==5.6.5"],
-  "version": "0.2.0"
+  "requirements": [
+    "cbor2==5.6.5"
+  ],
+  "version": "0.3.0"
 }

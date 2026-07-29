@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from homeassistant.components import bluetooth
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import CONF_ADDRESS, EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.loader import async_get_integration
 
 from .const import DOMAIN, LOGGER
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
@@ -18,9 +23,46 @@ PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
 ]
 
+CARD_FILENAME = "truma-climate-dial-card.js"
+CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
+_CARD_REGISTERED = f"{DOMAIN}_card_registered"
+
+
+async def _async_register_card(hass: HomeAssistant) -> None:
+    """Serve the dashboard card and tell the frontend to load it.
+
+    A HACS repository belongs to exactly one category, so this integration
+    cannot also be published as a HACS "plugin". Serving the card ourselves
+    means it ships and updates with the integration instead of needing a second
+    repository, a manual copy into www/ and a dashboard resource entry.
+
+    The integration version is in the query string on purpose: the frontend
+    service worker caches /local/-style assets for weeks and a browser
+    hard-refresh does not bypass it, so without a changing URL an updated card
+    would not reach anyone.
+    """
+    if hass.data.get(_CARD_REGISTERED):
+        return
+    hass.data[_CARD_REGISTERED] = True
+
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                CARD_URL,
+                str(Path(__file__).parent / "frontend" / CARD_FILENAME),
+                True,
+            )
+        ]
+    )
+
+    integration = await async_get_integration(hass, DOMAIN)
+    add_extra_js_url(hass, f"{CARD_URL}?v={integration.version}")
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: TrumaConfigEntry) -> bool:
     """Set up Truma iNet X from a config entry."""
+    await _async_register_card(hass)
+
     address: str = entry.data[CONF_ADDRESS].upper()
 
     # Not fatal: if the panel is not advertising right now the entities still

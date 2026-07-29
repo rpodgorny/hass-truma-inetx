@@ -25,9 +25,10 @@
  * renames break this card. If it ever renders the error below, that is what
  * happened.
  *
- * Install: copy to <config>/www/, add as a dashboard resource (type: JavaScript
- * module). Bump a ?v= query on the URL when updating -- Home Assistant's
- * service worker will otherwise keep serving the old file.
+ * Install: nothing to do. The integration serves this file at
+ * /truma_inetx/truma-climate-dial-card.js and registers it with the frontend,
+ * with the integration version in the query string so an update actually
+ * reaches the browser past the service worker cache.
  *
  * Usage:
  *   type: custom:truma-climate-dial-card
@@ -425,7 +426,12 @@ class TrumaClimateDialCard extends HTMLElement {
   }
 }
 
-customElements.define("truma-climate-dial-card", TrumaClimateDialCard);
+// Guarded: while migrating from a manual www/ + dashboard-resource install to
+// the integration-served copy, both could briefly be loaded, and a second
+// define() of the same tag throws.
+if (!customElements.get("truma-climate-dial-card")) {
+  customElements.define("truma-climate-dial-card", TrumaClimateDialCard);
+}
 
 window.customCards = window.customCards || [];
 window.customCards.push({
