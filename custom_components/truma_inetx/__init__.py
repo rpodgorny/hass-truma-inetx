@@ -34,12 +34,12 @@ async def _async_register_card(hass: HomeAssistant) -> None:
     A HACS repository belongs to exactly one category, so this integration
     cannot also be published as a HACS "plugin". Serving the card ourselves
     means it ships and updates with the integration instead of needing a second
-    repository, a manual copy into www/ and a dashboard resource entry.
+    repository to version and tag.
 
     The integration version is in the query string on purpose: the frontend
-    service worker caches /local/-style assets for weeks and a browser
-    hard-refresh does not bypass it, so without a changing URL an updated card
-    would not reach anyone.
+    service worker caches these assets for weeks and a browser hard-refresh
+    does not bypass it, so without a changing URL an updated card would not
+    reach anyone.
     """
     if hass.data.get(_CARD_REGISTERED):
         return

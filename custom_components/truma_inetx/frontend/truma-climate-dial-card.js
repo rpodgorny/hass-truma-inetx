@@ -434,12 +434,7 @@ class TrumaClimateDialCard extends HTMLElement {
   }
 }
 
-// Guarded: while migrating from a manual www/ + dashboard-resource install to
-// the integration-served copy, both could briefly be loaded, and a second
-// define() of the same tag throws.
-if (!customElements.get("truma-climate-dial-card")) {
-  customElements.define("truma-climate-dial-card", TrumaClimateDialCard);
-}
+customElements.define("truma-climate-dial-card", TrumaClimateDialCard);
 
 window.customCards = window.customCards || [];
 window.customCards.push({

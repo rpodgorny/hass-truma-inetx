@@ -89,11 +89,10 @@ name: Heating          # optional
 
 A HACS repository belongs to exactly one category, so this repository cannot
 also be published as a HACS *plugin*. Serving the card from the integration
-avoids a second repository to version and tag, and avoids a manual copy into
-`www/` plus a dashboard resource entry. The integration version is appended to
-the URL as a query string, because the frontend service worker caches assets
-for weeks and a browser hard-refresh does not bypass it — without a changing
-URL an updated card would never reach the browser.
+avoids a second repository to version and tag. The integration version is
+appended to the URL as a query string, because the frontend service worker
+caches assets for weeks and a browser hard-refresh does not bypass it — without
+a changing URL an updated card would never reach the browser.
 
 The trade-off: `add_extra_js_url` loads the module on every page load for every
 user, not only when the card is on screen. It is about 13 KB.
@@ -104,13 +103,6 @@ frontend's layout CSS, so it inherits upstream's appearance and behaviour.
 Those are internal frontend components with no stability guarantee: upstream
 restyling arrives for free, an upstream rename breaks the card (it then renders
 an explicit error naming the missing component).
-
-### Upgrading from a manual install
-
-If you previously copied the card into `www/` and added a dashboard resource,
-remove both — Settings → Dashboards → ⋮ → Resources, then delete
-`<config>/www/truma-climate-dial-card.js`. The card guards its
-`customElements.define`, so having both loaded briefly is harmless.
 
 ## Installation
 
