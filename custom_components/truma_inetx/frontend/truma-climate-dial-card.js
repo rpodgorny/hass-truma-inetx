@@ -49,10 +49,14 @@ const SLIDER_MODES = { heat: "start", fan_only: "full", off: "full" };
 // out over BLE to the panel, so tapping five times should not send five frames.
 const STEP_COMMIT_MS = 800;
 
+// Order and icons both mirror Home Assistant's own condensed climate widget so
+// the card does not read as a foreign control next to it. The icons are the
+// exact MDI paths from the frontend's CLIMATE_HVAC_MODE_ICONS map
+// (off: mdiPower, fan_only: mdiFan, heat: mdiFire) — NOT circle/fan/thermometer.
 const HVAC_BUTTONS = [
-  { mode: "off", label: "Off", icon: "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4Z" },
-  { mode: "heat", label: "Heat", icon: "M12,2A3,3 0 0,0 9,5V12.17A5,5 0 1,0 15,12.17V5A3,3 0 0,0 12,2Z" },
+  { mode: "off", label: "Off", icon: "M16.56,5.44L15.11,6.89C16.84,7.94 18,9.83 18,12A6,6 0 0,1 12,18A6,6 0 0,1 6,12C6,9.83 7.16,7.94 8.88,6.88L7.44,5.44C5.36,6.88 4,9.28 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12C20,9.28 18.64,6.88 16.56,5.44M13,3H11V13H13V3Z" },
   { mode: "fan_only", label: "Fan", icon: "M12,11A1,1 0 0,0 11,12A1,1 0 0,0 12,13A1,1 0 0,0 13,12A1,1 0 0,0 12,11M12.5,2C17,2 17.11,5.57 14.75,6.75C13.76,7.24 13.32,8.29 13.13,9.22C13.61,9.42 14.03,9.73 14.35,10.13C18.05,8.13 22.03,8.92 22.03,12.5C22.03,17 18.46,17.1 17.28,14.75C16.78,13.75 15.72,13.31 14.79,13.12C14.59,13.6 14.28,14 13.88,14.34C15.88,18.04 15.09,22 11.5,22C7,22 6.91,18.42 9.27,17.24C10.26,16.75 10.7,15.7 10.89,14.77C10.41,14.57 10,14.26 9.67,13.86C5.97,15.86 2,15.07 2,11.5C2,7 5.56,6.89 6.74,9.25C7.24,10.24 8.29,10.68 9.22,10.87C9.42,10.39 9.73,10 10.13,9.65C8.13,5.95 8.92,2 12.5,2Z" },
+  { mode: "heat", label: "Heat", icon: "M17.66,11.2C17.43,10.9 17.15,10.64 16.89,10.38C16.22,9.78 15.46,9.35 14.82,8.72C13.33,7.26 13,4.85 13.95,3C13,3.23 12.17,3.75 11.46,4.32C8.87,6.4 7.85,10.07 9.07,13.22C9.11,13.32 9.15,13.42 9.15,13.55C9.15,13.77 9,13.97 8.8,14.05C8.57,14.15 8.33,14.09 8.14,13.93C8.08,13.88 8.04,13.83 8,13.76C6.87,12.33 6.69,10.28 7.45,8.64C5.78,10 4.87,12.3 5,14.47C5.06,14.97 5.12,15.47 5.29,15.97C5.43,16.57 5.7,17.17 6,17.7C7.08,19.43 8.95,20.67 10.96,20.92C13.1,21.19 15.39,20.8 17.03,19.32C18.86,17.66 19.5,15 18.56,12.72L18.43,12.46C18.22,12 17.66,11.2 17.66,11.2M14.5,17.5C14.22,17.74 13.76,18 13.4,18.1C12.28,18.5 11.16,17.94 10.5,17.28C11.69,17 12.4,16.12 12.61,15.23C12.78,14.43 12.46,13.77 12.33,13C12.21,12.26 12.23,11.63 12.5,10.94C12.69,11.32 12.89,11.7 13.13,12C13.9,13 15.11,13.44 15.37,14.8C15.41,14.94 15.43,15.08 15.43,15.23C15.46,16.05 15.1,16.95 14.5,17.5H14.5Z" },
 ];
 
 // Force Home Assistant to evaluate the module that defines the dial. The
@@ -358,14 +362,18 @@ class TrumaClimateDialCard extends HTMLElement {
       this._render();
     });
 
-    for (const b of HVAC_BUTTONS) {
+    // Per-instance, NOT stored back onto HVAC_BUTTONS: that array is a module
+    // constant, so two of these cards on one dashboard would have the second
+    // overwrite the first's element references and the active-mode highlight
+    // would land on the wrong card.
+    this._modeBtns = HVAC_BUTTONS.map((b) => {
       const btn = document.createElement("button");
       btn.title = b.label;
       btn.innerHTML = `<svg viewBox="0 0 24 24"><path fill="currentColor" d="${b.icon}"></path></svg>`;
       btn.addEventListener("click", () => this._setHvacMode(b.mode));
       this._modesEl.append(btn);
-      b.el = btn;
-    }
+      return { mode: b.mode, el: btn };
+    });
   }
 
   /* ---------- render ---------- */
@@ -420,7 +428,7 @@ class TrumaClimateDialCard extends HTMLElement {
     this._minusEl.disabled = !settable;
     this._plusEl.disabled = !settable;
 
-    for (const b of HVAC_BUTTONS) {
+    for (const b of this._modeBtns) {
       b.el.setAttribute("aria-pressed", String(st.state === b.mode));
     }
   }
