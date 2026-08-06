@@ -15,12 +15,18 @@ from bleak_retry_connector import BleakClientWithServiceCache
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .ble import TrumaBleClient
-from .bt import async_resolve_proxy_device
-from .const import DOMAIN, LOGGER
+from .bt import async_panel_advertising, async_resolve_proxy_device
+from .const import (
+    DOMAIN,
+    ISSUE_NO_PROXY_ROUTE,
+    LOGGER,
+    NO_PROXY_MISSES_BEFORE_WARNING,
+)
 from .truma.const import (
     CTRL_MBP,
     DEV_APP_DEFAULT,
@@ -99,6 +105,9 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         # Address of the most recent connection attempt, so _run knows which
         # one to blame if the attempt fails.
         self._last_addr: str | None = None
+        # Consecutive resolves that found the panel advertising but no proxy
+        # able to reach it. Debounces the repair issue (see _async_note_...).
+        self._no_proxy_misses = 0
         self._store: Store = Store(hass, _STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}")
         self._stop = False
         # Set on stop to interrupt the reconnect wait immediately (so unload is
@@ -108,6 +117,45 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
     async def _async_update_data(self) -> TrumaState:
         """Return the current shared state (updated by BLE notifications)."""
         return self._state
+
+    def _async_note_no_proxy_route(self) -> None:
+        """Warn the user when the panel is audible but unreachable.
+
+        The panel uses a rotating private address, so reconnecting needs the
+        Bluetooth controller to resolve it -- which the Raspberry Pi's built-in
+        adapter and most USB dongles cannot do. Such a setup pairs once and
+        then never reconnects, which looks like a broken integration rather
+        than missing hardware. Say so instead of failing silently.
+        """
+        if not async_panel_advertising(self.hass, self.unique_id):
+            # We cannot hear the panel at all -- off, asleep or out of range.
+            # Telling this user to buy a proxy would be wrong, so stay quiet
+            # and do not let it count towards the warning either.
+            return
+        self._no_proxy_misses += 1
+        if self._no_proxy_misses != NO_PROXY_MISSES_BEFORE_WARNING:
+            # Fires exactly once on the way up, so repeated failures do not
+            # re-create the issue and re-notify every reconnect attempt.
+            return
+        LOGGER.warning(
+            "Truma %s is advertising but no Bluetooth proxy can reach it; "
+            "a local adapter cannot maintain a rotating-address link",
+            self.unique_id,
+        )
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_NO_PROXY_ROUTE,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_NO_PROXY_ROUTE,
+            learn_more_url="https://esphome.io/components/bluetooth_proxy.html",
+        )
+
+    def _async_clear_no_proxy_route(self) -> None:
+        """Reset the miss counter and drop the issue if it was raised."""
+        self._no_proxy_misses = 0
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_PROXY_ROUTE)
 
     async def async_start(self) -> None:
         """Load identity and launch the background BLE session."""
@@ -249,9 +297,15 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             self._avoid.clear()
             ble_device = async_resolve_proxy_device(self.hass, self.unique_id)
         if ble_device is None:
+            self._async_note_no_proxy_route()
             raise HomeAssistantError(
                 f"Truma {self.unique_id} not currently advertising"
             )
+        # A resolve that succeeded disproves the issue outright: something
+        # connectable reached the panel. (The adopted-handoff path above needs
+        # no equivalent -- it only happens straight after pairing, which itself
+        # required a proxy route, so the issue cannot already be raised.)
+        self._async_clear_no_proxy_route()
         self._last_addr = ble_device.address
         await client.connect(ble_device)
         # The connection established, so this address is not the phantom —

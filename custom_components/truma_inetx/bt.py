@@ -29,6 +29,31 @@ def is_remote_scanner(scanner: object) -> bool:
     return isinstance(scanner, BaseHaRemoteScanner)
 
 
+def _panel_infos(hass: HomeAssistant, name: str) -> list:
+    """Every advert that looks like this panel, seen by any scanner.
+
+    The local name is absent from add-device/pairing adverts, so the service
+    UUID is an equal-standing match rather than a fallback.
+    """
+    return [
+        info
+        for info in bluetooth.async_discovered_service_info(hass, connectable=False)
+        if info.name == name or SERVICE_UUID in info.service_uuids
+    ]
+
+
+def async_panel_advertising(hass: HomeAssistant, name: str) -> bool:
+    """Return True when the panel is being heard at all, by any scanner.
+
+    Separates the two reasons :func:`async_resolve_proxy_device` returns
+    ``None``: we hear the panel but nothing connectable can reach it (needs a
+    proxy), versus we hear nothing at all (panel off, out of range, or asleep).
+    They are indistinguishable to the resolver and need opposite advice, so
+    only the first should ever tell a user to go buy hardware.
+    """
+    return bool(_panel_infos(hass, name))
+
+
 def async_resolve_proxy_device(
     hass: HomeAssistant, name: str, *, avoid: Container[str] = ()
 ) -> BLEDevice | None:
@@ -60,11 +85,7 @@ def async_resolve_proxy_device(
     power-cycles the panel. The coordinator feeds back each address that failed
     to establish so we rotate to the panel's other advertised RPA instead.
     """
-    infos = [
-        info
-        for info in bluetooth.async_discovered_service_info(hass, connectable=False)
-        if info.name == name or SERVICE_UUID in info.service_uuids
-    ]
+    infos = _panel_infos(hass, name)
     suffix = name.rsplit("-", 1)[-1].upper()
     if len(suffix) != 6 or any(c not in "0123456789ABCDEF" for c in suffix):
         suffix = ""

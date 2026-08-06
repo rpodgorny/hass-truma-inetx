@@ -37,3 +37,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 tests/test_pairing_rotation.py
+      - run: python3 tests/test_no_proxy_issue.py

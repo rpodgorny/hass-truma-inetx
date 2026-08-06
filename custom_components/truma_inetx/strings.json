@@ -31,5 +31,11 @@
     "control_not_ready": {
       "message": "Truma BLE control is not available yet (transport is wired in a later build stage)."
     }
+  },
+  "issues": {
+    "no_proxy_route": {
+      "title": "No Bluetooth proxy can reach the Truma panel",
+      "description": "Home Assistant can hear the Truma panel advertising, but no ESPHome Bluetooth proxy is able to connect to it.\n\nThe panel uses a rotating Bluetooth private address. Reconnecting to it requires the Bluetooth controller to resolve that address, which the Raspberry Pi's built-in adapter and most USB dongles cannot do. Such an adapter can pair with the panel once and then never reconnect.\n\n**To fix this, add an ESPHome Bluetooth proxy within range of the panel.**\n\nIf you already have one, check that it is online and that the panel is in range of it."
+    }
   }
 }
