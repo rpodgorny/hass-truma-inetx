@@ -19,6 +19,10 @@ from .coordinator import TrumaConfigEntry
 from .entity import TrumaEntity
 from .truma.state import TrumaState
 
+# Entities are coordinator-driven and have no update() method, so Home
+# Assistant would create no semaphore anyway; stated explicitly.
+PARALLEL_UPDATES = 0
+
 
 @dataclass(frozen=True, kw_only=True)
 class TrumaSensorDescription(SensorEntityDescription):

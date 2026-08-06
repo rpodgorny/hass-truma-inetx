@@ -11,6 +11,10 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
 from .entity import TrumaEntity
 
+# Entities are coordinator-driven and have no update() method, so Home
+# Assistant would create no semaphore anyway; stated explicitly.
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,

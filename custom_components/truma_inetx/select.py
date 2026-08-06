@@ -9,6 +9,10 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
 from .entity import TrumaEntity
 
+# Entities are coordinator-driven and have no update() method, so Home
+# Assistant would create no semaphore anyway; stated explicitly.
+PARALLEL_UPDATES = 0
+
 WATER_OFF = "off"
 WATER_OPTIONS = {WATER_OFF: None, "40 °C": 0, "60 °C": 1, "70 °C": 2}
 _WATER_MODE_TO_LABEL = {0: "40 °C", 1: "60 °C", 2: "70 °C"}

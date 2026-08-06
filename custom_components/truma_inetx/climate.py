@@ -18,6 +18,10 @@ from .coordinator import TrumaConfigEntry
 from .entity import TrumaEntity
 from .truma.state import RoomClimateMode, TrumaState
 
+# Entities are coordinator-driven and have no update() method, so Home
+# Assistant would create no semaphore anyway; stated explicitly.
+PARALLEL_UPDATES = 0
+
 _HVAC_TO_MODE = {
     HVACMode.OFF: int(RoomClimateMode.OFF),
     HVACMode.HEAT: int(RoomClimateMode.HEATING),

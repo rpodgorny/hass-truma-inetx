@@ -7,6 +7,9 @@
         "description": "Select the Truma panel to add.",
         "data": {
           "address": "Device"
+        },
+        "data_description": {
+          "address": "The Truma panel to pair with. Only panels currently advertising within range of an ESP32 Bluetooth proxy are listed."
         }
       },
       "confirm": {
