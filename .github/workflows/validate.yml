@@ -24,9 +24,6 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          # This domain is not in home-assistant/brands (see README), and this
-          # is a custom repository rather than a HACS default one.
-          ignore: brands
 
   tests:
     name: tests
