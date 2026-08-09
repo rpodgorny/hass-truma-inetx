@@ -32,9 +32,8 @@ async def async_setup_entry(
 class TrumaFlameSensor(TrumaEntity, BinarySensorEntity):
     """Flame/burner running status."""
 
-    _attr_name = "Flame"
+    _attr_translation_key = "flame"
     _attr_device_class = BinarySensorDeviceClass.RUNNING
-    _attr_icon = "mdi:fire"
 
     def __init__(self, coordinator: TrumaCoordinator) -> None:
         """Initialize."""
@@ -51,7 +50,7 @@ class TrumaFlameSensor(TrumaEntity, BinarySensorEntity):
 class TrumaConnectionSensor(TrumaEntity, BinarySensorEntity):
     """BLE link status to the panel."""
 
-    _attr_name = "BLE connection"
+    _attr_translation_key = "connection"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = None
     _gate_on_connected = False  # reports the link itself → never gated

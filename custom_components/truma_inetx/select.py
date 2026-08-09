@@ -36,7 +36,7 @@ async def async_setup_entry(
 class TrumaWaterModeSelect(TrumaEntity, SelectEntity):
     """Water heating mode (off / 40 / 60 / 70 °C)."""
 
-    _attr_name = "Water heating"
+    _attr_translation_key = "water_mode"
     _attr_options = list(WATER_OPTIONS)
 
     def __init__(self, coordinator: TrumaCoordinator) -> None:
@@ -64,7 +64,7 @@ class TrumaWaterModeSelect(TrumaEntity, SelectEntity):
 class TrumaElectricLevelSelect(TrumaEntity, SelectEntity):
     """Supplemental electric heating level (off / 900 / 1800 W)."""
 
-    _attr_name = "Electric heating"
+    _attr_translation_key = "electric_level"
     _attr_options = list(ELECTRIC_OPTIONS)
 
     def __init__(self, coordinator: TrumaCoordinator) -> None:

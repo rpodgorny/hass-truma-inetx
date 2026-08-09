@@ -28,9 +28,8 @@ async def async_setup_entry(
 class TrumaDieselSwitch(TrumaEntity, SwitchEntity):
     """Diesel burner on/off."""
 
-    _attr_name = "Diesel burner"
+    _attr_translation_key = "diesel"
     _attr_device_class = SwitchDeviceClass.SWITCH
-    _attr_icon = "mdi:fuel"
 
     def __init__(self, coordinator: TrumaCoordinator) -> None:
         """Initialize."""

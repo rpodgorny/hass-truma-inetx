@@ -34,7 +34,7 @@ class TrumaSensorDescription(SensorEntityDescription):
 SENSORS: tuple[TrumaSensorDescription, ...] = (
     TrumaSensorDescription(
         key="current_temp",
-        name="Room temperature",
+        translation_key="current_temp",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -42,7 +42,7 @@ SENSORS: tuple[TrumaSensorDescription, ...] = (
     ),
     TrumaSensorDescription(
         key="water_temp",
-        name="Water temperature",
+        translation_key="water_temp",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -50,7 +50,7 @@ SENSORS: tuple[TrumaSensorDescription, ...] = (
     ),
     TrumaSensorDescription(
         key="internal_temp",
-        name="Internal temperature",
+        translation_key="internal_temp",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -59,7 +59,7 @@ SENSORS: tuple[TrumaSensorDescription, ...] = (
     ),
     TrumaSensorDescription(
         key="voltage",
-        name="Supply voltage",
+        translation_key="voltage",
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,

@@ -40,5 +40,47 @@
       "title": "No Bluetooth proxy can reach the Truma panel",
       "description": "Home Assistant can hear the Truma panel advertising, but no ESPHome Bluetooth proxy is able to connect to it.\n\nThe panel uses a rotating Bluetooth private address. Reconnecting to it requires the Bluetooth controller to resolve that address, which the Raspberry Pi's built-in adapter and most USB dongles cannot do. Such an adapter can pair with the panel once and then never reconnect.\n\n**To fix this, add an ESPHome Bluetooth proxy within range of the panel.**\n\nIf you already have one, check that it is online and that the panel is in range of it."
     }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connection": {
+        "name": "BLE connection"
+      },
+      "flame": {
+        "name": "Flame"
+      }
+    },
+    "number": {
+      "fan_level": {
+        "name": "Fan level"
+      }
+    },
+    "select": {
+      "electric_level": {
+        "name": "Electric heating"
+      },
+      "water_mode": {
+        "name": "Water heating"
+      }
+    },
+    "sensor": {
+      "current_temp": {
+        "name": "Room temperature"
+      },
+      "internal_temp": {
+        "name": "Internal temperature"
+      },
+      "voltage": {
+        "name": "Supply voltage"
+      },
+      "water_temp": {
+        "name": "Water temperature"
+      }
+    },
+    "switch": {
+      "diesel": {
+        "name": "Diesel burner"
+      }
+    }
   }
 }

@@ -1,0 +1,19 @@
+{
+  "entity": {
+    "binary_sensor": {
+      "flame": {
+        "default": "mdi:fire"
+      }
+    },
+    "number": {
+      "fan_level": {
+        "default": "mdi:fan"
+      }
+    },
+    "switch": {
+      "diesel": {
+        "default": "mdi:fuel"
+      }
+    }
+  }
+}

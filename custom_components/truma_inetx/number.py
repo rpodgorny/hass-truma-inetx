@@ -26,12 +26,11 @@ async def async_setup_entry(
 class TrumaFanLevel(TrumaEntity, NumberEntity):
     """Fan circulation level (0-10)."""
 
-    _attr_name = "Fan level"
+    _attr_translation_key = "fan_level"
     _attr_native_min_value = 0
     _attr_native_max_value = 10
     _attr_native_step = 1
     _attr_mode = NumberMode.SLIDER
-    _attr_icon = "mdi:fan"
 
     def __init__(self, coordinator: TrumaCoordinator) -> None:
         """Initialize."""
