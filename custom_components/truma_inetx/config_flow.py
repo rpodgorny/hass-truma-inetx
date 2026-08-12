@@ -67,8 +67,18 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         ):
             return self.async_abort(reason="awaiting_name")
         await self.async_set_unique_id(discovery_info.name)
+        # The RPA rotates roughly every 15 minutes and every rotation lands
+        # here with a new address. `reload_on_update` defaults to True, which
+        # reloaded the whole config entry on each one -- tearing down and
+        # rebuilding every platform four times an hour, measured at 85-93 %
+        # availability instead of ~99 %. The address is still stored: the
+        # update is applied before `reload_on_update` is tested. Nothing needs
+        # the reload, because the coordinator resolves the panel's live RPA on
+        # every connection via bt.async_resolve_proxy_device(), matching on the
+        # stable name; entry.data[CONF_ADDRESS] is only a bootstrap hint.
         self._abort_if_unique_id_configured(
-            updates={CONF_ADDRESS: discovery_info.address}
+            updates={CONF_ADDRESS: discovery_info.address},
+            reload_on_update=False,
         )
         self._discovery_info = discovery_info
         self.context["title_placeholders"] = {"name": discovery_info.name}
