@@ -9,7 +9,7 @@ module is the single source of that resolution.
 
 from __future__ import annotations
 
-from collections.abc import Container
+from collections.abc import Iterable
 
 from bleak.backends.device import BLEDevice
 
@@ -18,6 +18,13 @@ from homeassistant.core import HomeAssistant
 
 from .const import LOGGER
 from .truma.const import SERVICE_UUID
+
+# What the panel actually puts in its advertisement. SERVICE_UUID above is the
+# GATT service, only visible after connecting, so it never matches an advert.
+# Without this the panel can only be recognised by its local name, which lives
+# in the scan response and so requires ACTIVE scanning -- under passive scanning
+# the panel is invisible even though the radio hears it perfectly.
+ADVERT_SERVICE_UUID = "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
 
 
 def is_remote_scanner(scanner: object) -> bool:
@@ -38,7 +45,9 @@ def _panel_infos(hass: HomeAssistant, name: str) -> list:
     return [
         info
         for info in bluetooth.async_discovered_service_info(hass, connectable=False)
-        if info.name == name or SERVICE_UUID in info.service_uuids
+        if info.name == name
+        or SERVICE_UUID in info.service_uuids
+        or ADVERT_SERVICE_UUID in info.service_uuids
     ]
 
 
@@ -55,21 +64,25 @@ def async_panel_advertising(hass: HomeAssistant, name: str) -> bool:
 
 
 def async_resolve_proxy_device(
-    hass: HomeAssistant, name: str, *, avoid: Container[str] = ()
+    hass: HomeAssistant, name: str, *, avoid: Iterable[str] = ()
 ) -> BLEDevice | None:
     """Find the panel's current connectable device via a remote/proxy scanner.
 
     Matches the panel by its stable advertised ``name`` OR primary service UUID
     (the local name is absent from add-device/pairing adverts), picks the
-    freshest advertised RPA, and returns ONLY a device reachable through a
-    remote (proxy) scanner — local host adapters cannot maintain a rotating-RPA
-    link (BlueZ pairs but can't reconnect) and would steal the connection from
-    the proxy. Returns ``None`` when no proxy route is available right now (the
-    caller should retry).
+    freshest advertised RPA, and prefers a device reachable through a remote
+    (proxy) scanner: a proxy's controller resolves private addresses itself, so
+    it reconnects on any host, and using it also keeps a local adapter from
+    stealing the connection. A local adapter is returned only when no proxy can
+    hear the panel — on a stock host that link will pair but never reconnect,
+    which is what the ``no_proxy_route`` repair issue is about. Returns ``None``
+    when nothing can reach it right now (the caller should retry).
 
     The "resolved identity" pseudo-address (whose last bytes match the name
-    suffix, e.g. ``...FFB4D1``) is excluded — connecting it dials a stale cached
-    bonded RPA rather than the live one.
+    suffix, e.g. ``...FFB4D1``) is ranked last — via a proxy it usually dials a
+    stale cached bonded RPA rather than the live one, but it is the panel's
+    real on-air address while in add-device mode, so it is worth a try once the
+    RPAs are exhausted.
 
     ``avoid`` is a set of RPA addresses to skip. This exists because of a
     specific, observed failure mode after pairing:
@@ -96,6 +109,13 @@ def async_resolve_proxy_device(
     avoid_norm = {a.upper() for a in avoid}
     rpas = [i for i in infos if not _is_identity(i.address)]
     rpas.sort(key=lambda i: i.time, reverse=True)
+    # The panel also advertises its identity address at times (measured: both at
+    # once after bonding, identity only while in add-device mode). When it does,
+    # the identity IS its on-air address and connecting to it is correct -- so
+    # keep it as a last resort rather than refusing to connect at all.
+    idents = [i for i in infos if _is_identity(i.address)]
+    idents.sort(key=lambda i: i.time, reverse=True)
+    rpas = rpas + idents
     LOGGER.debug(
         "Truma %s candidates (fresh→stale RPAs): %s | avoid: %s | identity present: %s",
         name,
@@ -103,6 +123,12 @@ def async_resolve_proxy_device(
         sorted(avoid_norm),
         any(_is_identity(i.address) for i in infos),
     )
+    # A proxy is still preferred: its controller resolves private addresses, so
+    # it works on any host. A local adapter only works where the kernel puts the
+    # peer's current RPA on air rather than its identity address -- stock Linux
+    # does not, see DUCATO_STATE.md. Fall back to one anyway so a patched host
+    # can run without a proxy at all.
+    local: object | None = None
     for info in rpas:
         # Skip an address the coordinator has told us won't establish (the
         # post-pairing phantom RPA described above), so we try the next one.
@@ -119,5 +145,16 @@ def async_resolve_proxy_device(
                     getattr(sd.advertisement, "rssi", None),
                 )
                 return sd.ble_device
-    LOGGER.debug("Truma %s: no proxy route to the panel right now", name)
+            if local is None:
+                local = (info, sd)
+    if local is not None:
+        info, sd = local
+        LOGGER.debug(
+            "Truma %s -> %s via LOCAL adapter (rssi=%s); no proxy route available",
+            name,
+            info.address,
+            getattr(sd.advertisement, "rssi", None),
+        )
+        return sd.ble_device
+    LOGGER.debug("Truma %s: no route to the panel right now", name)
     return None

@@ -23,7 +23,11 @@ from collections.abc import Callable
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
-from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+from bleak_retry_connector import (
+    BleakClientWithServiceCache,
+    close_stale_connections_by_address,
+    establish_connection,
+)
 
 from .truma.const import (
     CHAR_CMD,
@@ -38,6 +42,18 @@ from .truma.const import (
 from .truma.protocol import parse_v3_frame
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _client_is_proxy(client: object) -> bool:
+    """Whether this client talks through an ESPHome proxy rather than BlueZ.
+
+    Proxy clients come from ``bleak_esphome``; a local adapter gives BlueZ's
+    ``bleak.backends.bluezdbus`` client. The two need opposite handling for
+    pairing (see :meth:`TrumaBle._subscribe`), and the backend module is the
+    only reliable way to tell them apart from here.
+    """
+    backend = getattr(client, "_backend", client)
+    return "esphome" in type(backend).__module__
 
 _READY_TIMEOUT = 3.0
 _ACK_TIMEOUT = 3.0
@@ -74,6 +90,15 @@ class TrumaBleClient:
     ) -> None:
         """Establish the connection (via HA's stack) and subscribe."""
         self._loop = asyncio.get_running_loop()
+        # A previous attempt can leave a connect still pending inside BlueZ --
+        # the panel goes quiet mid-connect and the kernel keeps trying. Every
+        # retry then fails with "Operation already in progress" until that one
+        # times out, so establish_connection() burns all its attempts for
+        # nothing. Clearing it first makes the retries actually retry.
+        try:
+            await close_stale_connections_by_address(ble_device.address)
+        except Exception as exc:  # noqa: BLE001 - best effort, never fatal
+            _LOGGER.debug("Truma stale-connection cleanup: %s", exc)
         self._client = await establish_connection(
             BleakClientWithServiceCache,
             ble_device,
@@ -104,14 +129,28 @@ class TrumaBleClient:
         proxy tears the connection down on that failed write. So pair/encrypt
         FIRST (when already bonded this just re-establishes encryption), then
         subscribe, retrying briefly to absorb the encryption-setup delay.
+
+        That is true for an ESPHome proxy only. On a LOCAL adapter the stack is
+        BlueZ, where Device.Pair() on an already-bonded peer raises
+        AuthenticationFailed and takes the connection down with it — the next
+        subscribe then fails with NotConnected. BlueZ encrypts by itself on the
+        first protected access, so the correct move locally is to skip pair()
+        entirely and go straight to subscribing.
         """
         assert self._client is not None
         last_exc: Exception | None = None
+        pair_first = _client_is_proxy(self._client)
+        _LOGGER.debug(
+            "Truma subscribe: transport=%s, pair() %s",
+            "proxy" if pair_first else "local",
+            "first" if pair_first else "skipped",
+        )
         for attempt in range(3):
-            try:
-                await self._client.pair()
-            except Exception as exc:  # noqa: BLE001 - some backends bond out-of-band
-                _LOGGER.debug("Truma pair()/encrypt attempt %d: %s", attempt, exc)
+            if pair_first:
+                try:
+                    await self._client.pair()
+                except Exception as exc:  # noqa: BLE001 - some backends bond out-of-band
+                    _LOGGER.debug("Truma pair()/encrypt attempt %d: %s", attempt, exc)
             try:
                 await self._start_notifications()
                 _LOGGER.debug("Truma BLE connected and subscribed")

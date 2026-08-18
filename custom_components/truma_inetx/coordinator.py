@@ -122,10 +122,13 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         """Warn the user when the panel is audible but unreachable.
 
         The panel uses a rotating private address, so reconnecting needs the
-        Bluetooth controller to resolve it -- which the Raspberry Pi's built-in
-        adapter and most USB dongles cannot do. Such a setup pairs once and
-        then never reconnects, which looks like a broken integration rather
-        than missing hardware. Say so instead of failing silently.
+        peer's current address to be put on air. A Bluetooth proxy's controller
+        resolves that itself; a local adapter can only do it if its controller
+        supports LL Privacy (most USB dongles and the Raspberry Pi's built-in
+        adapter do not -- check with `btmon` for "Resolving List" support) or
+        the host kernel compensates. Such a setup pairs once and then never
+        reconnects, which looks like a broken integration rather than missing
+        hardware. Say so instead of failing silently.
         """
         if not async_panel_advertising(self.hass, self.unique_id):
             # We cannot hear the panel at all -- off, asleep or out of range.
@@ -138,8 +141,9 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             # re-create the issue and re-notify every reconnect attempt.
             return
         LOGGER.warning(
-            "Truma %s is advertising but no Bluetooth proxy can reach it; "
-            "a local adapter cannot maintain a rotating-address link",
+            "Truma %s is advertising but no route can reach it; a Bluetooth "
+            "proxy resolves the panel's rotating address for you, whereas a "
+            "local adapter needs controller or kernel support for it",
             self.unique_id,
         )
         ir.async_create_issue(

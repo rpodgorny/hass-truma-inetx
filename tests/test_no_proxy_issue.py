@@ -45,11 +45,17 @@ def _mod(name: str, **attrs):
 class _Info:
     """Stand-in for a BluetoothServiceInfoBleak advert."""
 
-    def __init__(self, name: str = "", uuids: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        name: str = "",
+        uuids: tuple[str, ...] = (),
+        address: str = "62:4A:BD:AD:73:5D",
+        time: float = 0.0,
+    ) -> None:
         self.name = name
         self.service_uuids = list(uuids)
-        self.address = "62:4A:BD:AD:73:5D"
-        self.time = 0.0
+        self.address = address
+        self.time = time
         self.rssi = -70
         self.connectable = False
 
@@ -75,7 +81,25 @@ class _IssueRegistry:
         self.active.pop(f"{domain}.{issue_id}", None)
 
 
+class _RemoteScanner:
+    """Stands in for habluetooth.BaseHaRemoteScanner (an ESP32 proxy)."""
+
+
+class _LocalScanner:
+    """Stands in for a scanner backed by a host adapter."""
+
+
+class _ScannerDevice:
+    """Stand-in for a BluetoothScannerDevice: one advert seen by one scanner."""
+
+    def __init__(self, address: str, remote: bool) -> None:
+        self.scanner = _RemoteScanner() if remote else _LocalScanner()
+        self.advertisement = _Info(address=address)
+        self.ble_device = f"{'proxy' if remote else 'local'}:{address}"
+
+
 ADVERTS: list[_Info] = []
+SCANNERS: dict[str, list[_ScannerDevice]] = {}
 IR = _IssueRegistry()
 
 
@@ -107,8 +131,13 @@ def _load():
     _mod(
         "homeassistant.components.bluetooth",
         async_discovered_service_info=lambda _hass, connectable=True: list(ADVERTS),
-        async_scanner_devices_by_address=lambda *a, **k: [],
+        async_scanner_devices_by_address=lambda _hass, address, connectable=True: list(
+            SCANNERS.get(address, ())
+        ),
     )
+    # Without this, is_remote_scanner() hits ImportError and calls every scanner
+    # local, which would silently pass the proxy-preference checks below.
+    _mod("habluetooth", BaseHaRemoteScanner=_RemoteScanner)
 
     _mod("truma_pkg", __path__=[str(SRC)])
     _mod("truma_pkg.truma", __path__=[])
@@ -233,9 +262,107 @@ def test_success_clears() -> None:
     assert not IR.active
 
 
+RPA = "62:4A:BD:AD:73:5D"
+RPA2 = "7C:11:0E:22:91:04"
+IDENTITY = "50:98:B8:FF:B4:D1"  # last three bytes == the panel's name suffix
+
+
+def _set_route(*devices: _ScannerDevice) -> None:
+    SCANNERS.clear()
+    for device in devices:
+        SCANNERS.setdefault(device.advertisement.address, []).append(device)
+
+
+def test_proxy_wins_over_local() -> None:
+    """A proxy route must be taken even when a local adapter also hears it.
+
+    The proxy's controller resolves the panel's rotating address by itself, so
+    it reconnects on any host; a local adapter needs LL Privacy or a patched
+    kernel. Preferring the proxy also stops the host adapter from grabbing a
+    connection the proxy is supposed to own.
+    """
+    _set_adverts(_Info(name=PANEL, address=RPA))
+    _set_route(
+        _ScannerDevice(RPA, remote=False),
+        _ScannerDevice(RPA, remote=True),
+    )
+    assert BT.async_resolve_proxy_device(None, PANEL) == f"proxy:{RPA}"
+
+
+def test_local_used_when_no_proxy() -> None:
+    """With no proxy in earshot, hand back the local adapter rather than None.
+
+    On a stock kernel that link pairs but never reconnects -- which is what the
+    repair issue explains. On a host whose kernel puts the peer's current RPA
+    on air it works, and is the whole point of running proxy-less.
+    """
+    _set_adverts(_Info(name=PANEL, address=RPA))
+    _set_route(_ScannerDevice(RPA, remote=False))
+    assert BT.async_resolve_proxy_device(None, PANEL) == f"local:{RPA}"
+
+
+def test_none_when_unreachable() -> None:
+    """Heard but nothing connectable -- the caller must retry, not connect."""
+    _set_adverts(_Info(name=PANEL, address=RPA))
+    _set_route()
+    assert BT.async_resolve_proxy_device(None, PANEL) is None
+
+
+def test_identity_is_last_resort() -> None:
+    """The identity address is tried only after every RPA, but IS tried.
+
+    Via a proxy the identity usually dials a stale cached bond, so an RPA must
+    win whenever one exists. While the panel is in add-device mode the identity
+    is its real on-air address, so refusing it outright means never connecting.
+    """
+    _set_adverts(
+        _Info(name=PANEL, address=IDENTITY, time=99.0),  # freshest on purpose
+        _Info(name=PANEL, address=RPA, time=1.0),
+    )
+    _set_route(
+        _ScannerDevice(IDENTITY, remote=True),
+        _ScannerDevice(RPA, remote=True),
+    )
+    assert BT.async_resolve_proxy_device(None, PANEL) == f"proxy:{RPA}"
+
+    _set_adverts(_Info(name=PANEL, address=IDENTITY))
+    _set_route(_ScannerDevice(IDENTITY, remote=True))
+    assert BT.async_resolve_proxy_device(None, PANEL) == f"proxy:{IDENTITY}"
+
+
+def test_avoided_address_is_skipped() -> None:
+    """A banished RPA must not come back as the local fallback either."""
+    _set_adverts(
+        _Info(name=PANEL, address=RPA, time=2.0),
+        _Info(name=PANEL, address=RPA2, time=1.0),
+    )
+    _set_route(
+        _ScannerDevice(RPA, remote=False),
+        _ScannerDevice(RPA2, remote=False),
+    )
+    assert BT.async_resolve_proxy_device(None, PANEL, avoid=[RPA]) == f"local:{RPA2}"
+
+
+def test_advert_uuid_matches() -> None:
+    """The panel must be recognised by the UUID it actually advertises.
+
+    ``SERVICE_UUID`` is the GATT service and never appears in an advert, so
+    matching on it alone leaves the panel invisible under passive scanning.
+    """
+    _set_adverts(_Info(uuids=(BT.ADVERT_SERVICE_UUID,), address=RPA))
+    _set_route(_ScannerDevice(RPA, remote=True))
+    assert BT.async_resolve_proxy_device(None, PANEL) == f"proxy:{RPA}"
+
+
 if __name__ == "__main__":
     test_panel_detection()
     test_debounced_warning()
     test_silent_when_panel_unheard()
     test_success_clears()
+    test_proxy_wins_over_local()
+    test_local_used_when_no_proxy()
+    test_none_when_unreachable()
+    test_identity_is_last_resort()
+    test_avoided_address_is_skipped()
+    test_advert_uuid_matches()
     print("no-proxy repair issue: all checks OK")
