@@ -93,14 +93,6 @@ class TrumaBleClient:
     ) -> None:
         """Establish the connection (via HA's stack) and subscribe."""
         self._loop = asyncio.get_running_loop()
-        # A previous attempt can leave a connect still pending inside BlueZ --
-        # the panel goes quiet mid-connect and the kernel keeps trying. Every
-        # retry then fails with "Operation already in progress" until that one
-        # times out. Clearing it first makes the next attempt a real attempt.
-        try:
-            await close_stale_connections_by_address(ble_device.address)
-        except Exception as exc:  # noqa: BLE001 - best effort, never fatal
-            _LOGGER.debug("Truma stale-connection cleanup: %s", exc)
         # Connect patiently, and do it ourselves: bleak_retry_connector hard-
         # codes a 20 s connect timeout that cannot be raised through
         # establish_connection(). Where the host has to guess the panel's
@@ -108,16 +100,27 @@ class TrumaBleClient:
         # goes to a stale one and fails at ~20 s -- the kernel then retries on
         # its own and the link comes up a few seconds later. Give up before
         # that and the link is established with NO owner: the panel believes it
-        # has a central and stops advertising, so nothing can reach it again,
-        # and on this host not even BlueZ can tear it down (its Disconnect is
-        # refused, the link needs a raw HCI Disconnect). Waiting is what keeps
-        # us the owner. See DUCATO_STATE.md, 2026-08-18 evening.
+        # has a central and stops advertising, so nothing can reach it again.
+        # Waiting is what keeps us the owner. See DUCATO_STATE.md.
         client = BleakClientWithServiceCache(
             ble_device,
             disconnected_callback=disconnected_callback,
             timeout=_CONNECT_TIMEOUT,
         )
-        await client.connect()
+        try:
+            await client.connect()
+        except Exception:
+            # Only NOW clear leftovers. Doing it before the connect (which is
+            # what this did originally) tears down a link that BlueZ already
+            # holds and has resolved services on -- and on this panel that link
+            # is often the only way in, because a panel with a central does not
+            # advertise. Clearing after a failure keeps the recovery without
+            # destroying the good case.
+            try:
+                await close_stale_connections_by_address(ble_device.address)
+            except Exception as exc:  # noqa: BLE001 - best effort, never fatal
+                _LOGGER.debug("Truma stale-connection cleanup: %s", exc)
+            raise
         self._client = client
         await self._subscribe()
 

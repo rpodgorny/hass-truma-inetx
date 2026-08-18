@@ -325,8 +325,14 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         # bt.async_wait_until_heard). A stale dial costs a ~20 s timeout during
         # which nothing scans, so it keeps itself stale.
         if not await async_wait_until_heard(self.hass, self.unique_id):
-            raise HomeAssistantError(
-                f"Truma {self.unique_id} went quiet before the connect"
+            # Silence is not a reason to give up: the commonest cause of it is
+            # that something already holds a link to the panel, and a panel
+            # with a central does not advertise. Connecting then costs nothing
+            # and attaches to that link instead of leaving it unused, which is
+            # exactly the hole a wait-only gate digs. A genuinely absent panel
+            # costs one connect timeout.
+            LOGGER.debug(
+                "Truma %s: connecting without a fresh advert", self.unique_id
             )
         await client.connect(ble_device)
         # The connection established, so this address is not the phantom —
