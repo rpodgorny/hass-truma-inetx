@@ -46,6 +46,15 @@ _LOGGER = logging.getLogger(__name__)
 # the kernel's own retry succeeds (measured: link up 25-45 s after the dial).
 _CONNECT_TIMEOUT = 75.0
 
+# BlueZ refuses a connect while one is already in flight for the same device --
+# its own background reconnect of a bonded device, or a leftover of ours. That
+# attempt usually finishes within seconds and leaves a link we can simply attach
+# to, so waiting a moment beats failing the session and backing off past the
+# window (measured on the van: BlueZ connects, resolves GATT, and holds the
+# link, while our next attempt only came 45 s later and collided again).
+_BUSY_RETRY_DELAY = 5.0
+_BUSY_RETRIES = 6
+
 
 def _client_is_proxy(client: object) -> bool:
     """Whether this client talks through an ESPHome proxy rather than BlueZ.
@@ -60,6 +69,14 @@ def _client_is_proxy(client: object) -> bool:
 
 _READY_TIMEOUT = 3.0
 _ACK_TIMEOUT = 3.0
+
+
+def is_busy_error(exc: BaseException) -> bool:
+    """True when BlueZ refused because a connect is already under way.
+
+    Not a failure of ours: the link that attempt establishes is one we can use.
+    """
+    return "already in progress" in str(exc).lower()
 
 
 class TrumaBleClient:
@@ -102,25 +119,36 @@ class TrumaBleClient:
         # that and the link is established with NO owner: the panel believes it
         # has a central and stops advertising, so nothing can reach it again.
         # Waiting is what keeps us the owner. See DUCATO_STATE.md.
-        client = BleakClientWithServiceCache(
-            ble_device,
-            disconnected_callback=disconnected_callback,
-            timeout=_CONNECT_TIMEOUT,
-        )
-        try:
-            await client.connect()
-        except Exception:
-            # Only NOW clear leftovers. Doing it before the connect (which is
-            # what this did originally) tears down a link that BlueZ already
-            # holds and has resolved services on -- and on this panel that link
-            # is often the only way in, because a panel with a central does not
-            # advertise. Clearing after a failure keeps the recovery without
-            # destroying the good case.
+        for attempt in range(_BUSY_RETRIES + 1):
+            client = BleakClientWithServiceCache(
+                ble_device,
+                disconnected_callback=disconnected_callback,
+                timeout=_CONNECT_TIMEOUT,
+            )
             try:
-                await close_stale_connections_by_address(ble_device.address)
-            except Exception as exc:  # noqa: BLE001 - best effort, never fatal
-                _LOGGER.debug("Truma stale-connection cleanup: %s", exc)
-            raise
+                await client.connect()
+            except Exception as exc:  # noqa: BLE001 - classified below
+                if is_busy_error(exc) and attempt < _BUSY_RETRIES:
+                    # Someone else is mid-connect. Do NOT clean up -- that would
+                    # abort the very attempt we want to inherit.
+                    _LOGGER.debug(
+                        "Truma connect: BlueZ busy (%s), retrying in %ss",
+                        exc,
+                        _BUSY_RETRY_DELAY,
+                    )
+                    await asyncio.sleep(_BUSY_RETRY_DELAY)
+                    continue
+                # Only NOW clear leftovers. Doing it before the connect (which
+                # is what this did originally) tears down a link that BlueZ
+                # already holds and has resolved services on -- and on this
+                # panel that link is often the only way in, because a panel
+                # with a central does not advertise.
+                try:
+                    await close_stale_connections_by_address(ble_device.address)
+                except Exception as err:  # noqa: BLE001 - best effort
+                    _LOGGER.debug("Truma stale-connection cleanup: %s", err)
+                raise
+            break
         self._client = client
         await self._subscribe()
 
