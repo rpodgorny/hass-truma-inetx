@@ -26,7 +26,6 @@ from bleak.backends.device import BLEDevice
 from bleak_retry_connector import (
     BleakClientWithServiceCache,
     close_stale_connections_by_address,
-    establish_connection,
 )
 
 from .truma.const import (
@@ -42,6 +41,10 @@ from .truma.const import (
 from .truma.protocol import parse_v3_frame
 
 _LOGGER = logging.getLogger(__name__)
+
+# Long enough to still be waiting when a first, stale dial has timed out and
+# the kernel's own retry succeeds (measured: link up 25-45 s after the dial).
+_CONNECT_TIMEOUT = 75.0
 
 
 def _client_is_proxy(client: object) -> bool:
@@ -93,18 +96,29 @@ class TrumaBleClient:
         # A previous attempt can leave a connect still pending inside BlueZ --
         # the panel goes quiet mid-connect and the kernel keeps trying. Every
         # retry then fails with "Operation already in progress" until that one
-        # times out, so establish_connection() burns all its attempts for
-        # nothing. Clearing it first makes the retries actually retry.
+        # times out. Clearing it first makes the next attempt a real attempt.
         try:
             await close_stale_connections_by_address(ble_device.address)
         except Exception as exc:  # noqa: BLE001 - best effort, never fatal
             _LOGGER.debug("Truma stale-connection cleanup: %s", exc)
-        self._client = await establish_connection(
-            BleakClientWithServiceCache,
+        # Connect patiently, and do it ourselves: bleak_retry_connector hard-
+        # codes a 20 s connect timeout that cannot be raised through
+        # establish_connection(). Where the host has to guess the panel's
+        # current address (no controller address resolution), the first dial
+        # goes to a stale one and fails at ~20 s -- the kernel then retries on
+        # its own and the link comes up a few seconds later. Give up before
+        # that and the link is established with NO owner: the panel believes it
+        # has a central and stops advertising, so nothing can reach it again,
+        # and on this host not even BlueZ can tear it down (its Disconnect is
+        # refused, the link needs a raw HCI Disconnect). Waiting is what keeps
+        # us the owner. See DUCATO_STATE.md, 2026-08-18 evening.
+        client = BleakClientWithServiceCache(
             ble_device,
-            ble_device.address,
             disconnected_callback=disconnected_callback,
+            timeout=_CONNECT_TIMEOUT,
         )
+        await client.connect()
+        self._client = client
         await self._subscribe()
 
     async def adopt(self, client: BleakClientWithServiceCache) -> None:
