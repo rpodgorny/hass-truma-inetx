@@ -354,6 +354,31 @@ def test_advert_uuid_matches() -> None:
     assert BT.async_resolve_proxy_device(None, PANEL) == f"proxy:{RPA}"
 
 
+def test_waits_for_a_fresh_advert() -> None:
+    """The dial must not start on an address we have not heard just now.
+
+    Without LL Privacy the host puts the address it last *saw* on air, and it
+    only learns that while scanning -- which a connect attempt stops. Dialing
+    on a stale record therefore burns a ~20 s timeout and keeps the record
+    stale, which is the loop that left the panel down for hours on the van.
+    """
+    import asyncio
+    import time as _time
+
+    now = _time.monotonic()
+    _set_adverts(_Info(name=PANEL, time=now))
+    assert asyncio.run(BT.async_wait_until_heard(None, PANEL)) is True
+
+    # Heard, but long enough ago that the host's cached address may have
+    # rotated: refuse rather than dial it.
+    _set_adverts(_Info(name=PANEL, time=now - 120))
+    assert asyncio.run(BT.async_wait_until_heard(None, PANEL, timeout=0.1)) is False
+
+    # Never heard at all.
+    _set_adverts()
+    assert asyncio.run(BT.async_wait_until_heard(None, PANEL, timeout=0.1)) is False
+
+
 if __name__ == "__main__":
     test_panel_detection()
     test_debounced_warning()
@@ -365,4 +390,5 @@ if __name__ == "__main__":
     test_identity_is_last_resort()
     test_avoided_address_is_skipped()
     test_advert_uuid_matches()
+    test_waits_for_a_fresh_advert()
     print("no-proxy repair issue: all checks OK")

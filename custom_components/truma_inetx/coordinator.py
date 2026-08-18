@@ -20,7 +20,11 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .ble import TrumaBleClient
-from .bt import async_panel_advertising, async_resolve_proxy_device
+from .bt import (
+    async_panel_advertising,
+    async_resolve_proxy_device,
+    async_wait_until_heard,
+)
 from .const import (
     DOMAIN,
     ISSUE_NO_PROXY_ROUTE,
@@ -51,7 +55,12 @@ type TrumaConfigEntry = ConfigEntry[TrumaCoordinator]
 # so an out-of-range/unbonded device does not hammer — and monopolize — the
 # shared Bluetooth adapter. The delay resets after any session that connected.
 _RECONNECT_DELAY_BASE = 15  # seconds
-_RECONNECT_DELAY_MAX = 300  # seconds (5 min cap)
+# Keep the cap short. A dial that times out is not the end of the story on a
+# host without address resolution: the kernel keeps trying and the link can
+# come up seconds after we gave up, owned by nobody -- and a panel that thinks
+# it has a central stops advertising, so the longer we wait the deeper that
+# hole gets. Retrying soon is what re-attaches to such a link.
+_RECONNECT_DELAY_MAX = 45  # seconds
 # A healthy panel pushes frames every few seconds. If a connection goes quiet
 # for this long the link is wedged (half-open, or a ghost the proxy has not
 # noticed): drop it and reconnect rather than sit "connected" forever with
@@ -311,6 +320,14 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         # required a proxy route, so the issue cannot already be raised.)
         self._async_clear_no_proxy_route()
         self._last_addr = ble_device.address
+        # Dial while the panel is still audible: the resolved address is only
+        # good for as long as the host's cache of it is (see
+        # bt.async_wait_until_heard). A stale dial costs a ~20 s timeout during
+        # which nothing scans, so it keeps itself stale.
+        if not await async_wait_until_heard(self.hass, self.unique_id):
+            raise HomeAssistantError(
+                f"Truma {self.unique_id} went quiet before the connect"
+            )
         await client.connect(ble_device)
         # The connection established, so this address is not the phantom —
         # clear the blame marker so a later failure (startup, a mid-session

@@ -9,6 +9,8 @@ module is the single source of that resolution.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Iterable
 
 from bleak.backends.device import BLEDevice
@@ -25,6 +27,11 @@ from .truma.const import SERVICE_UUID
 # in the scan response and so requires ACTIVE scanning -- under passive scanning
 # the panel is invisible even though the radio hears it perfectly.
 ADVERT_SERVICE_UUID = "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
+
+# How recently the panel must have been heard for a connect to be worth
+# starting, and how long to wait for that to happen.
+ADVERT_FRESH_SECONDS = 5.0
+ADVERT_WAIT_TIMEOUT = 30.0
 
 
 def is_remote_scanner(scanner: object) -> bool:
@@ -158,3 +165,44 @@ def async_resolve_proxy_device(
         return sd.ble_device
     LOGGER.debug("Truma %s: no route to the panel right now", name)
     return None
+
+
+def _last_heard(hass: HomeAssistant, name: str) -> float | None:
+    """Monotonic timestamp of the panel's most recent advert, if any."""
+    infos = _panel_infos(hass, name)
+    return max((info.time for info in infos), default=None)
+
+
+async def async_wait_until_heard(
+    hass: HomeAssistant,
+    name: str,
+    *,
+    fresh: float = ADVERT_FRESH_SECONDS,
+    timeout: float = ADVERT_WAIT_TIMEOUT,
+) -> bool:
+    """Wait until the panel was heard within ``fresh`` seconds.
+
+    On a host whose controller cannot resolve private addresses, the kernel
+    has to put the address it last saw the peer use on air, and it only learns
+    that while scanning. A connect attempt stops the scan, so a dial started
+    long after the last advert goes out to an address the panel has already
+    rotated away from, times out after ~20 s, and blocks scanning for that
+    whole time -- which keeps the cached address stale and makes the next
+    attempt fail the same way. Dialing only just after an advert breaks that
+    loop; it costs nothing where the controller resolves addresses itself.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        heard = _last_heard(hass, name)
+        if heard is not None and time.monotonic() - heard <= fresh:
+            return True
+        if time.monotonic() >= deadline:
+            LOGGER.debug(
+                "Truma %s: no advert within %ss (last heard %ss ago); "
+                "not dialing a stale address",
+                name,
+                fresh,
+                None if heard is None else round(time.monotonic() - heard, 1),
+            )
+            return False
+        await asyncio.sleep(0.25)
