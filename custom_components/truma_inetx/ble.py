@@ -69,18 +69,23 @@ _CONNECT_TIMEOUT = 180.0
 # next one starts. Retrying faster than BlueZ can connect (~20 s here) just
 # collides with our own outstanding call and every attempt is refused with
 # "Operation already in progress" while the device sits there connected.
-# How long to let BlueZ produce the link by itself before dialling. A bonded,
-# trusted panel is reconnected in the background within seconds, and a dial we
-# do not need is the thing that blinds the adapter -- so waiting is cheaper than
-# asking.
-_BLUEZ_GRACE = 20.0
+# How long to let BlueZ produce the link by itself before dialling. Measured on
+# the van: it does, over and over -- "BlueZ produced the link first" at 15:35:45
+# and again at 15:51:19 -- so a dial is nearly always unnecessary, and an
+# unnecessary dial is what blinds the adapter. Treat dialling as a last resort
+# and let BlueZ do the work it is going to do anyway.
+_BLUEZ_GRACE = 120.0
 
 # ...and much longer than that once we have just cleared a dial. Clearing drops
 # BlueZ's Connected but leaves the kernel link, which bt-ghostbuster only takes
 # down at its 2-minute mark; BlueZ reconnects a second or two later. Dialling
 # inside that window is how the van oscillated at 15:36-15:38 -- dial, BlueZ
 # arrives, clear, dial again -- recreating the pending connect every time.
-_POST_CLEAR_QUIET = 150.0
+# Clearing leaves a bearer BlueZ has disowned; bt-ghostbuster drops that at its
+# 2-minute mark and BlueZ reconnects a few seconds later. 150 s expired just
+# before that happened (van, 15:48:27 clear -> 15:50:57 dial -> 15:51:19 clear),
+# which is the oscillation this exists to stop.
+_POST_CLEAR_QUIET = 210.0
 
 # Long enough to cover the slowest honest recovery: after a dial is cleared,
 # BlueZ disowns the link but the kernel keeps it, and bt-ghostbuster only drops
