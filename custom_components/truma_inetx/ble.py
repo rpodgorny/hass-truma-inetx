@@ -71,12 +71,29 @@ _READY_TIMEOUT = 3.0
 _ACK_TIMEOUT = 3.0
 
 
-def is_busy_error(exc: BaseException) -> bool:
-    """True when BlueZ refused because a connect is already under way.
+# BlueZ errors that do not mean "this device is unreachable". Measured on the
+# van: a Connect() that dials the peer's identity address first fails with a
+# plain org.bluez.Error.Failed after ~20 s -- and in the same second BlueZ's own
+# pending attempt lands, exports the GATT services and reports Connected: true.
+# The caller has been told "no" about a link that exists. Retrying a few seconds
+# later attaches to it; giving up leaves it owned by nobody, and a peripheral
+# that believes it has a central stops advertising, so nothing can find it again.
+_RETRYABLE = (
+    "already in progress",
+    "org.bluez.error.failed",
+    "org.bluez.error.inprogress",
+    "org.bluez.error.notready",
+)
 
-    Not a failure of ours: the link that attempt establishes is one we can use.
-    """
-    return "already in progress" in str(exc).lower()
+
+def is_retryable_error(exc: BaseException) -> bool:
+    """True when the connect may yet have worked, or is worth another go."""
+    text = str(exc).lower()
+    if "authentication" in text:
+        # A bond problem. Retrying re-runs a failing pairing and, on this panel,
+        # burns one of its four bond slots each time.
+        return False
+    return any(marker in text for marker in _RETRYABLE)
 
 
 class TrumaBleClient:
@@ -128,11 +145,12 @@ class TrumaBleClient:
             try:
                 await client.connect()
             except Exception as exc:  # noqa: BLE001 - classified below
-                if is_busy_error(exc) and attempt < _BUSY_RETRIES:
+                if is_retryable_error(exc) and attempt < _BUSY_RETRIES:
                     # Someone else is mid-connect. Do NOT clean up -- that would
                     # abort the very attempt we want to inherit.
                     _LOGGER.debug(
-                        "Truma connect: BlueZ busy (%s), retrying in %ss",
+                        "Truma connect: BlueZ said %s; retrying in %ss in case "
+                        "the link came up anyway",
                         exc,
                         _BUSY_RETRY_DELAY,
                     )

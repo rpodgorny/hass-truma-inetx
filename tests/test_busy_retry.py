@@ -102,9 +102,13 @@ def _fresh() -> None:
 
 
 def test_busy_is_classified() -> None:
-    assert BLE.is_busy_error(RuntimeError("[org.bluez.Error.Failed] Operation already in progress"))
-    assert not BLE.is_busy_error(TimeoutError())
-    assert not BLE.is_busy_error(RuntimeError("le-connection-abort-by-local"))
+    assert BLE.is_retryable_error(RuntimeError("[org.bluez.Error.Failed] Operation already in progress"))
+    # A bare Error.Failed is the one that matters: measured on the van, BlueZ
+    # answers the caller with it and completes the connection anyway.
+    assert BLE.is_retryable_error(RuntimeError("[org.bluez.Error.Failed] Software caused connection abort"))
+    assert not BLE.is_retryable_error(TimeoutError())
+    # A bond problem must not be retried -- each attempt costs a bond slot.
+    assert not BLE.is_retryable_error(RuntimeError("[org.bluez.Error.AuthenticationFailed] blah"))
 
 
 def test_busy_retries_and_never_cleans_up() -> None:
