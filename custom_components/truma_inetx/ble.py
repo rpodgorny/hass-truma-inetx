@@ -67,6 +67,14 @@ _CONNECT_TIMEOUT = 180.0
 # next one starts. Retrying faster than BlueZ can connect (~20 s here) just
 # collides with our own outstanding call and every attempt is refused with
 # "Operation already in progress" while the device sits there connected.
+# The dialling client must never give up on its own. When bleak's connect()
+# times out it runs its cleanup, and that cleanup DISCONNECTS -- so an abandoned
+# call that expires takes down the link we adopted from under us. Measured on
+# the van: adopted 14:01:34, streaming fine, and the abandoned dial's own 180 s
+# expiry killed it at 14:04:15. Our own deadline is what bounds the wait; this
+# only has to outlive it.
+_DIAL_ABANDON_TIMEOUT = 3600.0
+
 _WATCH_SECONDS = 150.0
 _WATCH_INTERVAL = 2.0
 
@@ -238,6 +246,15 @@ class TrumaBleClient:
         Returns the client to use, which is a NEW one on the adopt path -- the
         dialling client is still inside its own ``connect()``.
         """
+        if await _bluez_link_ready(ble_device):
+            # Steady state for a bonded panel: BlueZ reconnects it in the
+            # background and holds it. Dialling at all here only creates a call
+            # that will never be answered, so attach and be done.
+            _LOGGER.debug("Truma connect: BlueZ already has the link; attaching")
+            attached = make_client() if make_client else client
+            await attached.connect()
+            return attached
+
         dial = asyncio.create_task(client.connect())
         deadline = time.monotonic() + _CONNECT_TIMEOUT
         while True:
@@ -283,7 +300,7 @@ class TrumaBleClient:
         client = BleakClientWithServiceCache(
             ble_device,
             disconnected_callback=disconnected_callback,
-            timeout=_CONNECT_TIMEOUT,
+            timeout=_DIAL_ABANDON_TIMEOUT,
         )
         def _make_client() -> BleakClientWithServiceCache:
             return BleakClientWithServiceCache(

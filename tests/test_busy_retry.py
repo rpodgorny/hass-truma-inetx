@@ -272,6 +272,29 @@ def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
     assert still_pending
 
 
+def test_a_link_bluez_already_holds_is_attached_not_dialled() -> None:
+    """Dialling a device BlueZ already holds only creates an unanswered call."""
+    _fresh()
+    _Client.script = [None]
+
+    async def _ready(_device):
+        return True
+
+    original = BLE._bluez_link_ready
+    setattr(BLE, "_bluez_link_ready", _ready)
+    try:
+        client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
+        device = _Device()
+        asyncio.run(
+            client._connect_or_adopt(_Client(device), device, lambda: _Client(device))
+        )
+    finally:
+        setattr(BLE, "_bluez_link_ready", original)
+
+    assert len(ATTEMPTS) == 1, ATTEMPTS       # the attach, and nothing else
+    assert client._abandoned is None          # no dial was ever started
+
+
 if __name__ == "__main__":
     test_busy_is_classified()
     test_busy_waits_for_bluez_and_never_cleans_up()
@@ -279,4 +302,5 @@ if __name__ == "__main__":
     test_real_failure_cleans_up_and_raises()
     test_device_is_built_from_bluez_without_an_advert()
     test_unanswered_connect_is_abandoned_once_bluez_has_the_link()
+    test_a_link_bluez_already_holds_is_attached_not_dialled()
     print("busy retry: all checks OK")
