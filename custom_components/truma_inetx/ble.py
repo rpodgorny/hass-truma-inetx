@@ -48,8 +48,13 @@ _LOGGER = logging.getLogger(__name__)
 # local") rather than raising it. Measured on the van 2026-08-19: dial 13:14:38,
 # abort 13:14:59, bleak's retry landed 13:15:01 and GATT resolved -- and a 30 s
 # timeout tore it all down at 13:15:08, seven seconds after it had worked.
-# So this must clear two full BlueZ dials, not one.
-_CONNECT_TIMEOUT = 90.0
+# So this must clear several full BlueZ dials, not one. Measured again with the
+# timeout at 90 s: dial 13:48:07, BlueZ had the services resolved at 13:49:29,
+# and 90 s still cut it off at 13:49:37. Every cycle burns one guaranteed-dead
+# 20 s dial (the kernel patch puts the identity on air first -- see
+# DUCATO_STATE.md, "the first dial of every cycle is wasted"), so the budget has
+# to cover that plus the real one plus GATT discovery.
+_CONNECT_TIMEOUT = 180.0
 
 # BlueZ refuses a connect while one is already in flight for the same device --
 # its own background reconnect of a bonded device, or a leftover of ours. That
