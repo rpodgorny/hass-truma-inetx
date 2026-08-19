@@ -42,9 +42,14 @@ from .truma.protocol import parse_v3_frame
 
 _LOGGER = logging.getLogger(__name__)
 
-# Long enough to still be waiting when a first, stale dial has timed out and
-# the kernel's own retry succeeds (measured: link up 25-45 s after the dial).
-_CONNECT_TIMEOUT = 30.0
+# ONE bleak connect() is up to three BlueZ dials, not one: BlueZ gives up on a
+# dial after ~21 s with "le-connection-abort-by-local", and bleak retries that
+# error internally (bluezdbus/client.py, "retry due to le-connection-abort-by-
+# local") rather than raising it. Measured on the van 2026-08-19: dial 13:14:38,
+# abort 13:14:59, bleak's retry landed 13:15:01 and GATT resolved -- and a 30 s
+# timeout tore it all down at 13:15:08, seven seconds after it had worked.
+# So this must clear two full BlueZ dials, not one.
+_CONNECT_TIMEOUT = 90.0
 
 # BlueZ refuses a connect while one is already in flight for the same device --
 # its own background reconnect of a bonded device, or a leftover of ours. That
