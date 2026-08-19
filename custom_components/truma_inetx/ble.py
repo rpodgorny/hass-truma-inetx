@@ -87,6 +87,16 @@ _BLUEZ_GRACE = 120.0
 # which is the oscillation this exists to stop.
 _POST_CLEAR_QUIET = 210.0
 
+# When the link appears while our dial is still outstanding, that dial is
+# usually the thing that produced it -- BlueZ takes ~21 s to complete one, and
+# the properties go true a moment before the D-Bus reply arrives. Give the reply
+# that moment before concluding the dial will never be answered. Measured cost
+# of getting this wrong: we Disconnect our own successful connection,
+# bt-ghostbuster then drops the bearer BlueZ disowned (HCI reason 0x16), and the
+# session times out having thrown away a working link (van, 17:03:54 dial ->
+# 17:04:16 link -> 17:04:18 cleared -> 17:07:38 timed out; four times in a row).
+_DIAL_SETTLE = 10.0
+
 # Long enough to cover the slowest honest recovery: after a dial is cleared,
 # BlueZ disowns the link but the kernel keeps it, and bt-ghostbuster only drops
 # that at its 2-minute mark -- BlueZ then reconnects within seconds. 150 s used
@@ -357,17 +367,26 @@ class TrumaBleClient:
         while True:
             if await _bluez_link_ready(ble_device):
                 if dial is not None:
-                    # BlueZ got there first and our dial will never be
-                    # answered. Leaving it pending is what blinds the adapter.
-                    _LOGGER.debug(
-                        "Truma connect: BlueZ produced the link first; clearing "
-                        "our unanswered dial and retrying"
-                    )
-                    await _clear_dial(ble_device, dial)
-                    self._cleared_at = time.monotonic()
-                    raise ClearedDial(
-                        f"cleared an unanswered dial to {ble_device.address}"
-                    )
+                    # Most likely our own dial just landed and the reply is a
+                    # heartbeat behind the properties. Wait for it before
+                    # deciding it will never come.
+                    done, _ = await asyncio.wait({dial}, timeout=_DIAL_SETTLE)
+                    if done:
+                        await dial  # re-raise whatever it decided
+                        dial = None
+                    else:
+                        # Still nothing: the link came up on the accept path and
+                        # this call cannot be answered. Leaving it pending is
+                        # what blinds the adapter.
+                        _LOGGER.debug(
+                            "Truma connect: the link is up but our dial is "
+                            "unanswerable; clearing it and retrying"
+                        )
+                        await _clear_dial(ble_device, dial)
+                        self._cleared_at = time.monotonic()
+                        raise ClearedDial(
+                            f"cleared an unanswered dial to {ble_device.address}"
+                        )
                 _LOGGER.debug("Truma connect: BlueZ has the link; attaching")
                 attached = make_client()
                 await attached.connect()

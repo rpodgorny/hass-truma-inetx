@@ -112,6 +112,7 @@ def _load():
 BLE = _load()
 setattr(BLE, "_WATCH_INTERVAL", 0.01)  # no real waiting in a test
 setattr(BLE, "_BLUEZ_GRACE", 0.0)      # dial straight away
+setattr(BLE, "_DIAL_SETTLE", 0.02)     # no real settle wait in a test
 
 
 class _Device:
@@ -356,6 +357,48 @@ def test_no_dial_while_a_clear_is_still_settling() -> None:
     assert DIALS == [], DIALS  # the quiet period held
 
 
+def test_a_dial_that_lands_is_not_mistaken_for_an_unanswerable_one() -> None:
+    """The link appearing while we dial usually means OUR dial just landed.
+
+    BlueZ takes ~21 s to complete a dial and the device properties go true a
+    moment before the D-Bus reply arrives. Treating that instant as "BlueZ got
+    there first" made us Disconnect our own successful connection; the bearer
+    BlueZ then disowned was dropped by bt-ghostbuster and the session timed out
+    having thrown away a working link. Four times in a row on the van.
+    """
+    _fresh()
+    ready = False
+
+    async def _ready(_device) -> bool:
+        return ready
+
+    async def _dial_that_lands(_ble_device) -> None:
+        nonlocal ready
+        DIALS.append(True)
+        ready = True          # properties flip first...
+        await asyncio.sleep(0.01)  # ...reply arrives a moment later
+        return None
+
+    original = BLE._bluez_link_ready
+    original_dial = BLE._dbus_connect
+    original_call = BLE._device_call
+    setattr(BLE, "_bluez_link_ready", _ready)
+    setattr(BLE, "_dbus_connect", _dial_that_lands)
+    setattr(BLE, "_device_call", _record_call)
+    try:
+        client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
+        device = _Device()
+        asyncio.run(client._connect_or_adopt(device, lambda: _Client(device)))
+    finally:
+        setattr(BLE, "_bluez_link_ready", original)
+        setattr(BLE, "_dbus_connect", original_dial)
+        setattr(BLE, "_device_call", original_call)
+
+    assert len(DIALS) == 1, DIALS
+    assert CALLS == [], CALLS           # nothing was cleared...
+    assert len(ATTEMPTS) == 1, ATTEMPTS  # ...and the link was used
+
+
 if __name__ == "__main__":
     test_busy_is_classified()
     test_busy_retries_and_never_cleans_up()
@@ -364,6 +407,7 @@ if __name__ == "__main__":
     test_device_is_built_from_bluez_without_an_advert()
     test_unanswered_dial_is_cleared_not_abandoned()
     test_a_cleared_dial_is_retryable()
+    test_a_dial_that_lands_is_not_mistaken_for_an_unanswerable_one()
     test_no_dial_while_a_clear_is_still_settling()
     test_a_link_bluez_already_holds_is_attached_not_dialled()
     print("busy retry: all checks OK")
