@@ -193,6 +193,7 @@ class TrumaBleClient:
         """Initialize with the app identity (muid/uuid/username)."""
         self._identity = identity
         self._client: BleakClientWithServiceCache | None = None
+        self._abandoned: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._data_callbacks: list[Callable[[dict], None]] = []
         self._send_lock = asyncio.Lock()
@@ -210,8 +211,11 @@ class TrumaBleClient:
         return self._client is not None and self._client.is_connected
 
     async def _connect_or_adopt(
-        self, client: BleakClientWithServiceCache, ble_device: BLEDevice
-    ) -> None:
+        self,
+        client: BleakClientWithServiceCache,
+        ble_device: BLEDevice,
+        make_client: Callable[[], BleakClientWithServiceCache] | None = None,
+    ) -> BleakClientWithServiceCache:
         """Dial, but stop waiting the moment BlueZ says the link is up.
 
         bluetoothd only answers a ``Connect()`` from ``att_connect_cb()`` -- the
@@ -224,6 +228,15 @@ class TrumaBleClient:
         when a 180 s timeout finally killed it -- with a perfectly good link
         sitting there the whole time. A longer timeout cannot fix that; only
         giving up on the reply can.
+
+        The abandoned call is NOT cancelled: bleak treats a cancellation as a
+        failed connect and runs its full cleanup, which disconnects the link --
+        measured, the adopted client then failed every subscribe with
+        ``org.bluez.Error.NotConnected`` seconds later. So it is left pending
+        with its result swallowed; it finishes on its own when the link drops.
+
+        Returns the client to use, which is a NEW one on the adopt path -- the
+        dialling client is still inside its own ``connect()``.
         """
         dial = asyncio.create_task(client.connect())
         deadline = time.monotonic() + _CONNECT_TIMEOUT
@@ -231,17 +244,19 @@ class TrumaBleClient:
             done, _ = await asyncio.wait({dial}, timeout=_WATCH_INTERVAL)
             if done:
                 await dial  # re-raise whatever it decided
-                return
+                return client
             if await _bluez_link_ready(ble_device):
                 _LOGGER.debug(
                     "Truma connect: BlueZ has the link resolved; abandoning the "
                     "unanswered Connect and attaching to it"
                 )
-                dial.cancel()
+                self._abandoned = dial  # keep a ref so it is not GC'd mid-flight
+                dial.add_done_callback(lambda task: task.exception())
+                attached = make_client() if make_client else client
                 # bleak skips its own Connect() when the device is already
                 # connected, so this attaches rather than dialling again.
-                await client.connect()
-                return
+                await attached.connect()
+                return attached
             if time.monotonic() >= deadline:
                 dial.cancel()
                 raise TimeoutError(
@@ -270,8 +285,15 @@ class TrumaBleClient:
             disconnected_callback=disconnected_callback,
             timeout=_CONNECT_TIMEOUT,
         )
+        def _make_client() -> BleakClientWithServiceCache:
+            return BleakClientWithServiceCache(
+                ble_device,
+                disconnected_callback=disconnected_callback,
+                timeout=_CONNECT_TIMEOUT,
+            )
+
         try:
-            await self._connect_or_adopt(client, ble_device)
+            client = await self._connect_or_adopt(client, ble_device, _make_client)
         except Exception as exc:  # noqa: BLE001 - classified below
             if not is_retryable_error(exc):
                 try:

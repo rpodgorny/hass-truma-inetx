@@ -244,9 +244,21 @@ def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
     try:
         client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
         device = _Device()
-        # _connect_or_adopt, not connect(): the subscribe that follows it needs
-        # a real GATT client and is not what this pins.
-        asyncio.run(client._connect_or_adopt(_Client(device), device))
+        still_pending = False
+
+        async def _run() -> None:
+            nonlocal still_pending
+            # _connect_or_adopt, not connect(): the subscribe that follows it
+            # needs a real GATT client and is not what this pins.
+            await client._connect_or_adopt(
+                _Client(device), device, lambda: _Client(device)
+            )
+            # Checked here, not after the loop closes -- shutdown cancels every
+            # pending task, which would hide the thing being asserted.
+            still_pending = not client._abandoned.done()
+            client._abandoned.cancel()
+
+        asyncio.run(_run())
     finally:
         setattr(BLE, "_bluez_link_ready", original)
 
@@ -254,6 +266,10 @@ def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
     # would have torn down the very link we just adopted.
     assert len(ATTEMPTS) == 2, ATTEMPTS
     assert CLEANUPS == [], CLEANUPS
+    # The hung dial must be left pending, never cancelled: bleak treats a
+    # cancellation as a failed connect and disconnects the link out from under
+    # the client we just attached.
+    assert still_pending
 
 
 if __name__ == "__main__":
