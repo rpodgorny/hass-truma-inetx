@@ -117,6 +117,37 @@ async def _bluez_holds_link(ble_device: BLEDevice) -> bool:
         return False
 
 
+async def device_from_bluez(address: str) -> BLEDevice | None:
+    """Build a BLEDevice from BlueZ's own object, with no advert involved.
+
+    A bonded panel that something already holds a link to does not advertise --
+    it has a central. HA's discovery cache therefore runs empty exactly when the
+    link is healthiest, and the coordinator has nothing to hand to bleak, so it
+    gives up with "not currently advertising" while BlueZ is sitting on a fully
+    resolved connection (measured on the van 2026-08-19 13:41). BlueZ still has
+    the device object, and its path plus properties is all bleak's BlueZ backend
+    needs -- it is exactly what bleak's own scanner puts in ``details``.
+    """
+    try:
+        from bleak.backends.bluezdbus import defs
+        from bleak.backends.bluezdbus.manager import get_global_bluez_manager
+
+        manager = await get_global_bluez_manager()
+        want = address.upper()
+        # Same private map bleak's own is_connected()/is_paired() read.
+        for path, interfaces in manager._properties.items():  # noqa: SLF001
+            props = interfaces.get(defs.DEVICE_INTERFACE)
+            if props and props.get("Address", "").upper() == want:
+                return BLEDevice(
+                    want,
+                    props.get("Alias") or props.get("Name"),
+                    {"path": path, "props": props},
+                )
+    except Exception as exc:  # noqa: BLE001 - a fallback may simply not apply
+        _LOGGER.debug("Truma: cannot build a device from BlueZ: %s", exc)
+    return None
+
+
 def is_retryable_error(exc: BaseException) -> bool:
     """True when the connect may yet have worked, or is worth another go."""
     text = str(exc).lower()

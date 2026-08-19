@@ -19,7 +19,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .ble import TrumaBleClient
+from .ble import TrumaBleClient, device_from_bluez
 from .bt import (
     async_panel_advertising,
     async_resolve_proxy_device,
@@ -309,6 +309,17 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             )
             self._avoid.clear()
             ble_device = async_resolve_proxy_device(self.hass, self.unique_id)
+        if ble_device is None:
+            # Silence usually means the opposite of unreachable: BlueZ is
+            # already holding a link, so the panel has a central and stops
+            # advertising. Take BlueZ's own device object and attach to it.
+            ble_device = await device_from_bluez(self.unique_id)
+            if ble_device is not None:
+                LOGGER.debug(
+                    "Truma %s: not advertising, but BlueZ has the device; "
+                    "attaching to its object",
+                    self.unique_id,
+                )
         if ble_device is None:
             self._async_note_no_proxy_route()
             raise HomeAssistantError(

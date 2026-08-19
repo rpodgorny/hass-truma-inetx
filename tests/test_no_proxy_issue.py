@@ -148,7 +148,11 @@ def _load():
         ("build_identity_frames", "build_register_frame", "build_subscribe_frame",
          "build_v3_frame", "build_write_frame"), None))
     _mod("truma_pkg.truma.state", TrumaState=object)
-    _mod("truma_pkg.ble", TrumaBleClient=object)
+    async def _no_bluez_device(_address):
+        return None
+
+    _mod("truma_pkg.ble", TrumaBleClient=object,
+         device_from_bluez=_no_bluez_device)
 
     def _real(name: str):
         spec = importlib.util.spec_from_file_location(

@@ -62,7 +62,11 @@ def _load():
     _mod("homeassistant.core", HomeAssistant=object)
     _mod("bleak", __path__=[])
     _mod("bleak.backends", __path__=[])
-    _mod("bleak.backends.device", BLEDevice=object)
+    class _BLEDevice:
+        def __init__(self, address, name, details) -> None:
+            self.address, self.name, self.details = address, name, details
+
+    _mod("bleak.backends.device", BLEDevice=_BLEDevice)
     _mod("bleak.backends.characteristic", BleakGATTCharacteristic=object)
     _mod(
         "bleak_retry_connector",
@@ -184,9 +188,41 @@ def test_real_failure_cleans_up_and_raises() -> None:
     assert CLEANUPS == ["50:98:93:FF:B4:D1"], CLEANUPS
 
 
+def test_device_is_built_from_bluez_without_an_advert() -> None:
+    """A panel BlueZ already holds does not advertise; find it anyway.
+
+    This is the state the panel spends most of its life in once bonded, and it
+    is exactly when HA's discovery cache is empty -- so the address, the object
+    path and the properties have to come from BlueZ itself.
+    """
+    path = "/org/bluez/hci0/dev_50_98_93_FF_B4_D1"
+    props = {"Address": "50:98:93:FF:B4:D1", "Alias": "Truma iNetX-FFB4D1"}
+
+    manager = types.SimpleNamespace(_properties={
+        "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF": {
+            "org.bluez.Device1": {"Address": "AA:BB:CC:DD:EE:FF"}},
+        path: {"org.bluez.Device1": props},
+    })
+
+    async def _manager():
+        return manager
+
+    _mod("bleak.backends.bluezdbus", __path__=[])
+    _mod("bleak.backends.bluezdbus.defs", DEVICE_INTERFACE="org.bluez.Device1")
+    _mod("bleak.backends.bluezdbus.manager", get_global_bluez_manager=_manager)
+
+    device = asyncio.run(BLE.device_from_bluez("50:98:93:ff:b4:d1"))
+    assert device is not None
+    assert device.address == "50:98:93:FF:B4:D1"
+    assert device.details == {"path": path, "props": props}
+
+    assert asyncio.run(BLE.device_from_bluez("11:22:33:44:55:66")) is None
+
+
 if __name__ == "__main__":
     test_busy_is_classified()
     test_busy_waits_for_bluez_and_never_cleans_up()
     test_busy_that_never_lands_gives_up_and_cleans()
     test_real_failure_cleans_up_and_raises()
+    test_device_is_built_from_bluez_without_an_advert()
     print("busy retry: all checks OK")
