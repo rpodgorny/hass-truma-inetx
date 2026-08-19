@@ -27,6 +27,7 @@ SRC = Path(__file__).resolve().parents[1] / "custom_components" / "truma_inetx"
 HANG = object()
 CLEANUPS: list[str] = []
 DIALS: list[bool] = []
+CALLS: list[str] = []
 ATTEMPTS: list[str] = []
 
 
@@ -48,6 +49,10 @@ class _Client:
     async def connect(self) -> None:
         ATTEMPTS.append(self.address)
         self.is_connected = True
+
+
+async def _record_call(_ble_device, member: str) -> None:
+    CALLS.append(member)
 
 
 def _scripted_dial(script: list) -> object:
@@ -106,6 +111,7 @@ def _load():
 
 BLE = _load()
 setattr(BLE, "_WATCH_INTERVAL", 0.01)  # no real waiting in a test
+setattr(BLE, "_BLUEZ_GRACE", 0.0)      # dial straight away
 
 
 class _Device:
@@ -117,6 +123,7 @@ def _fresh() -> None:
     CLEANUPS.clear()
     ATTEMPTS.clear()
     DIALS.clear()
+    CALLS.clear()
 
 
 def test_busy_is_classified() -> None:
@@ -139,12 +146,14 @@ def test_busy_retries_and_never_cleans_up() -> None:
     """
     _fresh()
     busy = RuntimeError("[org.bluez.Error.Failed] Operation already in progress")
-    async def _not_ready(_device) -> bool:
-        return False  # nothing to attach to; the retry has to be a real dial
+    async def _ready_once_dialled_twice(_device) -> bool:
+        # Nothing to attach to until the second dial gets through, so the retry
+        # has to be a real dial rather than a lucky attach.
+        return len(DIALS) >= 2
 
     original = BLE._bluez_link_ready
     original_dial = BLE._dbus_connect
-    setattr(BLE, "_bluez_link_ready", _not_ready)
+    setattr(BLE, "_bluez_link_ready", _ready_once_dialled_twice)
     setattr(BLE, "_dbus_connect", _scripted_dial([busy, None]))
     setattr(BLE, "_BUSY_RETRY_INTERVAL", 0.01)
     try:
@@ -238,13 +247,14 @@ def test_device_is_built_from_bluez_without_an_advert() -> None:
     assert asyncio.run(BLE.device_from_bluez("11:22:33:44:55:66")) is None
 
 
-def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
-    """bluetoothd never replies to a Connect it did not itself complete.
+def test_unanswered_dial_is_cleared_not_abandoned() -> None:
+    """An unanswered dial must be torn down at BlueZ's end, not walked away from.
 
-    When the link arrives on the accept path, ``att_connect_cb()`` never runs,
-    so ``device->connect`` is never answered and the call hangs forever. Waiting
-    longer cannot help; the only way through is to stop waiting for the reply
-    and attach to the link BlueZ is already holding.
+    Leaving it pending holds bluetoothd's att_io open, which pins an hci_conn in
+    BT_CONNECT, which makes passive scanning accept-list filtered -- the adapter
+    goes blind to every other device until HA power-cycles it. Only
+    Device1.Disconnect() closes that socket, so the session is given up and
+    retried rather than adopted.
     """
     _fresh()
     seen = 0
@@ -256,37 +266,35 @@ def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
 
     original = BLE._bluez_link_ready
     original_dial = BLE._dbus_connect
+    original_call = BLE._device_call
     setattr(BLE, "_bluez_link_ready", _ready)
     setattr(BLE, "_dbus_connect", _scripted_dial([HANG]))
+    setattr(BLE, "_device_call", _record_call)
     try:
         client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
         device = _Device()
-        still_pending = False
-
-        async def _run() -> None:
-            nonlocal still_pending
-            # _connect_or_adopt, not connect(): the subscribe that follows it
-            # needs a real GATT client and is not what this pins.
-            await client._connect_or_adopt(device, lambda: _Client(device))
-            # Checked here, not after the loop closes -- shutdown cancels every
-            # pending task, which would hide the thing being asserted.
-            still_pending = not client._abandoned.done()
-            client._abandoned.cancel()
-
-        asyncio.run(_run())
+        try:
+            asyncio.run(
+                client._connect_or_adopt(device, lambda: _Client(device))
+            )
+        except BLE.ClearedDial:
+            pass
+        else:  # pragma: no cover - the point of the test
+            raise AssertionError("clearing a dial must give up the session")
     finally:
         setattr(BLE, "_bluez_link_ready", original)
         setattr(BLE, "_dbus_connect", original_dial)
+        setattr(BLE, "_device_call", original_call)
 
-    # One hung dial, then one attach -- and no stale-connection cleanup, which
-    # would have torn down the very link we just adopted.
     assert len(DIALS) == 1, DIALS
-    assert len(ATTEMPTS) == 1, ATTEMPTS
+    assert CALLS == ["Disconnect"], CALLS   # cleared at BlueZ's end
+    assert ATTEMPTS == [], ATTEMPTS         # and NOT adopted
     assert CLEANUPS == [], CLEANUPS
-    # The hung dial must be left pending, never cancelled: bleak treats a
-    # cancellation as a failed connect and disconnects the link out from under
-    # the client we just attached.
-    assert still_pending
+
+
+def test_a_cleared_dial_is_retryable() -> None:
+    """The link exists, so the caller must come straight back for it."""
+    assert BLE.is_retryable_error(BLE.ClearedDial("cleared"))
 
 
 def test_a_link_bluez_already_holds_is_attached_not_dialled() -> None:
@@ -310,7 +318,6 @@ def test_a_link_bluez_already_holds_is_attached_not_dialled() -> None:
 
     assert DIALS == [], DIALS                 # nothing was dialled
     assert len(ATTEMPTS) == 1, ATTEMPTS       # the attach, and nothing else
-    assert client._abandoned is None          # no dial task was ever started
 
 
 if __name__ == "__main__":
@@ -319,6 +326,7 @@ if __name__ == "__main__":
     test_busy_that_never_clears_gives_up_and_cleans()
     test_real_failure_cleans_up_and_raises()
     test_device_is_built_from_bluez_without_an_advert()
-    test_unanswered_connect_is_abandoned_once_bluez_has_the_link()
+    test_unanswered_dial_is_cleared_not_abandoned()
+    test_a_cleared_dial_is_retryable()
     test_a_link_bluez_already_holds_is_attached_not_dialled()
     print("busy retry: all checks OK")
