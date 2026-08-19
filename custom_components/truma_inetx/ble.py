@@ -44,7 +44,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Long enough to still be waiting when a first, stale dial has timed out and
 # the kernel's own retry succeeds (measured: link up 25-45 s after the dial).
-_CONNECT_TIMEOUT = 75.0
+_CONNECT_TIMEOUT = 30.0
 
 # BlueZ refuses a connect while one is already in flight for the same device --
 # its own background reconnect of a bonded device, or a leftover of ours. That
@@ -52,8 +52,12 @@ _CONNECT_TIMEOUT = 75.0
 # to, so waiting a moment beats failing the session and backing off past the
 # window (measured on the van: BlueZ connects, resolves GATT, and holds the
 # link, while our next attempt only came 45 s later and collided again).
-_BUSY_RETRY_DELAY = 5.0
-_BUSY_RETRIES = 6
+# Long enough that the previous attempt has finished inside BlueZ before the
+# next one starts. Retrying faster than BlueZ can connect (~20 s here) just
+# collides with our own outstanding call and every attempt is refused with
+# "Operation already in progress" while the device sits there connected.
+_WATCH_SECONDS = 150.0
+_WATCH_INTERVAL = 2.0
 
 
 def _client_is_proxy(client: object) -> bool:
@@ -84,6 +88,28 @@ _RETRYABLE = (
     "org.bluez.error.inprogress",
     "org.bluez.error.notready",
 )
+
+
+async def _bluez_holds_link(ble_device: BLEDevice) -> bool:
+    """Whether BlueZ itself has this device connected right now.
+
+    ``BleakClient.is_connected`` answers for *our* client, which is False even
+    while BlueZ holds a fully resolved link -- the state this panel spends most
+    of its time in. bleak skips its own ``Connect`` call when the device is
+    already connected, so knowing this is what lets a retry adopt the link
+    instead of starting a second connect that BlueZ then refuses.
+    """
+    path = (ble_device.details or {}).get("path")
+    if not path:
+        return False
+    try:
+        from bleak.backends.bluezdbus.manager import get_global_bluez_manager
+
+        manager = await get_global_bluez_manager()
+        return bool(manager.is_connected(path))
+    except Exception as exc:  # noqa: BLE001 - not worth failing a connect over
+        _LOGGER.debug("Truma connect: cannot read BlueZ link state: %s", exc)
+        return False
 
 
 def is_retryable_error(exc: BaseException) -> bool:
@@ -136,37 +162,50 @@ class TrumaBleClient:
         # that and the link is established with NO owner: the panel believes it
         # has a central and stops advertising, so nothing can reach it again.
         # Waiting is what keeps us the owner. See DUCATO_STATE.md.
-        for attempt in range(_BUSY_RETRIES + 1):
-            client = BleakClientWithServiceCache(
-                ble_device,
-                disconnected_callback=disconnected_callback,
-                timeout=_CONNECT_TIMEOUT,
-            )
-            try:
-                await client.connect()
-            except Exception as exc:  # noqa: BLE001 - classified below
-                if is_retryable_error(exc) and attempt < _BUSY_RETRIES:
-                    # Someone else is mid-connect. Do NOT clean up -- that would
-                    # abort the very attempt we want to inherit.
-                    _LOGGER.debug(
-                        "Truma connect: BlueZ said %s; retrying in %ss in case "
-                        "the link came up anyway",
-                        exc,
-                        _BUSY_RETRY_DELAY,
-                    )
-                    await asyncio.sleep(_BUSY_RETRY_DELAY)
-                    continue
-                # Only NOW clear leftovers. Doing it before the connect (which
-                # is what this did originally) tears down a link that BlueZ
-                # already holds and has resolved services on -- and on this
-                # panel that link is often the only way in, because a panel
-                # with a central does not advertise.
+        client = BleakClientWithServiceCache(
+            ble_device,
+            disconnected_callback=disconnected_callback,
+            timeout=_CONNECT_TIMEOUT,
+        )
+        try:
+            await client.connect()
+        except Exception as exc:  # noqa: BLE001 - classified below
+            if not is_retryable_error(exc):
                 try:
                     await close_stale_connections_by_address(ble_device.address)
                 except Exception as err:  # noqa: BLE001 - best effort
                     _LOGGER.debug("Truma stale-connection cleanup: %s", err)
                 raise
-            break
+            # Dial ONCE, then get out of BlueZ's way. Every further Connect()
+            # while its attempt is in flight is refused with "Operation already
+            # in progress" -- and re-dialing is not just useless, it is how the
+            # link ends up established with nobody owning it. So watch for the
+            # link instead of asking for it again; when it appears, bleak skips
+            # its own Connect and simply adopts it.
+            _LOGGER.debug(
+                "Truma connect: BlueZ said %s; watching for its attempt to land",
+                exc,
+            )
+            deadline = _WATCH_SECONDS
+            while deadline > 0:
+                await asyncio.sleep(_WATCH_INTERVAL)
+                deadline -= _WATCH_INTERVAL
+                if not await _bluez_holds_link(ble_device):
+                    continue
+                _LOGGER.debug("Truma connect: link is up, adopting it")
+                client = BleakClientWithServiceCache(
+                    ble_device,
+                    disconnected_callback=disconnected_callback,
+                    timeout=_CONNECT_TIMEOUT,
+                )
+                await client.connect()
+                break
+            else:
+                try:
+                    await close_stale_connections_by_address(ble_device.address)
+                except Exception as err:  # noqa: BLE001 - best effort
+                    _LOGGER.debug("Truma stale-connection cleanup: %s", err)
+                raise
         self._client = client
         await self._subscribe()
 
