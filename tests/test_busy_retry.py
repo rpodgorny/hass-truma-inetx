@@ -320,6 +320,42 @@ def test_a_link_bluez_already_holds_is_attached_not_dialled() -> None:
     assert len(ATTEMPTS) == 1, ATTEMPTS       # the attach, and nothing else
 
 
+def test_no_dial_while_a_clear_is_still_settling() -> None:
+    """After clearing, wait for BlueZ instead of undoing the clear.
+
+    Clearing drops BlueZ's Connected but leaves the kernel link, which
+    bt-ghostbuster only takes down at its 2-minute mark. Dialling inside that
+    window is how the van oscillated -- dial, BlueZ arrives, clear, dial again
+    -- recreating the pending connect that blinds the adapter every time.
+    """
+    _fresh()
+
+    async def _never_ready(_device) -> bool:
+        return False
+
+    original = BLE._bluez_link_ready
+    original_dial = BLE._dbus_connect
+    setattr(BLE, "_bluez_link_ready", _never_ready)
+    setattr(BLE, "_dbus_connect", _scripted_dial([None] * 40))
+    setattr(BLE, "_CONNECT_TIMEOUT", 0.05)
+    try:
+        client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
+        client._cleared_at = 1e18  # as if we had just cleared one
+        device = _Device()
+        try:
+            asyncio.run(client._connect_or_adopt(device, lambda: _Client(device)))
+        except TimeoutError:
+            pass
+        else:  # pragma: no cover - the point of the test
+            raise AssertionError("nothing was connectable, so it must time out")
+    finally:
+        setattr(BLE, "_bluez_link_ready", original)
+        setattr(BLE, "_dbus_connect", original_dial)
+        setattr(BLE, "_CONNECT_TIMEOUT", 180.0)
+
+    assert DIALS == [], DIALS  # the quiet period held
+
+
 if __name__ == "__main__":
     test_busy_is_classified()
     test_busy_retries_and_never_cleans_up()
@@ -328,5 +364,6 @@ if __name__ == "__main__":
     test_device_is_built_from_bluez_without_an_advert()
     test_unanswered_dial_is_cleared_not_abandoned()
     test_a_cleared_dial_is_retryable()
+    test_no_dial_while_a_clear_is_still_settling()
     test_a_link_bluez_already_holds_is_attached_not_dialled()
     print("busy retry: all checks OK")

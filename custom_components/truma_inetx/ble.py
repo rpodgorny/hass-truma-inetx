@@ -75,6 +75,13 @@ _CONNECT_TIMEOUT = 180.0
 # asking.
 _BLUEZ_GRACE = 20.0
 
+# ...and much longer than that once we have just cleared a dial. Clearing drops
+# BlueZ's Connected but leaves the kernel link, which bt-ghostbuster only takes
+# down at its 2-minute mark; BlueZ reconnects a second or two later. Dialling
+# inside that window is how the van oscillated at 15:36-15:38 -- dial, BlueZ
+# arrives, clear, dial again -- recreating the pending connect every time.
+_POST_CLEAR_QUIET = 150.0
+
 # Long enough to cover the slowest honest recovery: after a dial is cleared,
 # BlueZ disowns the link but the kernel keeps it, and bt-ghostbuster only drops
 # that at its 2-minute mark -- BlueZ then reconnects within seconds. 150 s used
@@ -287,6 +294,8 @@ class TrumaBleClient:
         """Initialize with the app identity (muid/uuid/username)."""
         self._identity = identity
         self._client: BleakClientWithServiceCache | None = None
+        # when we last cleared an unanswered dial; -inf means "never"
+        self._cleared_at = float("-inf")
         self._loop: asyncio.AbstractEventLoop | None = None
         self._data_callbacks: list[Callable[[dict], None]] = []
         self._send_lock = asyncio.Lock()
@@ -333,8 +342,11 @@ class TrumaBleClient:
         drops BlueZ's ``Connected`` too -- but the caller retries within
         seconds and takes the attach path, which leaves nothing behind.
         """
-        deadline = time.monotonic() + _CONNECT_TIMEOUT
-        dial_at = time.monotonic() + _BLUEZ_GRACE
+        now = time.monotonic()
+        deadline = now + _CONNECT_TIMEOUT
+        # After a clear, BlueZ is on its way back and a dial would only undo
+        # the clear; wait it out instead.
+        dial_at = max(now + _BLUEZ_GRACE, self._cleared_at + _POST_CLEAR_QUIET)
         dial: asyncio.Task | None = None
 
         while True:
@@ -347,7 +359,10 @@ class TrumaBleClient:
                         "our unanswered dial and retrying"
                     )
                     await _clear_dial(ble_device, dial)
-                    raise ClearedDial(f"cleared an unanswered dial to {ble_device.address}")
+                    self._cleared_at = time.monotonic()
+                    raise ClearedDial(
+                        f"cleared an unanswered dial to {ble_device.address}"
+                    )
                 _LOGGER.debug("Truma connect: BlueZ has the link; attaching")
                 attached = make_client()
                 await attached.connect()
