@@ -115,6 +115,7 @@ def _load():
     _mod("bleak", __path__=[])
     _mod("bleak.backends", __path__=[])
     _mod("bleak.backends.device", BLEDevice=object)
+    _mod("bleak.exc", BleakError=type("BleakError", (Exception,), {}))
     _mod(
         "bleak_retry_connector",
         BleakClientWithServiceCache=object,

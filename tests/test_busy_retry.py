@@ -26,6 +26,7 @@ SRC = Path(__file__).resolve().parents[1] / "custom_components" / "truma_inetx"
 
 HANG = object()
 CLEANUPS: list[str] = []
+DIALS: list[bool] = []
 ATTEMPTS: list[str] = []
 
 
@@ -37,9 +38,7 @@ def _mod(name: str, **attrs):
 
 
 class _Client:
-    """Fails with whatever the script says, then connects."""
-
-    script: list[BaseException | None] = []
+    """A client only ever ATTACHES now; the dial is a bare D-Bus call."""
 
     def __init__(self, device, disconnected_callback=None, timeout=None) -> None:
         del disconnected_callback, timeout  # accepted, not exercised here
@@ -48,12 +47,21 @@ class _Client:
 
     async def connect(self) -> None:
         ATTEMPTS.append(self.address)
-        outcome = _Client.script.pop(0)
+        self.is_connected = True
+
+
+def _scripted_dial(script: list) -> object:
+    """Stand in for _dbus_connect, handing out one scripted outcome per call."""
+
+    async def _dial(_ble_device) -> None:
+        DIALS.append(True)
+        outcome = script.pop(0)
         if outcome is HANG:
             await asyncio.Event().wait()  # the D-Bus reply that never comes
         if outcome is not None:
             raise outcome
-        self.is_connected = True
+
+    return _dial
 
 
 async def _close_stale(address: str) -> None:
@@ -71,6 +79,7 @@ def _load():
 
     _mod("bleak.backends.device", BLEDevice=_BLEDevice)
     _mod("bleak.backends.characteristic", BleakGATTCharacteristic=object)
+    _mod("bleak.exc", BleakError=type("BleakError", (Exception,), {}))
     _mod(
         "bleak_retry_connector",
         BleakClientWithServiceCache=_Client,
@@ -107,6 +116,7 @@ class _Device:
 def _fresh() -> None:
     CLEANUPS.clear()
     ATTEMPTS.clear()
+    DIALS.clear()
 
 
 def test_busy_is_classified() -> None:
@@ -129,13 +139,13 @@ def test_busy_retries_and_never_cleans_up() -> None:
     """
     _fresh()
     busy = RuntimeError("[org.bluez.Error.Failed] Operation already in progress")
-    _Client.script = [busy, None]
-
     async def _not_ready(_device) -> bool:
         return False  # nothing to attach to; the retry has to be a real dial
 
     original = BLE._bluez_link_ready
+    original_dial = BLE._dbus_connect
     setattr(BLE, "_bluez_link_ready", _not_ready)
+    setattr(BLE, "_dbus_connect", _scripted_dial([busy, None]))
     setattr(BLE, "_BUSY_RETRY_INTERVAL", 0.01)
     try:
         client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
@@ -143,21 +153,23 @@ def test_busy_retries_and_never_cleans_up() -> None:
         asyncio.run(client.connect(_Device()))
     finally:
         setattr(BLE, "_bluez_link_ready", original)
+        setattr(BLE, "_dbus_connect", original_dial)
 
-    assert len(ATTEMPTS) == 2, ATTEMPTS
+    assert len(DIALS) == 2, DIALS       # refused once, then let in
+    assert len(ATTEMPTS) == 1, ATTEMPTS  # one client, built to attach
     assert CLEANUPS == [], CLEANUPS
 
 
 def test_busy_that_never_clears_gives_up_and_cleans() -> None:
     _fresh()
     busy = RuntimeError("[org.bluez.Error.Failed] Operation already in progress")
-    _Client.script = [busy] * 40
-
     async def _not_ready(_device) -> bool:
         return False
 
     original = BLE._bluez_link_ready
+    original_dial = BLE._dbus_connect
     setattr(BLE, "_bluez_link_ready", _not_ready)
+    setattr(BLE, "_dbus_connect", _scripted_dial([busy] * 40))
     setattr(BLE, "_BUSY_RETRY_INTERVAL", 0.01)
     setattr(BLE, "_WATCH_SECONDS", 0.05)
     try:
@@ -170,6 +182,7 @@ def test_busy_that_never_clears_gives_up_and_cleans() -> None:
             raise AssertionError("a refusal that never clears must propagate")
     finally:
         setattr(BLE, "_bluez_link_ready", original)
+        setattr(BLE, "_dbus_connect", original_dial)
         setattr(BLE, "_WATCH_SECONDS", 150.0)
 
     assert CLEANUPS == ["50:98:93:FF:B4:D1"], CLEANUPS
@@ -177,17 +190,20 @@ def test_busy_that_never_clears_gives_up_and_cleans() -> None:
 
 def test_real_failure_cleans_up_and_raises() -> None:
     _fresh()
-    _Client.script = [TimeoutError("no answer")]
-
-    client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
+    original_dial = BLE._dbus_connect
+    setattr(BLE, "_dbus_connect", _scripted_dial([TimeoutError("no answer")]))
     try:
-        asyncio.run(client.connect(_Device()))
-    except TimeoutError:
-        pass
-    else:  # pragma: no cover - the point of the test
-        raise AssertionError("a real connect failure must propagate")
+        client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
+        try:
+            asyncio.run(client.connect(_Device()))
+        except TimeoutError:
+            pass
+        else:  # pragma: no cover - the point of the test
+            raise AssertionError("a real connect failure must propagate")
+    finally:
+        setattr(BLE, "_dbus_connect", original_dial)
 
-    assert len(ATTEMPTS) == 1, ATTEMPTS
+    assert len(DIALS) == 1, DIALS
     assert CLEANUPS == ["50:98:93:FF:B4:D1"], CLEANUPS
 
 
@@ -231,7 +247,6 @@ def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
     and attach to the link BlueZ is already holding.
     """
     _fresh()
-    _Client.script = [HANG, None]
     seen = 0
 
     async def _ready(_device):
@@ -240,7 +255,9 @@ def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
         return seen > 1  # not up on the first look, up on the second
 
     original = BLE._bluez_link_ready
+    original_dial = BLE._dbus_connect
     setattr(BLE, "_bluez_link_ready", _ready)
+    setattr(BLE, "_dbus_connect", _scripted_dial([HANG]))
     try:
         client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
         device = _Device()
@@ -250,9 +267,7 @@ def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
             nonlocal still_pending
             # _connect_or_adopt, not connect(): the subscribe that follows it
             # needs a real GATT client and is not what this pins.
-            await client._connect_or_adopt(
-                _Client(device), device, lambda: _Client(device)
-            )
+            await client._connect_or_adopt(device, lambda: _Client(device))
             # Checked here, not after the loop closes -- shutdown cancels every
             # pending task, which would hide the thing being asserted.
             still_pending = not client._abandoned.done()
@@ -261,10 +276,12 @@ def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
         asyncio.run(_run())
     finally:
         setattr(BLE, "_bluez_link_ready", original)
+        setattr(BLE, "_dbus_connect", original_dial)
 
     # One hung dial, then one attach -- and no stale-connection cleanup, which
     # would have torn down the very link we just adopted.
-    assert len(ATTEMPTS) == 2, ATTEMPTS
+    assert len(DIALS) == 1, DIALS
+    assert len(ATTEMPTS) == 1, ATTEMPTS
     assert CLEANUPS == [], CLEANUPS
     # The hung dial must be left pending, never cancelled: bleak treats a
     # cancellation as a failed connect and disconnects the link out from under
@@ -275,24 +292,25 @@ def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
 def test_a_link_bluez_already_holds_is_attached_not_dialled() -> None:
     """Dialling a device BlueZ already holds only creates an unanswered call."""
     _fresh()
-    _Client.script = [None]
 
     async def _ready(_device):
         return True
 
     original = BLE._bluez_link_ready
+    original_dial = BLE._dbus_connect
     setattr(BLE, "_bluez_link_ready", _ready)
+    setattr(BLE, "_dbus_connect", _scripted_dial([]))
     try:
         client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
         device = _Device()
-        asyncio.run(
-            client._connect_or_adopt(_Client(device), device, lambda: _Client(device))
-        )
+        asyncio.run(client._connect_or_adopt(device, lambda: _Client(device)))
     finally:
         setattr(BLE, "_bluez_link_ready", original)
+        setattr(BLE, "_dbus_connect", original_dial)
 
+    assert DIALS == [], DIALS                 # nothing was dialled
     assert len(ATTEMPTS) == 1, ATTEMPTS       # the attach, and nothing else
-    assert client._abandoned is None          # no dial was ever started
+    assert client._abandoned is None          # no dial task was ever started
 
 
 if __name__ == "__main__":

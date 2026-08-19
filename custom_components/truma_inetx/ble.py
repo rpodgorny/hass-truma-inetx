@@ -24,6 +24,7 @@ from collections.abc import Callable
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
+from bleak.exc import BleakError
 from bleak_retry_connector import (
     BleakClientWithServiceCache,
     close_stale_connections_by_address,
@@ -67,14 +68,6 @@ _CONNECT_TIMEOUT = 180.0
 # next one starts. Retrying faster than BlueZ can connect (~20 s here) just
 # collides with our own outstanding call and every attempt is refused with
 # "Operation already in progress" while the device sits there connected.
-# The dialling client must never give up on its own. When bleak's connect()
-# times out it runs its cleanup, and that cleanup DISCONNECTS -- so an abandoned
-# call that expires takes down the link we adopted from under us. Measured on
-# the van: adopted 14:01:34, streaming fine, and the abandoned dial's own 180 s
-# expiry killed it at 14:04:15. Our own deadline is what bounds the wait; this
-# only has to outlive it.
-_DIAL_ABANDON_TIMEOUT = 3600.0
-
 _WATCH_SECONDS = 150.0
 _WATCH_INTERVAL = 2.0
 # One BlueZ dial is ~21 s, so retrying much faster than this only collects
@@ -132,6 +125,50 @@ async def _bluez_holds_link(ble_device: BLEDevice) -> bool:
     except Exception as exc:  # noqa: BLE001 - not worth failing a connect over
         _LOGGER.debug("Truma connect: cannot read BlueZ link state: %s", exc)
         return False
+
+
+async def _dbus_connect(ble_device: BLEDevice) -> None:
+    """Ask BlueZ to connect, without a BleakClient behind the call.
+
+    A ``BleakClient.connect()`` that we walk away from is not inert: whenever it
+    eventually errors, times out or is cancelled, bleak runs its client cleanup,
+    and that cleanup disconnects -- on the same device path the *adopted* client
+    is using. Measured on the van 2026-08-19, twice, 130-185 ms apart each time:
+
+        14:50:46.761  the abandoned dial ended: [org.bluez.Error.Failed] Input/output error
+        14:50:46.890  BLE link closed cleanly
+
+    A bare D-Bus method call has no client behind it, so abandoning one leaves
+    nothing to clean up and nothing to disconnect. This is the call bluetoothd
+    never answers when the link arrives on the accept path (see
+    :meth:`TrumaBleClient._connect_or_adopt`), so being able to walk away from
+    it without consequences is the whole point.
+    """
+    from dbus_fast import Message, MessageType
+    from bleak.backends.bluezdbus.manager import get_global_bluez_manager
+
+    path = (ble_device.details or {}).get("path")
+    if not path:
+        raise BleakError(f"no BlueZ object path for {ble_device.address}")
+
+    manager = await get_global_bluez_manager()
+    bus = manager._bus  # noqa: SLF001 - the only handle on BlueZ's bus
+    if bus is None:
+        raise BleakError("BlueZ D-Bus connection is not up")
+
+    reply = await bus.call(
+        Message(
+            destination="org.bluez",
+            path=path,
+            interface="org.bluez.Device1",
+            member="Connect",
+        )
+    )
+    if reply is None:
+        raise BleakError("no reply from BlueZ")
+    if reply.message_type is MessageType.ERROR:
+        detail = reply.body[0] if reply.body else ""
+        raise BleakError(f"[{reply.error_name}] {detail}")
 
 
 async def _bluez_link_ready(ble_device: BLEDevice) -> bool:
@@ -239,9 +276,8 @@ class TrumaBleClient:
 
     async def _connect_or_adopt(
         self,
-        client: BleakClientWithServiceCache,
         ble_device: BLEDevice,
-        make_client: Callable[[], BleakClientWithServiceCache] | None = None,
+        make_client: Callable[[], BleakClientWithServiceCache],
     ) -> BleakClientWithServiceCache:
         """Dial, but stop waiting the moment BlueZ says the link is up.
 
@@ -270,17 +306,21 @@ class TrumaBleClient:
             # background and holds it. Dialling at all here only creates a call
             # that will never be answered, so attach and be done.
             _LOGGER.debug("Truma connect: BlueZ already has the link; attaching")
-            attached = make_client() if make_client else client
+            attached = make_client()
             await attached.connect()
             return attached
 
-        dial = asyncio.create_task(client.connect())
+        dial = asyncio.create_task(_dbus_connect(ble_device))
         deadline = time.monotonic() + _CONNECT_TIMEOUT
         while True:
             done, _ = await asyncio.wait({dial}, timeout=_WATCH_INTERVAL)
             if done:
                 await dial  # re-raise whatever it decided
-                return client
+                # The dial only asked BlueZ to connect; it built nothing we can
+                # talk GATT over, so attach a client to what it produced.
+                attached = make_client()
+                await attached.connect()
+                return attached
             if await _bluez_link_ready(ble_device):
                 _LOGGER.debug(
                     "Truma connect: BlueZ has the link resolved; abandoning the "
@@ -288,7 +328,7 @@ class TrumaBleClient:
                 )
                 self._abandoned = dial  # keep a ref so it is not GC'd mid-flight
                 dial.add_done_callback(_log_abandoned)
-                attached = make_client() if make_client else client
+                attached = make_client()
                 # bleak skips its own Connect() when the device is already
                 # connected, so this attaches rather than dialling again.
                 await attached.connect()
@@ -316,11 +356,6 @@ class TrumaBleClient:
         # that and the link is established with NO owner: the panel believes it
         # has a central and stops advertising, so nothing can reach it again.
         # Waiting is what keeps us the owner. See DUCATO_STATE.md.
-        client = BleakClientWithServiceCache(
-            ble_device,
-            disconnected_callback=disconnected_callback,
-            timeout=_DIAL_ABANDON_TIMEOUT,
-        )
         def _make_client() -> BleakClientWithServiceCache:
             return BleakClientWithServiceCache(
                 ble_device,
@@ -329,7 +364,7 @@ class TrumaBleClient:
             )
 
         try:
-            client = await self._connect_or_adopt(client, ble_device, _make_client)
+            client = await self._connect_or_adopt(ble_device, _make_client)
         except Exception as exc:  # noqa: BLE001 - classified below
             if not is_retryable_error(exc):
                 try:
@@ -360,7 +395,7 @@ class TrumaBleClient:
                 await asyncio.sleep(_BUSY_RETRY_INTERVAL)
                 try:
                     client = await self._connect_or_adopt(
-                        _make_client(), ble_device, _make_client
+                        ble_device, _make_client
                     )
                 except Exception as retry_exc:  # noqa: BLE001 - classified here
                     if not is_retryable_error(retry_exc):
