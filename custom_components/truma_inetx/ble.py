@@ -194,6 +194,22 @@ def is_retryable_error(exc: BaseException) -> bool:
     return any(marker in text for marker in _RETRYABLE)
 
 
+def _log_abandoned(task: asyncio.Task) -> None:
+    """Record how and when the abandoned dial finally ended.
+
+    Open question as of 2026-08-19: sessions last ~3.5 min and then the ATT
+    bearer goes down with no `dev_disconnected` for the link, so something is
+    closing the bearer rather than dropping the connection. This call is a prime
+    suspect -- both clients share one device path, so its cleanup would tear the
+    bearer down for the adopted client too. The timestamp says whether it went
+    first or merely reacted.
+    """
+    if task.cancelled():
+        _LOGGER.debug("Truma connect: the abandoned dial was cancelled")
+        return
+    _LOGGER.debug("Truma connect: the abandoned dial ended: %s", task.exception())
+
+
 class TrumaBleClient:
     """Manage the BLE connection and transport FSM to a Truma iNet X panel."""
 
@@ -268,7 +284,7 @@ class TrumaBleClient:
                     "unanswered Connect and attaching to it"
                 )
                 self._abandoned = dial  # keep a ref so it is not GC'd mid-flight
-                dial.add_done_callback(lambda task: task.exception())
+                dial.add_done_callback(_log_abandoned)
                 attached = make_client() if make_client else client
                 # bleak skips its own Connect() when the device is already
                 # connected, so this attaches rather than dialling again.
