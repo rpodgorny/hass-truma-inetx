@@ -119,46 +119,46 @@ def test_busy_is_classified() -> None:
     assert not BLE.is_retryable_error(RuntimeError("[org.bluez.Error.AuthenticationFailed] blah"))
 
 
-def test_busy_waits_for_bluez_and_never_cleans_up() -> None:
-    """A busy refusal means watch, not dial again, and never clean up.
+def test_busy_retries_and_never_cleans_up() -> None:
+    """A busy refusal means ask again shortly, and never clean up.
 
-    Re-dialing while BlueZ's attempt is in flight collects another refusal and
-    is how the link ends up established with no owner; the cleanup would abort
-    that attempt outright.
+    Purely watching was measured to be worse than retrying: when the refusal
+    came from a wedged ATT bearer, bt-ghostbuster cleared it a minute later and
+    nothing was there to dial, so the whole window was spent idle. The cleanup
+    must stay out of it either way -- it would abort the attempt we want.
     """
     _fresh()
     busy = RuntimeError("[org.bluez.Error.Failed] Operation already in progress")
     _Client.script = [busy, None]
-    checked: list[bool] = []
 
-    async def _holds(_device) -> bool:
-        checked.append(True)
-        return True  # BlueZ's own attempt landed while we watched
+    async def _not_ready(_device) -> bool:
+        return False  # nothing to attach to; the retry has to be a real dial
 
-    original = BLE._bluez_holds_link
-    setattr(BLE, "_bluez_holds_link", _holds)
+    original = BLE._bluez_link_ready
+    setattr(BLE, "_bluez_link_ready", _not_ready)
+    setattr(BLE, "_BUSY_RETRY_INTERVAL", 0.01)
     try:
         client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
         client._subscribe = lambda: asyncio.sleep(0)  # type: ignore[assignment]
         asyncio.run(client.connect(_Device()))
     finally:
-        setattr(BLE, "_bluez_holds_link", original)
+        setattr(BLE, "_bluez_link_ready", original)
 
-    assert checked, "the busy path must watch BlueZ for the link"
     assert len(ATTEMPTS) == 2, ATTEMPTS
     assert CLEANUPS == [], CLEANUPS
 
 
-def test_busy_that_never_lands_gives_up_and_cleans() -> None:
+def test_busy_that_never_clears_gives_up_and_cleans() -> None:
     _fresh()
     busy = RuntimeError("[org.bluez.Error.Failed] Operation already in progress")
-    _Client.script = [busy]
+    _Client.script = [busy] * 40
 
-    async def _never(_device) -> bool:
+    async def _not_ready(_device) -> bool:
         return False
 
-    original = BLE._bluez_holds_link
-    setattr(BLE, "_bluez_holds_link", _never)
+    original = BLE._bluez_link_ready
+    setattr(BLE, "_bluez_link_ready", _not_ready)
+    setattr(BLE, "_BUSY_RETRY_INTERVAL", 0.01)
     setattr(BLE, "_WATCH_SECONDS", 0.05)
     try:
         client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
@@ -167,11 +167,11 @@ def test_busy_that_never_lands_gives_up_and_cleans() -> None:
         except RuntimeError:
             pass
         else:  # pragma: no cover
-            raise AssertionError("a link that never lands must propagate")
+            raise AssertionError("a refusal that never clears must propagate")
     finally:
-        setattr(BLE, "_bluez_holds_link", original)
+        setattr(BLE, "_bluez_link_ready", original)
+        setattr(BLE, "_WATCH_SECONDS", 150.0)
 
-    assert len(ATTEMPTS) == 1, ATTEMPTS
     assert CLEANUPS == ["50:98:93:FF:B4:D1"], CLEANUPS
 
 
@@ -297,8 +297,8 @@ def test_a_link_bluez_already_holds_is_attached_not_dialled() -> None:
 
 if __name__ == "__main__":
     test_busy_is_classified()
-    test_busy_waits_for_bluez_and_never_cleans_up()
-    test_busy_that_never_lands_gives_up_and_cleans()
+    test_busy_retries_and_never_cleans_up()
+    test_busy_that_never_clears_gives_up_and_cleans()
     test_real_failure_cleans_up_and_raises()
     test_device_is_built_from_bluez_without_an_advert()
     test_unanswered_connect_is_abandoned_once_bluez_has_the_link()

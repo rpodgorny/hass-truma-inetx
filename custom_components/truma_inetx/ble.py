@@ -77,6 +77,9 @@ _DIAL_ABANDON_TIMEOUT = 3600.0
 
 _WATCH_SECONDS = 150.0
 _WATCH_INTERVAL = 2.0
+# One BlueZ dial is ~21 s, so retrying much faster than this only collects
+# instant refusals; much slower wastes the window.
+_BUSY_RETRY_INTERVAL = 20.0
 
 
 def _client_is_proxy(client: object) -> bool:
@@ -334,36 +337,42 @@ class TrumaBleClient:
                 except Exception as err:  # noqa: BLE001 - best effort
                     _LOGGER.debug("Truma stale-connection cleanup: %s", err)
                 raise
-            # Dial ONCE, then get out of BlueZ's way. Every further Connect()
-            # while its attempt is in flight is refused with "Operation already
-            # in progress" -- and re-dialing is not just useless, it is how the
-            # link ends up established with nobody owning it. So watch for the
-            # link instead of asking for it again; when it appears, bleak skips
-            # its own Connect and simply adopts it.
+            # Ask again in a moment. A dial made while BlueZ is genuinely busy
+            # is refused instantly and costs nothing, and _connect_or_adopt
+            # attaches without dialling at all once BlueZ has the link -- so
+            # retrying is how both endings are reached. Purely *watching* was
+            # measured to be worse: when the refusal came from a wedged ATT
+            # bearer, bt-ghostbuster cleared it a minute later and nothing was
+            # there to dial, so the whole 150 s window was spent idle
+            # (van 2026-08-19 14:17:59 -> 14:20:29, one session lost for nothing).
             _LOGGER.debug(
-                "Truma connect: BlueZ said %s; watching for its attempt to land",
+                "Truma connect: BlueZ said %s; retrying until it lets us in",
                 exc,
             )
-            deadline = _WATCH_SECONDS
-            while deadline > 0:
-                await asyncio.sleep(_WATCH_INTERVAL)
-                deadline -= _WATCH_INTERVAL
-                if not await _bluez_holds_link(ble_device):
-                    continue
-                _LOGGER.debug("Truma connect: link is up, adopting it")
-                client = BleakClientWithServiceCache(
-                    ble_device,
-                    disconnected_callback=disconnected_callback,
-                    timeout=_CONNECT_TIMEOUT,
-                )
-                await client.connect()
-                break
-            else:
+            deadline = time.monotonic() + _WATCH_SECONDS
+            while True:
+                if time.monotonic() >= deadline:
+                    try:
+                        await close_stale_connections_by_address(ble_device.address)
+                    except Exception as err:  # noqa: BLE001 - best effort
+                        _LOGGER.debug("Truma stale-connection cleanup: %s", err)
+                    raise
+                await asyncio.sleep(_BUSY_RETRY_INTERVAL)
                 try:
-                    await close_stale_connections_by_address(ble_device.address)
-                except Exception as err:  # noqa: BLE001 - best effort
-                    _LOGGER.debug("Truma stale-connection cleanup: %s", err)
-                raise
+                    client = await self._connect_or_adopt(
+                        _make_client(), ble_device, _make_client
+                    )
+                except Exception as retry_exc:  # noqa: BLE001 - classified here
+                    if not is_retryable_error(retry_exc):
+                        try:
+                            await close_stale_connections_by_address(
+                                ble_device.address
+                            )
+                        except Exception as err:  # noqa: BLE001 - best effort
+                            _LOGGER.debug("Truma stale-connection cleanup: %s", err)
+                        raise
+                    continue
+                break
         self._client = client
         await self._subscribe()
 
