@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
@@ -122,6 +123,28 @@ async def _bluez_holds_link(ble_device: BLEDevice) -> bool:
         return False
 
 
+async def _bluez_link_ready(ble_device: BLEDevice) -> bool:
+    """Whether BlueZ has the link up AND the GATT database exported.
+
+    Stronger than :func:`_bluez_holds_link`: a client can only be attached once
+    the services are resolved, so this is the condition for abandoning a connect
+    call that is never going to return.
+    """
+    path = (ble_device.details or {}).get("path")
+    if not path:
+        return False
+    try:
+        from bleak.backends.bluezdbus import defs
+        from bleak.backends.bluezdbus.manager import get_global_bluez_manager
+
+        manager = await get_global_bluez_manager()
+        props = manager._properties.get(path, {}).get(defs.DEVICE_INTERFACE, {})  # noqa: SLF001
+        return bool(props.get("Connected")) and bool(props.get("ServicesResolved"))
+    except Exception as exc:  # noqa: BLE001 - not worth failing a connect over
+        _LOGGER.debug("Truma connect: cannot read BlueZ link state: %s", exc)
+        return False
+
+
 async def device_from_bluez(address: str) -> BLEDevice | None:
     """Build a BLEDevice from BlueZ's own object, with no advert involved.
 
@@ -186,6 +209,45 @@ class TrumaBleClient:
         """Whether the BLE link is up."""
         return self._client is not None and self._client.is_connected
 
+    async def _connect_or_adopt(
+        self, client: BleakClientWithServiceCache, ble_device: BLEDevice
+    ) -> None:
+        """Dial, but stop waiting the moment BlueZ says the link is up.
+
+        bluetoothd only answers a ``Connect()`` from ``att_connect_cb()`` -- the
+        completion of the dial *it* started. When the link instead arrives on
+        the accept path (bluetoothd's own background reconnect of a bonded
+        device), that callback never runs, ``device->connect`` is never replied
+        to, and the D-Bus call hangs forever. Measured on the van 2026-08-19:
+        dialled 13:52:08, BlueZ had ``Connected`` and ``ServicesResolved`` true
+        by 13:52:39, and ``client.connect()`` had still not returned at 13:55:10
+        when a 180 s timeout finally killed it -- with a perfectly good link
+        sitting there the whole time. A longer timeout cannot fix that; only
+        giving up on the reply can.
+        """
+        dial = asyncio.create_task(client.connect())
+        deadline = time.monotonic() + _CONNECT_TIMEOUT
+        while True:
+            done, _ = await asyncio.wait({dial}, timeout=_WATCH_INTERVAL)
+            if done:
+                await dial  # re-raise whatever it decided
+                return
+            if await _bluez_link_ready(ble_device):
+                _LOGGER.debug(
+                    "Truma connect: BlueZ has the link resolved; abandoning the "
+                    "unanswered Connect and attaching to it"
+                )
+                dial.cancel()
+                # bleak skips its own Connect() when the device is already
+                # connected, so this attaches rather than dialling again.
+                await client.connect()
+                return
+            if time.monotonic() >= deadline:
+                dial.cancel()
+                raise TimeoutError(
+                    f"no link to {ble_device.address} within {_CONNECT_TIMEOUT:.0f}s"
+                )
+
     async def connect(
         self,
         ble_device: BLEDevice,
@@ -209,7 +271,7 @@ class TrumaBleClient:
             timeout=_CONNECT_TIMEOUT,
         )
         try:
-            await client.connect()
+            await self._connect_or_adopt(client, ble_device)
         except Exception as exc:  # noqa: BLE001 - classified below
             if not is_retryable_error(exc):
                 try:

@@ -24,6 +24,7 @@ from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "custom_components" / "truma_inetx"
 
+HANG = object()
 CLEANUPS: list[str] = []
 ATTEMPTS: list[str] = []
 
@@ -48,6 +49,8 @@ class _Client:
     async def connect(self) -> None:
         ATTEMPTS.append(self.address)
         outcome = _Client.script.pop(0)
+        if outcome is HANG:
+            await asyncio.Event().wait()  # the D-Bus reply that never comes
         if outcome is not None:
             raise outcome
         self.is_connected = True
@@ -219,10 +222,45 @@ def test_device_is_built_from_bluez_without_an_advert() -> None:
     assert asyncio.run(BLE.device_from_bluez("11:22:33:44:55:66")) is None
 
 
+def test_unanswered_connect_is_abandoned_once_bluez_has_the_link() -> None:
+    """bluetoothd never replies to a Connect it did not itself complete.
+
+    When the link arrives on the accept path, ``att_connect_cb()`` never runs,
+    so ``device->connect`` is never answered and the call hangs forever. Waiting
+    longer cannot help; the only way through is to stop waiting for the reply
+    and attach to the link BlueZ is already holding.
+    """
+    _fresh()
+    _Client.script = [HANG, None]
+    seen = 0
+
+    async def _ready(_device):
+        nonlocal seen
+        seen += 1
+        return seen > 1  # not up on the first look, up on the second
+
+    original = BLE._bluez_link_ready
+    setattr(BLE, "_bluez_link_ready", _ready)
+    try:
+        client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
+        device = _Device()
+        # _connect_or_adopt, not connect(): the subscribe that follows it needs
+        # a real GATT client and is not what this pins.
+        asyncio.run(client._connect_or_adopt(_Client(device), device))
+    finally:
+        setattr(BLE, "_bluez_link_ready", original)
+
+    # One hung dial, then one attach -- and no stale-connection cleanup, which
+    # would have torn down the very link we just adopted.
+    assert len(ATTEMPTS) == 2, ATTEMPTS
+    assert CLEANUPS == [], CLEANUPS
+
+
 if __name__ == "__main__":
     test_busy_is_classified()
     test_busy_waits_for_bluez_and_never_cleans_up()
     test_busy_that_never_lands_gives_up_and_cleans()
     test_real_failure_cleans_up_and_raises()
     test_device_is_built_from_bluez_without_an_advert()
+    test_unanswered_connect_is_abandoned_once_bluez_has_the_link()
     print("busy retry: all checks OK")
