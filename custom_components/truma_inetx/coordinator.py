@@ -251,7 +251,17 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                 # half-open link never lingers holding the proxy's connection
                 # slot (the ghost that otherwise needs a manual power-cycle).
                 await self._disconnect_client()
-            self._mark_disconnected()
+            if connected and self.poll_interval and not self._stop:
+                # Poll mode: the link going away is the plan, not a fault. The
+                # reading we just took is still the current state, so leave the
+                # entities alone -- flagging disconnected here made every value
+                # flash up and then go "unavailable" until the next poll.
+                LOGGER.debug(
+                    "Truma %s: poll finished, staying available until the next one",
+                    self.unique_id,
+                )
+            else:
+                self._mark_disconnected()
             if self._stop:
                 break
             # A session that actually connected resets the backoff (a healthy
@@ -392,6 +402,10 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         """
         await self._run_startup(client)
 
+        # In poll mode this stays True between polls: it means "we are in
+        # touch with the panel", not "a link is open this instant". The link
+        # coming and going every interval is an implementation detail and
+        # should not flap the connectivity sensor or blank every entity.
         self._state.connected = True
         self._state.assigned_addr = client.assigned_addr
         self.async_set_updated_data(self._state)
