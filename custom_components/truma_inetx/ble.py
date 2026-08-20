@@ -147,7 +147,7 @@ async def _bluez_holds_link(ble_device: BLEDevice) -> bool:
     already connected, so knowing this is what lets a retry adopt the link
     instead of starting a second connect that BlueZ then refuses.
     """
-    path = (ble_device.details or {}).get("path")
+    path = _bluez_path(ble_device)
     if not path:
         return False
     try:
@@ -158,6 +158,20 @@ async def _bluez_holds_link(ble_device: BLEDevice) -> bool:
     except Exception as exc:  # noqa: BLE001 - not worth failing a connect over
         _LOGGER.debug("Truma connect: cannot read BlueZ link state: %s", exc)
         return False
+
+
+def _bluez_path(ble_device: BLEDevice) -> str | None:
+    """The device's BlueZ object path, or None if it is not a BlueZ device.
+
+    A device reached through an ESPHome proxy carries the proxy backend's own
+    details, with no D-Bus object anywhere -- none of the BlueZ machinery in
+    this module applies to it.
+    """
+    details = ble_device.details
+    if not isinstance(details, dict):
+        return None
+    path = details.get("path")
+    return path if isinstance(path, str) else None
 
 
 async def _dbus_connect(ble_device: BLEDevice) -> None:
@@ -183,7 +197,7 @@ async def _device_call(ble_device: BLEDevice, member: str) -> None:
     from dbus_fast import Message, MessageType
     from bleak.backends.bluezdbus.manager import get_global_bluez_manager
 
-    path = (ble_device.details or {}).get("path")
+    path = _bluez_path(ble_device)
     if not path:
         raise BleakError(f"no BlueZ object path for {ble_device.address}")
 
@@ -233,7 +247,7 @@ async def _bluez_link_ready(ble_device: BLEDevice) -> bool:
     the services are resolved, so this is the condition for abandoning a connect
     call that is never going to return.
     """
-    path = (ble_device.details or {}).get("path")
+    path = _bluez_path(ble_device)
     if not path:
         return False
     try:
@@ -357,6 +371,19 @@ class TrumaBleClient:
         drops BlueZ's ``Connected`` too -- but the caller retries within
         seconds and takes the attach path, which leaves nothing behind.
         """
+        if _bluez_path(ble_device) is None:
+            # Not a BlueZ device -- an ESPHome proxy, say. There is no object
+            # path to watch, nothing to dial over D-Bus and no kernel connect
+            # list to be starved by, so every reason for the machinery below
+            # is absent. Let bleak do it.
+            _LOGGER.debug(
+                "Truma connect: %s is not a BlueZ device; connecting directly",
+                ble_device.address,
+            )
+            client = make_client()
+            await client.connect()
+            return client
+
         now = time.monotonic()
         deadline = now + _CONNECT_TIMEOUT
         # After a clear, BlueZ is on its way back and a dial would only undo

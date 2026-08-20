@@ -399,6 +399,40 @@ def test_a_dial_that_lands_is_not_mistaken_for_an_unanswerable_one() -> None:
     assert len(ATTEMPTS) == 1, ATTEMPTS  # ...and the link was used
 
 
+def test_a_proxy_device_bypasses_all_the_bluez_machinery() -> None:
+    """A panel reached over an ESPHome proxy has no D-Bus object anywhere.
+
+    Everything in the BlueZ path -- watching Connected/ServicesResolved, dialling
+    over the bus, clearing a dial with Disconnect -- needs an object path. A
+    proxy device has none, so it must go straight to bleak instead of waiting out
+    _BLUEZ_GRACE and then failing on a path that was never going to exist.
+    """
+    _fresh()
+
+    class _ProxyDevice:
+        address = "50:98:93:FF:B4:D1"
+        details = {"source": "esp32-proxy", "address_type": "public"}
+
+    async def _boom(_device):  # must never be consulted
+        raise AssertionError("BlueZ machinery must not run for a proxy device")
+
+    original = BLE._bluez_link_ready
+    original_dial = BLE._dbus_connect
+    setattr(BLE, "_bluez_link_ready", _boom)
+    setattr(BLE, "_dbus_connect", _boom)
+    try:
+        client = BLE.TrumaBleClient({"muid": "m", "uuid": "u", "username": "n"})
+        device = _ProxyDevice()
+        asyncio.run(client._connect_or_adopt(device, lambda: _Client(device)))
+    finally:
+        setattr(BLE, "_bluez_link_ready", original)
+        setattr(BLE, "_dbus_connect", original_dial)
+
+    assert DIALS == [], DIALS            # no D-Bus dial
+    assert len(ATTEMPTS) == 1, ATTEMPTS  # one plain bleak connect
+    assert CLEANUPS == [], CLEANUPS
+
+
 if __name__ == "__main__":
     test_busy_is_classified()
     test_busy_retries_and_never_cleans_up()
@@ -409,5 +443,6 @@ if __name__ == "__main__":
     test_a_cleared_dial_is_retryable()
     test_a_dial_that_lands_is_not_mistaken_for_an_unanswerable_one()
     test_no_dial_while_a_clear_is_still_settling()
+    test_a_proxy_device_bypasses_all_the_bluez_machinery()
     test_a_link_bluez_already_holds_is_attached_not_dialled()
     print("busy retry: all checks OK")
