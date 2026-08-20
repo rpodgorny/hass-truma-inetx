@@ -18,17 +18,14 @@ auto-confirmed with 0x0300.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
-import time
 from collections.abc import Callable
 
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
-from bleak.exc import BleakError
 from bleak_retry_connector import (
     BleakClientWithServiceCache,
-    close_stale_connections_by_address,
+    establish_connection,
 )
 
 from .truma.const import (
@@ -45,19 +42,6 @@ from .truma.protocol import parse_v3_frame
 
 _LOGGER = logging.getLogger(__name__)
 
-# ONE bleak connect() is up to three BlueZ dials, not one: BlueZ gives up on a
-# dial after ~21 s with "le-connection-abort-by-local", and bleak retries that
-# error internally (bluezdbus/client.py, "retry due to le-connection-abort-by-
-# local") rather than raising it. Measured on the van 2026-08-19: dial 13:14:38,
-# abort 13:14:59, bleak's retry landed 13:15:01 and GATT resolved -- and a 30 s
-# timeout tore it all down at 13:15:08, seven seconds after it had worked.
-# So this must clear several full BlueZ dials, not one. Measured again with the
-# timeout at 90 s: dial 13:48:07, BlueZ had the services resolved at 13:49:29,
-# and 90 s still cut it off at 13:49:37. Every cycle burns one guaranteed-dead
-# 20 s dial (the kernel patch puts the identity on air first -- see
-# DUCATO_STATE.md, "the first dial of every cycle is wasted"), so the budget has
-# to cover that plus the real one plus GATT discovery.
-_CONNECT_TIMEOUT = 180.0
 
 # BlueZ refuses a connect while one is already in flight for the same device --
 # its own background reconnect of a bonded device, or a leftover of ours. That
@@ -69,43 +53,14 @@ _CONNECT_TIMEOUT = 180.0
 # next one starts. Retrying faster than BlueZ can connect (~20 s here) just
 # collides with our own outstanding call and every attempt is refused with
 # "Operation already in progress" while the device sits there connected.
-# How long to let BlueZ produce the link by itself before dialling. Measured on
-# the van: it does, over and over -- "BlueZ produced the link first" at 15:35:45
-# and again at 15:51:19 -- so a dial is nearly always unnecessary, and an
-# unnecessary dial is what blinds the adapter. Treat dialling as a last resort
-# and let BlueZ do the work it is going to do anyway.
-_BLUEZ_GRACE = 120.0
 
 # ...and much longer than that once we have just cleared a dial. Clearing drops
 # BlueZ's Connected but leaves the kernel link, which bt-ghostbuster only takes
 # down at its 2-minute mark; BlueZ reconnects a second or two later. Dialling
 # inside that window is how the van oscillated at 15:36-15:38 -- dial, BlueZ
 # arrives, clear, dial again -- recreating the pending connect every time.
-# Clearing leaves a bearer BlueZ has disowned; bt-ghostbuster drops that at its
-# 2-minute mark and BlueZ reconnects a few seconds later. 150 s expired just
-# before that happened (van, 15:48:27 clear -> 15:50:57 dial -> 15:51:19 clear),
-# which is the oscillation this exists to stop.
-_POST_CLEAR_QUIET = 210.0
 
-# When the link appears while our dial is still outstanding, that dial is
-# usually the thing that produced it -- BlueZ takes ~21 s to complete one, and
-# the properties go true a moment before the D-Bus reply arrives. Give the reply
-# that moment before concluding the dial will never be answered. Measured cost
-# of getting this wrong: we Disconnect our own successful connection,
-# bt-ghostbuster then drops the bearer BlueZ disowned (HCI reason 0x16), and the
-# session times out having thrown away a working link (van, 17:03:54 dial ->
-# 17:04:16 link -> 17:04:18 cleared -> 17:07:38 timed out; four times in a row).
-_DIAL_SETTLE = 10.0
 
-# Long enough to cover the slowest honest recovery: after a dial is cleared,
-# BlueZ disowns the link but the kernel keeps it, and bt-ghostbuster only drops
-# that at its 2-minute mark -- BlueZ then reconnects within seconds. 150 s used
-# to end the session just short of it.
-_WATCH_SECONDS = 240.0
-_WATCH_INTERVAL = 2.0
-# One BlueZ dial is ~21 s, so retrying much faster than this only collects
-# instant refusals; much slower wastes the window.
-_BUSY_RETRY_INTERVAL = 20.0
 
 
 def _client_is_proxy(client: object) -> bool:
@@ -119,147 +74,14 @@ def _client_is_proxy(client: object) -> bool:
     backend = getattr(client, "_backend", client)
     return "esphome" in type(backend).__module__
 
+# establish_connection does the retrying now. Three attempts is plenty when a
+# connect takes ~4 s; it used to take 40+ s and needed a hand-rolled loop.
+_CONNECT_ATTEMPTS = 3
+
 _READY_TIMEOUT = 3.0
 _ACK_TIMEOUT = 3.0
 
 
-# BlueZ errors that do not mean "this device is unreachable". Measured on the
-# van: a Connect() that dials the peer's identity address first fails with a
-# plain org.bluez.Error.Failed after ~20 s -- and in the same second BlueZ's own
-# pending attempt lands, exports the GATT services and reports Connected: true.
-# The caller has been told "no" about a link that exists. Retrying a few seconds
-# later attaches to it; giving up leaves it owned by nobody, and a peripheral
-# that believes it has a central stops advertising, so nothing can find it again.
-_RETRYABLE = (
-    "already in progress",
-    "org.bluez.error.failed",
-    "org.bluez.error.inprogress",
-    "org.bluez.error.notready",
-)
-
-
-async def _bluez_holds_link(ble_device: BLEDevice) -> bool:
-    """Whether BlueZ itself has this device connected right now.
-
-    ``BleakClient.is_connected`` answers for *our* client, which is False even
-    while BlueZ holds a fully resolved link -- the state this panel spends most
-    of its time in. bleak skips its own ``Connect`` call when the device is
-    already connected, so knowing this is what lets a retry adopt the link
-    instead of starting a second connect that BlueZ then refuses.
-    """
-    path = _bluez_path(ble_device)
-    if not path:
-        return False
-    try:
-        from bleak.backends.bluezdbus.manager import get_global_bluez_manager
-
-        manager = await get_global_bluez_manager()
-        return bool(manager.is_connected(path))
-    except Exception as exc:  # noqa: BLE001 - not worth failing a connect over
-        _LOGGER.debug("Truma connect: cannot read BlueZ link state: %s", exc)
-        return False
-
-
-def _bluez_path(ble_device: BLEDevice) -> str | None:
-    """The device's BlueZ object path, or None if it is not a BlueZ device.
-
-    A device reached through an ESPHome proxy carries the proxy backend's own
-    details, with no D-Bus object anywhere -- none of the BlueZ machinery in
-    this module applies to it.
-    """
-    details = ble_device.details
-    if not isinstance(details, dict):
-        return None
-    path = details.get("path")
-    return path if isinstance(path, str) else None
-
-
-async def _dbus_connect(ble_device: BLEDevice) -> None:
-    """Ask BlueZ to connect, without a BleakClient behind the call.
-
-    A ``BleakClient.connect()`` that we walk away from is not inert: whenever it
-    eventually errors, times out or is cancelled, bleak runs its client cleanup,
-    and that cleanup disconnects -- on the same device path the *adopted* client
-    is using. Measured on the van 2026-08-19, twice, 130-185 ms apart each time:
-
-        14:50:46.761  the abandoned dial ended: [org.bluez.Error.Failed] Input/output error
-        14:50:46.890  BLE link closed cleanly
-
-    A bare D-Bus method call has no client behind it, so nothing runs a cleanup
-    on our behalf. That is not the same as being free to abandon it -- see
-    :func:`_clear_dial` for what an unanswered dial costs at the kernel level.
-    """
-    await _device_call(ble_device, "Connect")
-
-
-async def _device_call(ble_device: BLEDevice, member: str) -> None:
-    """Call one no-argument method on the device's BlueZ object."""
-    from dbus_fast import Message, MessageType
-    from bleak.backends.bluezdbus.manager import get_global_bluez_manager
-
-    path = _bluez_path(ble_device)
-    if not path:
-        raise BleakError(f"no BlueZ object path for {ble_device.address}")
-
-    manager = await get_global_bluez_manager()
-    bus = manager._bus  # noqa: SLF001 - the only handle on BlueZ's bus
-    if bus is None:
-        raise BleakError("BlueZ D-Bus connection is not up")
-
-    reply = await bus.call(
-        Message(
-            destination="org.bluez",
-            path=path,
-            interface="org.bluez.Device1",
-            member=member,
-        )
-    )
-    if reply is None:
-        raise BleakError(f"no reply from BlueZ to {member}")
-    if reply.message_type is MessageType.ERROR:
-        detail = reply.body[0] if reply.body else ""
-        raise BleakError(f"[{reply.error_name}] {detail}")
-
-
-async def _clear_dial(ble_device: BLEDevice, dial: asyncio.Task) -> None:
-    """Cancel an outstanding dial, at BlueZ's end as well as ours.
-
-    Cancelling the task alone achieves nothing: the D-Bus call is ours, but the
-    ``att_io`` socket it made bluetoothd open is not, and that socket is what
-    pins an ``hci_conn`` in ``BT_CONNECT`` and blinds the adapter.
-    ``Device1.Disconnect()`` is the only thing that closes it -- verified on the
-    van 2026-08-19 15:20, where it removed the stuck ``state 5`` entry, left the
-    established link alone, and advertising reports went from 3/min to 218/min.
-    """
-    try:
-        await _device_call(ble_device, "Disconnect")
-    except Exception as exc:  # noqa: BLE001 - best effort, we still cancel ours
-        _LOGGER.debug("Truma connect: clearing the dial failed: %s", exc)
-    dial.cancel()
-    with contextlib.suppress(asyncio.CancelledError, Exception):
-        await dial
-
-
-async def _bluez_link_ready(ble_device: BLEDevice) -> bool:
-    """Whether BlueZ has the link up AND the GATT database exported.
-
-    Stronger than :func:`_bluez_holds_link`: a client can only be attached once
-    the services are resolved, so this is the condition for abandoning a connect
-    call that is never going to return.
-    """
-    path = _bluez_path(ble_device)
-    if not path:
-        return False
-    try:
-        from bleak.backends.bluezdbus import defs
-        from bleak.backends.bluezdbus.manager import get_global_bluez_manager
-
-        manager = await get_global_bluez_manager()
-        props = manager._properties.get(path, {}).get(defs.DEVICE_INTERFACE, {})  # noqa: SLF001
-        return bool(props.get("Connected")) and bool(props.get("ServicesResolved"))
-    except Exception as exc:  # noqa: BLE001 - not worth failing a connect over
-        _LOGGER.debug("Truma connect: cannot read BlueZ link state: %s", exc)
-        return False
 
 
 async def device_from_bluez(address: str) -> BLEDevice | None:
@@ -293,29 +115,6 @@ async def device_from_bluez(address: str) -> BLEDevice | None:
     return None
 
 
-class ClearedDial(BleakError):
-    """Raised when BlueZ produced the link before our dial was answered.
-
-    Not a failure: the link exists. But our dial can no longer be answered and
-    holding it open blinds the adapter, so it is cleared and the session
-    restarted -- the retry then takes the attach path.
-    """
-
-
-def is_retryable_error(exc: BaseException) -> bool:
-    """True when the connect may yet have worked, or is worth another go."""
-    if isinstance(exc, ClearedDial):
-        # The link is up; we cleared our own dial to stop it blinding the
-        # adapter. Retrying attaches to what BlueZ already has.
-        return True
-    text = str(exc).lower()
-    if "authentication" in text:
-        # A bond problem. Retrying re-runs a failing pairing and, on this panel,
-        # burns one of its four bond slots each time.
-        return False
-    return any(marker in text for marker in _RETRYABLE)
-
-
 class TrumaBleClient:
     """Manage the BLE connection and transport FSM to a Truma iNet X panel."""
 
@@ -323,8 +122,6 @@ class TrumaBleClient:
         """Initialize with the app identity (muid/uuid/username)."""
         self._identity = identity
         self._client: BleakClientWithServiceCache | None = None
-        # when we last cleared an unanswered dial; -inf means "never"
-        self._cleared_at = float("-inf")
         self._loop: asyncio.AbstractEventLoop | None = None
         self._data_callbacks: list[Callable[[dict], None]] = []
         self._send_lock = asyncio.Lock()
@@ -341,176 +138,36 @@ class TrumaBleClient:
         """Whether the BLE link is up."""
         return self._client is not None and self._client.is_connected
 
-    async def _connect_or_adopt(
-        self,
-        ble_device: BLEDevice,
-        make_client: Callable[[], BleakClientWithServiceCache],
-    ) -> BleakClientWithServiceCache:
-        """Attach to BlueZ's link, and only dial if it does not produce one.
-
-        Two things make this awkward, both measured on the van 2026-08-19.
-
-        bluetoothd answers a ``Device1.Connect()`` from ``att_connect_cb()`` --
-        the completion of the dial *it* started. When the link instead arrives
-        on the accept path (its own background reconnect of a bonded device),
-        that callback never runs, ``device->connect`` is never replied to, and
-        the call hangs for good. No timeout can fix that.
-
-        And an unanswered dial is not harmless. It holds bluetoothd's
-        ``att_io`` open, which keeps an ``hci_conn`` in ``BT_CONNECT`` forever,
-        which keeps the device in the kernel's connect list, which makes passive
-        scanning accept-list filtered -- so the adapter goes **blind to every
-        other device**. HA's scanner watchdog then power-cycles the controller
-        and takes our link down with it. Renogy and the thermometers saw zero
-        advertising reports for as long as the panel was connected.
-
-        So: prefer BlueZ's own link and never dial when there is one; give it a
-        grace period to produce one before dialling at all; and if a dial is
-        outstanding when the link appears, clear it with ``Disconnect()`` rather
-        than walking away from it. Clearing costs a session -- ``Disconnect()``
-        drops BlueZ's ``Connected`` too -- but the caller retries within
-        seconds and takes the attach path, which leaves nothing behind.
-        """
-        if _bluez_path(ble_device) is None:
-            # Not a BlueZ device -- an ESPHome proxy, say. There is no object
-            # path to watch, nothing to dial over D-Bus and no kernel connect
-            # list to be starved by, so every reason for the machinery below
-            # is absent. Let bleak do it.
-            _LOGGER.debug(
-                "Truma connect: %s is not a BlueZ device; connecting directly",
-                ble_device.address,
-            )
-            client = make_client()
-            await client.connect()
-            return client
-
-        now = time.monotonic()
-        deadline = now + _CONNECT_TIMEOUT
-        # After a clear, BlueZ is on its way back and a dial would only undo
-        # the clear; wait it out instead.
-        dial_at = max(now + _BLUEZ_GRACE, self._cleared_at + _POST_CLEAR_QUIET)
-        dial: asyncio.Task | None = None
-
-        while True:
-            if await _bluez_link_ready(ble_device):
-                if dial is not None:
-                    # Most likely our own dial just landed and the reply is a
-                    # heartbeat behind the properties. Wait for it before
-                    # deciding it will never come.
-                    done, _ = await asyncio.wait({dial}, timeout=_DIAL_SETTLE)
-                    if done:
-                        await dial  # re-raise whatever it decided
-                        dial = None
-                    else:
-                        # Still nothing: the link came up on the accept path and
-                        # this call cannot be answered. Leaving it pending is
-                        # what blinds the adapter.
-                        _LOGGER.debug(
-                            "Truma connect: the link is up but our dial is "
-                            "unanswerable; clearing it and retrying"
-                        )
-                        await _clear_dial(ble_device, dial)
-                        self._cleared_at = time.monotonic()
-                        raise ClearedDial(
-                            f"cleared an unanswered dial to {ble_device.address}"
-                        )
-                _LOGGER.debug("Truma connect: BlueZ has the link; attaching")
-                attached = make_client()
-                await attached.connect()
-                return attached
-
-            if dial is not None and dial.done():
-                await dial  # re-raise whatever it decided
-                # A dial that was answered has produced a link but nothing we
-                # can talk GATT over; the next turn attaches to it.
-                dial = None
-                continue
-
-            if dial is None and time.monotonic() >= dial_at:
-                _LOGGER.debug("Truma connect: no link from BlueZ; dialling")
-                dial = asyncio.create_task(_dbus_connect(ble_device))
-
-            if time.monotonic() >= deadline:
-                if dial is not None:
-                    await _clear_dial(ble_device, dial)
-                raise TimeoutError(
-                    f"no link to {ble_device.address} within {_CONNECT_TIMEOUT:.0f}s"
-                )
-
-            await asyncio.sleep(_WATCH_INTERVAL)
-
     async def connect(
         self,
         ble_device: BLEDevice,
         disconnected_callback: Callable[[BleakClientWithServiceCache], None]
         | None = None,
     ) -> None:
-        """Establish the connection (via HA's stack) and subscribe."""
+        """Establish the connection (via HA's stack) and subscribe.
+
+        Plain ``establish_connection``, which is transport-agnostic: it works
+        the same over BlueZ and over an ESPHome proxy, so nothing here needs to
+        know which one it got.
+
+        This used to be ~250 lines of BlueZ-specific machinery -- dialling over
+        the system bus, watching Connected/ServicesResolved, clearing dials with
+        Device1.Disconnect. All of it existed to work around one kernel bug: an
+        RPA dialled as its identity address, which could never be answered and
+        burned 20 s per attempt. Kernel v8 fixed that at the source; connects
+        went from 40+ s and two dials to about 4 s, and the workarounds had
+        nothing left to work around. See DUCATO_STATE.md, 2026-08-20.
+        """
         self._loop = asyncio.get_running_loop()
-        # Connect patiently, and do it ourselves: bleak_retry_connector hard-
-        # codes a 20 s connect timeout that cannot be raised through
-        # establish_connection(). Where the host has to guess the panel's
-        # current address (no controller address resolution), the first dial
-        # goes to a stale one and fails at ~20 s -- the kernel then retries on
-        # its own and the link comes up a few seconds later. Give up before
-        # that and the link is established with NO owner: the panel believes it
-        # has a central and stops advertising, so nothing can reach it again.
-        # Waiting is what keeps us the owner. See DUCATO_STATE.md.
-        def _make_client() -> BleakClientWithServiceCache:
-            return BleakClientWithServiceCache(
-                ble_device,
-                disconnected_callback=disconnected_callback,
-                timeout=_CONNECT_TIMEOUT,
-            )
-
-        try:
-            client = await self._connect_or_adopt(ble_device, _make_client)
-        except Exception as exc:  # noqa: BLE001 - classified below
-            if not is_retryable_error(exc):
-                try:
-                    await close_stale_connections_by_address(ble_device.address)
-                except Exception as err:  # noqa: BLE001 - best effort
-                    _LOGGER.debug("Truma stale-connection cleanup: %s", err)
-                raise
-            # Ask again in a moment. A dial made while BlueZ is genuinely busy
-            # is refused instantly and costs nothing, and _connect_or_adopt
-            # attaches without dialling at all once BlueZ has the link -- so
-            # retrying is how both endings are reached. Purely *watching* was
-            # measured to be worse: when the refusal came from a wedged ATT
-            # bearer, bt-ghostbuster cleared it a minute later and nothing was
-            # there to dial, so the whole 150 s window was spent idle
-            # (van 2026-08-19 14:17:59 -> 14:20:29, one session lost for nothing).
-            _LOGGER.debug(
-                "Truma connect: BlueZ said %s; retrying until it lets us in",
-                exc,
-            )
-            deadline = time.monotonic() + _WATCH_SECONDS
-            while True:
-                if time.monotonic() >= deadline:
-                    try:
-                        await close_stale_connections_by_address(ble_device.address)
-                    except Exception as err:  # noqa: BLE001 - best effort
-                        _LOGGER.debug("Truma stale-connection cleanup: %s", err)
-                    raise
-                await asyncio.sleep(_BUSY_RETRY_INTERVAL)
-                try:
-                    client = await self._connect_or_adopt(
-                        ble_device, _make_client
-                    )
-                except Exception as retry_exc:  # noqa: BLE001 - classified here
-                    if not is_retryable_error(retry_exc):
-                        try:
-                            await close_stale_connections_by_address(
-                                ble_device.address
-                            )
-                        except Exception as err:  # noqa: BLE001 - best effort
-                            _LOGGER.debug("Truma stale-connection cleanup: %s", err)
-                        raise
-                    continue
-                break
-        self._client = client
+        self._client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            ble_device.name or ble_device.address,
+            disconnected_callback=disconnected_callback,
+            max_attempts=_CONNECT_ATTEMPTS,
+            use_services_cache=True,
+        )
         await self._subscribe()
-
     async def adopt(self, client: BleakClientWithServiceCache) -> None:
         """Take over an already-connected client (handed off from pairing).
 
