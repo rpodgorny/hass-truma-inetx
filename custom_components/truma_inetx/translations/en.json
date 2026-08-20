@@ -82,5 +82,18 @@
         "name": "Diesel burner"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Truma iNet X options",
+        "data": {
+          "poll_interval_seconds": "Poll interval (seconds, 0 = stay connected)"
+        },
+        "data_description": {
+          "poll_interval_seconds": "0 keeps the connection open, so changes show up instantly. A non-zero value connects, takes a reading and disconnects again -- slower, but it frees the adapter's connection slot between readings, which matters when other Bluetooth devices share the same adapter."
+        }
+      }
+    }
   }
 }

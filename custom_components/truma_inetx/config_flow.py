@@ -19,12 +19,15 @@ from homeassistant.components.bluetooth import (
 )
 from homeassistant.config_entries import (
     SOURCE_RECONFIGURE,
+    ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
+    OptionsFlow,
 )
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
 from .const import DOMAIN, LOCAL_NAME_PREFIX, LOGGER
+from .coordinator import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
 from .pairing import ensure_bonded
 
 # How long the pairing step busy-loops Pair() while the panel is in add-device
@@ -32,8 +35,38 @@ from .pairing import ensure_bonded
 _PAIR_TIMEOUT = 60.0
 
 
+class TrumaOptionsFlow(OptionsFlow):
+    """One knob: how often to talk to the panel, or stay connected."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for the poll interval."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        current = self.config_entry.options.get(
+            CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_POLL_INTERVAL, default=current): vol.All(
+                        vol.Coerce(int), vol.Range(min=0, max=86400)
+                    )
+                }
+            ),
+        )
+
+
 class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Truma iNet X."""
+
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Expose the poll-interval option."""
+        return TrumaOptionsFlow()
 
     VERSION = 1
 

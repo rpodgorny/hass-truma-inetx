@@ -66,6 +66,26 @@ _RECONNECT_DELAY_MAX = 45  # seconds
 # noticed): drop it and reconnect rather than sit "connected" forever with
 # stale data. This is what recovers the session without a manual power-cycle.
 _DATA_STALL_TIMEOUT = 90  # seconds
+
+# Poll mode: 0 keeps the link open (the default and what most people want --
+# state arrives the instant the panel changes it). A non-zero interval connects,
+# takes a reading and hangs up again, which matters when the adapter's
+# connection slots are contended: a held link occupies one permanently, and on a
+# single dongle shared with other devices that can starve them out entirely
+# (van 2026-08-20: the DC-DC charger lost its slot and went unavailable).
+#
+# Seconds, not minutes: a minute is already coarse next to a poll that takes
+# only a few seconds, and the interesting settings are near the bottom of the
+# range. The delay is applied *after* a poll finishes, so a short interval
+# cannot make polls overlap -- it just leaves less idle time between them.
+CONF_POLL_INTERVAL = "poll_interval_seconds"
+DEFAULT_POLL_INTERVAL = 0
+
+# In poll mode, stop waiting once the panel has been quiet this long -- its
+# startup burst arrives in one go, so silence means the reading is complete.
+_POLL_QUIET = 4  # seconds
+# ...but never hold the link longer than this, however chatty the panel is.
+_POLL_MAX_DWELL = 40  # seconds
 _STORAGE_VERSION = 1
 
 
@@ -238,7 +258,11 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             # link that just dropped should return fast); a failed attempt grows
             # it after the wait, so a persistently unreachable panel backs off
             # the shared adapter instead of hammering it.
-            if connected:
+            if connected and self.poll_interval:
+                # A completed poll is not a failure to back off from; the next
+                # one is simply due later.
+                delay = self.poll_interval
+            elif connected:
                 delay = _RECONNECT_DELAY_BASE
                 # A real connection means our address set is healthy; forget any
                 # past failures so a later reconnect starts from a clean slate.
@@ -353,6 +377,13 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
 
         return await self._finish_startup(client)
 
+    @property
+    def poll_interval(self) -> int:
+        """Seconds between polls, or 0 to hold the connection open."""
+        return int(
+            self.config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
+        )
+
     async def _finish_startup(self, client: TrumaBleClient) -> bool:
         """Run startup on a connected client, then hold until the link drops.
 
@@ -366,9 +397,33 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         self.async_set_updated_data(self._state)
         LOGGER.info("Truma %s connected and subscribed", self.unique_id)
 
-        # Hold the connection, watching for a data stall. Startup just delivered
-        # frames, so seed the watchdog from now.
+        # Startup just delivered frames, so seed the watchdog from now.
         self._last_frame = self.hass.loop.time()
+
+        if self.poll_interval:
+            # Poll mode: the reading is in hand, so let the link go and free the
+            # connection slot. Wait only until the panel stops talking.
+            started = self.hass.loop.time()
+            while not self._stop and client.connected:
+                await asyncio.sleep(1)
+                quiet = self.hass.loop.time() - self._last_frame
+                if quiet >= _POLL_QUIET:
+                    break
+                if self.hass.loop.time() - started >= _POLL_MAX_DWELL:
+                    LOGGER.debug(
+                        "Truma %s: still talking after %ss; ending the poll anyway",
+                        self.unique_id,
+                        _POLL_MAX_DWELL,
+                    )
+                    break
+            LOGGER.debug(
+                "Truma %s: poll complete, disconnecting for %ss",
+                self.unique_id,
+                self.poll_interval,
+            )
+            return True
+
+        # Connected mode: hold the link, watching for a data stall.
         while not self._stop and client.connected:
             await asyncio.sleep(1)
             if self.hass.loop.time() - self._last_frame > _DATA_STALL_TIMEOUT:

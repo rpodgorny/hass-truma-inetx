@@ -384,6 +384,29 @@ def test_waits_for_a_fresh_advert() -> None:
     assert asyncio.run(BT.async_wait_until_heard(None, PANEL, timeout=0.1)) is False
 
 
+# --- poll mode -------------------------------------------------------------
+# Not about proxies, but this file already stands the coordinator up and the
+# option is one property plus one branch; duplicating the harness to test two
+# lines would be worse than the small mismatch in scope.
+
+def _poll_interval_of(options: dict) -> int:
+    """Call the property without building a whole coordinator."""
+    prop = COORD.TrumaCoordinator.poll_interval.fget
+    entry = type("E", (), {"options": options})()
+    return prop(type("C", (), {"config_entry": entry})())
+
+
+def test_poll_interval_defaults_to_staying_connected() -> None:
+    """No option set must mean the old behaviour, not a surprise poll."""
+    assert _poll_interval_of({}) == 0
+
+
+def test_poll_interval_is_read_from_options() -> None:
+    assert _poll_interval_of({"poll_interval_seconds": 60}) == 60
+    # HA hands numbers back as strings from some form backends
+    assert _poll_interval_of({"poll_interval_seconds": "90"}) == 90
+
+
 if __name__ == "__main__":
     test_panel_detection()
     test_debounced_warning()
@@ -396,4 +419,6 @@ if __name__ == "__main__":
     test_avoided_address_is_skipped()
     test_advert_uuid_matches()
     test_waits_for_a_fresh_advert()
+    test_poll_interval_defaults_to_staying_connected()
+    test_poll_interval_is_read_from_options()
     print("no-proxy repair issue: all checks OK")
