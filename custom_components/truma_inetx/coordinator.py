@@ -86,6 +86,9 @@ DEFAULT_POLL_INTERVAL = 0
 _POLL_QUIET = 4  # seconds
 # ...but never hold the link longer than this, however chatty the panel is.
 _POLL_MAX_DWELL = 40  # seconds
+# A write in poll mode has to wait for a whole connect plus startup handshake
+# (~20 s measured), so allow generously more than that before giving up.
+_WRITE_CONNECT_TIMEOUT = 75  # seconds
 _STORAGE_VERSION = 1
 
 
@@ -142,6 +145,11 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         # Set on stop to interrupt the reconnect wait immediately (so unload is
         # not blocked for up to the full backoff delay).
         self._stop_event = asyncio.Event()
+        # Poll mode: a write cannot wait for the next scheduled poll, so it
+        # nudges the loop awake and holds the link open until it has been sent.
+        self._wake_event = asyncio.Event()
+        self._connected_event = asyncio.Event()
+        self._writes_pending = 0
 
     async def _async_update_data(self) -> TrumaState:
         """Return the current shared state (updated by BLE notifications)."""
@@ -251,6 +259,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                 # half-open link never lingers holding the proxy's connection
                 # slot (the ghost that otherwise needs a manual power-cycle).
                 await self._disconnect_client()
+                self._connected_event.clear()
             if connected and self.poll_interval and not self._stop:
                 # Poll mode: the link going away is the plan, not a fault. The
                 # reading we just took is still the current state, so leave the
@@ -283,11 +292,26 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                 delay = min(delay * 2, _RECONNECT_DELAY_MAX)
 
     async def _wait_before_retry(self, delay: float) -> None:
-        """Sleep ``delay`` seconds, but wake immediately on stop."""
+        """Sleep ``delay`` seconds; wake early on stop, or for a pending write.
+
+        ``_writes_pending`` is the source of truth and ``_wake_event`` only the
+        nudge, so a write that lands in the gap between sessions cannot be
+        missed by clearing the event at the wrong moment.
+        """
+        if self._writes_pending:
+            return
+        self._wake_event.clear()
+        if self._writes_pending:  # set while we were clearing
+            return
+        stop = asyncio.ensure_future(self._stop_event.wait())
+        wake = asyncio.ensure_future(self._wake_event.wait())
         try:
-            await asyncio.wait_for(self._stop_event.wait(), timeout=delay)
-        except TimeoutError:
-            pass
+            await asyncio.wait(
+                {stop, wake}, timeout=delay, return_when=asyncio.FIRST_COMPLETED
+            )
+        finally:
+            stop.cancel()
+            wake.cancel()
 
     async def _connect_and_run(self) -> bool:
         """Connect, run startup, then hold until the link drops.
@@ -410,6 +434,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         self._state.assigned_addr = client.assigned_addr
         self.async_set_updated_data(self._state)
         LOGGER.info("Truma %s connected and subscribed", self.unique_id)
+        self._connected_event.set()
 
         # Startup just delivered frames, so seed the watchdog from now.
         self._last_frame = self.hass.loop.time()
@@ -420,6 +445,10 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             started = self.hass.loop.time()
             while not self._stop and client.connected:
                 await asyncio.sleep(1)
+                if self._writes_pending:
+                    # Someone is mid-write; do not hang up under them.
+                    started = self.hass.loop.time()
+                    continue
                 quiet = self.hass.loop.time() - self._last_frame
                 if quiet >= _POLL_QUIET:
                     break
@@ -527,6 +556,36 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             self._state.connected = False
             self.async_set_updated_data(self._state)
 
+    async def _client_for_write(self) -> TrumaBleClient:
+        """A connected client to write through, waking a poll if need be.
+
+        In connected mode there is always a live link. In poll mode there
+        usually is not: hanging up between readings is the point. Rather than
+        refuse the command -- which is what a button press got, "Truma panel is
+        not connected" -- ask the loop for a session now and wait for it. The
+        poll will not hang up while the write is outstanding.
+        """
+        client = self._client
+        if client is not None and client.connected:
+            return client
+        if not self.poll_interval:
+            raise HomeAssistantError("Truma panel is not connected")
+
+        LOGGER.debug("Truma %s: write requested; waking a poll", self.unique_id)
+        self._wake_event.set()
+        try:
+            await asyncio.wait_for(
+                self._connected_event.wait(), timeout=_WRITE_CONNECT_TIMEOUT
+            )
+        except TimeoutError:
+            raise HomeAssistantError(
+                "Truma panel did not answer in time for the command"
+            ) from None
+        client = self._client
+        if client is None or not client.connected:
+            raise HomeAssistantError("Truma panel is not connected")
+        return client
+
     async def async_write(self, topic: str, param: str, value: int) -> None:
         """Validate and send a parameter write to the panel/heater.
 
@@ -537,14 +596,21 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         if not ok:
             raise HomeAssistantError(f"Invalid Truma command: {msg}")
 
-        client = self._client
-        if client is None or not client.connected:
-            raise HomeAssistantError("Truma panel is not connected")
+        # Held across the whole write, not just the wait for a link: in poll
+        # mode the loop checks this before hanging up, and releasing it early
+        # would let it disconnect between getting the client and sending.
+        self._writes_pending += 1
+        try:
+            client = await self._client_for_write()
 
-        dest = TrumaState.get_command_dest(topic)
-        frame = build_write_frame(client.assigned_addr, dest, topic, param, value)
-        LOGGER.debug("Truma write %s.%s = %s -> 0x%04X", topic, param, value, dest)
-        if not await client.send(frame):
-            raise HomeAssistantError(
-                f"Truma did not acknowledge write {topic}.{param}={value}"
+            dest = TrumaState.get_command_dest(topic)
+            frame = build_write_frame(client.assigned_addr, dest, topic, param, value)
+            LOGGER.debug(
+                "Truma write %s.%s = %s -> 0x%04X", topic, param, value, dest
             )
+            if not await client.send(frame):
+                raise HomeAssistantError(
+                    f"Truma did not acknowledge write {topic}.{param}={value}"
+                )
+        finally:
+            self._writes_pending -= 1
