@@ -40,6 +40,13 @@ async def _async_register_card(hass: HomeAssistant) -> None:
     service worker caches these assets for weeks and a browser hard-refresh
     does not bypass it, so without a changing URL an updated card would not
     reach anyone.
+
+    add_extra_js_url puts the card in a race with the frontend bundle: both are
+    plain import() calls side by side in index.html, and the bundle is what
+    installs the scoped-custom-element-registry polyfill. A card served this way
+    must therefore defer its customElements.define() until the frontend exists,
+    or it registers in the registry Lovelace has stopped looking at. The card
+    file does that and explains it at length -- do not drop that wrapper.
     """
     if hass.data.get(_CARD_REGISTERED):
         return

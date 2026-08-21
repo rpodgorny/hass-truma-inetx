@@ -434,12 +434,36 @@ class TrumaClimateDialCard extends HTMLElement {
   }
 }
 
-// Home Assistant swaps window.customElements for the scoped-custom-element-
-// registry polyfill while it boots. This file is fetched in parallel with the
-// frontend bundle, so on a slow link it can win the race and define the card in
-// the *native* registry -- which the polyfill then knows nothing about, and
-// Lovelace renders "Custom element doesn't exist". Waiting for an element the
-// frontend itself defines puts us in whichever registry Lovelace will query.
+// Register only once the frontend is up. Do not "simplify" this to a plain
+// customElements.define() at module scope -- that is the bug it fixes.
+//
+// index.html.template starts the app bundle and every extra_module_url as two
+// separate, back-to-back import() calls, and the app's first import is
+// @webcomponents/scoped-custom-element-registry, which REPLACES
+// window.customElements. So this file races the frontend: win the race and the
+// define lands in the native registry, the polyfill installs a moment later
+// knowing nothing about the tag, and Lovelace renders
+// "Custom element doesn't exist: truma-climate-dial-card".
+//
+// The giveaway, if it ever comes back -- in a failing page, all three at once:
+//   document.createElement("truma-climate-dial-card")  -> upgraded, has shadowRoot
+//   customElements.get("truma-climate-dial-card")      -> false
+//   window.customCards                                 -> contains our entry
+// i.e. the module ran to completion and the element exists, just in the other
+// registry.
+//
+// It looks intermittent because a warm HTTP cache flips the race (bundle off
+// disk, polyfill already installed). Cold on a slow link this file -- 18 KB,
+// one round trip -- reliably beats megabytes of bundle. Note that throttling
+// does NOT reproduce it: throttling slows both sides equally and yields the
+// safe order. The bug needs asymmetry, not slowness.
+//
+// Waiting on "home-assistant" is order-independent by construction: it cannot
+// be defined before the polyfill is installed. Same fix as oref_alert,
+// syno-download-ha, airgradient-public and browser_mod. Cards loaded as
+// Lovelace *resources* (button-card, mushroom) can define eagerly and do --
+// the frontend loads those itself, after boot. Only the add_extra_js_url path
+// has this problem.
 customElements.whenDefined("home-assistant").then(() => {
   if (!customElements.get("truma-climate-dial-card")) {
     customElements.define("truma-climate-dial-card", TrumaClimateDialCard);
