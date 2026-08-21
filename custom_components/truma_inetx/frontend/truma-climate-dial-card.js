@@ -434,7 +434,17 @@ class TrumaClimateDialCard extends HTMLElement {
   }
 }
 
-customElements.define("truma-climate-dial-card", TrumaClimateDialCard);
+// Home Assistant swaps window.customElements for the scoped-custom-element-
+// registry polyfill while it boots. This file is fetched in parallel with the
+// frontend bundle, so on a slow link it can win the race and define the card in
+// the *native* registry -- which the polyfill then knows nothing about, and
+// Lovelace renders "Custom element doesn't exist". Waiting for an element the
+// frontend itself defines puts us in whichever registry Lovelace will query.
+customElements.whenDefined("home-assistant").then(() => {
+  if (!customElements.get("truma-climate-dial-card")) {
+    customElements.define("truma-climate-dial-card", TrumaClimateDialCard);
+  }
+});
 
 window.customCards = window.customCards || [];
 window.customCards.push({
