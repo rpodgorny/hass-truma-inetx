@@ -72,7 +72,12 @@ async def ensure_bonded(
     # of seconds of it advertising in add-device mode; probe briefly for that.
     probe_deadline = time.monotonic() + min(8.0, timeout / 2)
     while time.monotonic() < probe_deadline:
-        if async_resolve_proxy_device(hass, name) is not None:
+        # remote_only: this resolver falls back to a local adapter when no proxy
+        # can hear the panel, so without it every ESP-less setup took the proxy
+        # path -- which registers no BlueZ agent, so pairing died on
+        # "No agent available" / AuthenticationFailed and the local path below
+        # was unreachable.
+        if async_resolve_proxy_device(hass, name, remote_only=True) is not None:
             client = await _ensure_bonded_proxy(hass, name, timeout=timeout)
             return client is not None, client
         await asyncio.sleep(1.0)

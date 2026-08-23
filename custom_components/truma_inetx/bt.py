@@ -71,7 +71,11 @@ def async_panel_advertising(hass: HomeAssistant, name: str) -> bool:
 
 
 def async_resolve_proxy_device(
-    hass: HomeAssistant, name: str, *, avoid: Iterable[str] = ()
+    hass: HomeAssistant,
+    name: str,
+    *,
+    avoid: Iterable[str] = (),
+    remote_only: bool = False,
 ) -> BLEDevice | None:
     """Find the panel's current connectable device via a remote/proxy scanner.
 
@@ -84,6 +88,13 @@ def async_resolve_proxy_device(
     hear the panel — on a stock host that link will pair but never reconnect,
     which is what the ``no_proxy_route`` repair issue is about. Returns ``None``
     when nothing can reach it right now (the caller should retry).
+
+    Because of that local fallback, a non-``None`` result does **not** mean a
+    proxy can reach the panel. Pass ``remote_only=True`` to ask that narrower
+    question -- callers that must know which transport they got, rather than
+    just wanting the best route, have to. ``pairing.ensure_bonded()`` does: the
+    proxy and local BlueZ bonding paths are not interchangeable, because only
+    the local one registers a BlueZ pairing agent.
 
     The "resolved identity" pseudo-address (whose last bytes match the name
     suffix, e.g. ``...FFB4D1``) is ranked last — via a proxy it usually dials a
@@ -154,7 +165,7 @@ def async_resolve_proxy_device(
                 return sd.ble_device
             if local is None:
                 local = (info, sd)
-    if local is not None:
+    if local is not None and not remote_only:
         info, sd = local
         LOGGER.debug(
             "Truma %s -> %s via LOCAL adapter (rssi=%s); no proxy route available",
