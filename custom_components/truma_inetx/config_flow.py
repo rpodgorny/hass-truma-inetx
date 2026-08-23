@@ -26,6 +26,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
+from .bt import async_resolve_proxy_device
 from .const import DOMAIN, LOCAL_NAME_PREFIX, LOGGER
 from .coordinator import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
 from .pairing import ensure_bonded
@@ -222,9 +223,23 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         """BlueZ adapter object path of the connectable route to the panel.
 
         Scopes pairing to the adapter HA will actually connect through. Returns
-        None for proxy-backed devices (no local BlueZ adapter), in which case
-        pairing falls back to any adapter.
+        None for proxy-backed devices (no local BlueZ adapter).
+
+        Resolve the panel the way every other connection does -- by name, over
+        whichever RPA it is currently advertising -- rather than by its identity
+        address. The panel is almost never connectable *at* its identity
+        address, so looking that up returned None, and an unscoped bond search
+        then matched a stale bond on a different (even HA-disabled) adapter and
+        reported "already bonded" without the panel ever being involved.
         """
+        if self._name is None:
+            return None
+        device = async_resolve_proxy_device(self.hass, self._name)
+        details = getattr(device, "details", None)
+        if isinstance(details, dict):
+            path = details.get("path")
+            if isinstance(path, str) and path.startswith("/org/bluez/"):
+                return path.rsplit("/", 1)[0]
         if self._address is None:
             return None
         device = async_ble_device_from_address(

@@ -258,6 +258,27 @@ def _find_device(
     return None
 
 
+def _already_bonded(
+    objects: dict, *, path: str | None, adapter_path: str | None
+) -> bool:
+    """Whether an existing bond may be trusted as "this panel, this adapter".
+
+    Requires knowing which adapter the bond must be on. Without that scope,
+    ``_find_device`` matches a bond on ANY adapter BlueZ knows -- including one
+    whose Home Assistant config entry is disabled but which is still powered and
+    still holds the old bond. That made pairing report success in milliseconds
+    while the panel sat in add-device mode having seen nothing (observed on the
+    van, 2026-08-23, with the USB dongle disabled and its Truma bond intact).
+
+    Re-pairing an already-bonded panel is cheap and visible to the user;
+    falsely reporting success is neither. So when the adapter is unknown, say
+    no and let the caller actually pair.
+    """
+    if not adapter_path or not path:
+        return False
+    return _is_paired(objects, path)
+
+
 def _is_paired(objects: dict, path: str) -> bool:
     """Whether the device at ``path`` reports ``Paired``."""
     dev = objects.get(path, {}).get("org.bluez.Device1", {})
@@ -297,9 +318,16 @@ async def _ensure_bonded_bluez(
         path = _find_device(
             objects, name=name, address=address, adapter_path=adapter_path
         )
-        if path and _is_paired(objects, path):
-            LOGGER.debug("Truma %s already bonded", name)
+        if _already_bonded(objects, path=path, adapter_path=adapter_path):
+            LOGGER.debug("Truma %s already bonded on %s", name, adapter_path)
             return True
+        if path and not adapter_path:
+            LOGGER.debug(
+                "Truma %s: no adapter scope, pairing %s rather than trusting "
+                "an existing bond",
+                name,
+                path,
+            )
 
         # Register our auto-accept agent as the default for the pairing window.
         bus.export(_AGENT_PATH, agent)

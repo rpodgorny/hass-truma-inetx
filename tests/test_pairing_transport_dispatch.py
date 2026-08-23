@@ -27,6 +27,15 @@ What it pins:
    there is no proxy route,
 4. and still takes the proxy path when there is one.
 
+Then the failure that fix uncovered: with the local path finally reached, pairing
+reported success in 18 ms and the panel never saw it. The bond search was
+unscoped, so it matched the USB dongle's surviving bond -- HA's entry for that
+adapter was disabled, but the adapter was still powered and still bonded. So:
+
+5. an existing bond is not trusted when the pairing adapter is unknown,
+6. it is trusted when found on the adapter being paired,
+7. and scoping to an adapter without the bond finds nothing.
+
 Run: ``python3 tests/test_pairing_transport_dispatch.py``
 """
 
@@ -187,6 +196,64 @@ def test_local_only_uses_the_bluez_path_that_registers_an_agent() -> None:
 
 def test_proxy_present_still_uses_the_proxy_path() -> None:
     assert _dispatch(remote=True) == "proxy"
+
+
+# --- the stale-bond false success -----------------------------------------
+#
+# Observed on the van 2026-08-23: pairing reported success in 18 ms while the
+# panel sat in add-device mode seeing nothing. The USB dongle's HA config entry
+# was disabled, but the adapter stayed powered and still held the Truma bond, so
+# the unscoped device search matched it and _is_paired() said yes.
+
+HCI0 = "/org/bluez/hci0"
+HCI1 = "/org/bluez/hci1"
+
+
+class _V:
+    """dbus_fast Variant stand-in."""
+
+    def __init__(self, value):
+        self.value = value
+
+
+def _objects() -> dict:
+    """BlueZ objects: the panel bonded on hci0, absent from hci1."""
+    return {
+        f"{HCI0}/dev_50_98_93_FF_B4_D1": {
+            "org.bluez.Device1": {
+                "Address": _V("50:98:93:FF:B4:D1"),
+                "Name": _V(PANEL),
+                "Paired": _V(True),
+            }
+        }
+    }
+
+
+def test_stale_bond_on_another_adapter_is_not_accepted() -> None:
+    objs = _objects()
+    path = PAIRING._find_device(objs, name=PANEL, address="50:98:93:FF:B4:D1")
+    # Unscoped, the search still finds the dongle's bond ...
+    assert path == f"{HCI0}/dev_50_98_93_FF_B4_D1"
+    assert PAIRING._is_paired(objs, path) is True
+    # ... but without an adapter scope it must not count as bonded.
+    assert PAIRING._already_bonded(objs, path=path, adapter_path=None) is False
+
+
+def test_bond_on_the_pairing_adapter_is_accepted() -> None:
+    objs = _objects()
+    path = PAIRING._find_device(
+        objs, name=PANEL, address="50:98:93:FF:B4:D1", adapter_path=HCI0
+    )
+    assert PAIRING._already_bonded(objs, path=path, adapter_path=HCI0) is True
+
+
+def test_scoping_to_the_other_adapter_finds_no_bond() -> None:
+    objs = _objects()
+    path = PAIRING._find_device(
+        objs, name=PANEL, address="50:98:93:FF:B4:D1", adapter_path=HCI1
+    )
+    assert path is None
+    assert PAIRING._already_bonded(objs, path=path, adapter_path=HCI1) is False
 
 
 if __name__ == "__main__":
