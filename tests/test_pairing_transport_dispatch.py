@@ -91,6 +91,9 @@ class _ScannerDevice:
         self.ble_device = f"{'proxy' if remote else 'local'}:{address}"
 
 
+# Whatever owned sys.modules['habluetooth'] before this file loaded, if anything.
+_HABLUETOOTH_BEFORE: object | None = None
+
 ADVERTS: list[_Info] = []
 SCANNERS: dict[str, list[_ScannerDevice]] = {}
 
@@ -123,6 +126,8 @@ def _load():
     )
     # Without this, is_remote_scanner() hits ImportError and calls every scanner
     # local -- which would make the proxy cases below pass for the wrong reason.
+    global _HABLUETOOTH_BEFORE
+    _HABLUETOOTH_BEFORE = sys.modules.get("habluetooth")
     _mod("habluetooth", BaseHaRemoteScanner=_RemoteScanner)
 
     _mod("truma_pkg", __path__=[str(SRC)])
@@ -146,6 +151,48 @@ def _load():
 
 
 BT, PAIRING = _load()
+
+# bt.is_remote_scanner() resolves habluetooth at CALL time, not import time, so
+# whichever test module registered the stub last decides whose _RemoteScanner
+# class isinstance() is checked against. Leaving ours in sys.modules made
+# test_no_proxy_issue.py's proxy device look local and fail. Take ours back out
+# after loading, and put it in only while our own tests run.
+_HABLUETOOTH_STUB = sys.modules["habluetooth"]
+_restore_before = _HABLUETOOTH_BEFORE
+if _restore_before is None:
+    del sys.modules["habluetooth"]
+else:
+    sys.modules["habluetooth"] = _restore_before
+
+
+def _install_stub() -> object | None:
+    """Point habluetooth at our stub; return whatever was there before."""
+    previous = sys.modules.get("habluetooth")
+    sys.modules["habluetooth"] = _HABLUETOOTH_STUB
+    return previous
+
+
+def _restore_stub(previous: object | None) -> None:
+    if previous is None:
+        sys.modules.pop("habluetooth", None)
+    else:
+        sys.modules["habluetooth"] = previous
+
+
+try:  # pytest is not needed for the standalone `python3 tests/...` run
+    import pytest
+except ImportError:  # pragma: no cover
+    pass
+else:
+
+    @pytest.fixture(autouse=True)
+    def _own_habluetooth_stub():
+        """Scope this file's stub to this file's tests."""
+        previous = _install_stub()
+        try:
+            yield
+        finally:
+            _restore_stub(previous)
 
 
 def _only(*, remote: bool) -> None:
@@ -305,6 +352,7 @@ def test_live_path_without_hass_is_none() -> None:
 
 
 if __name__ == "__main__":
+    _install_stub()  # no pytest fixtures on this path
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
             fn()
