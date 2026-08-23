@@ -83,7 +83,7 @@ async def ensure_bonded(
         await asyncio.sleep(1.0)
     LOGGER.debug("Truma %s: no Bluetooth proxy route; using local BlueZ pairing", name)
     bonded = await _ensure_bonded_bluez(
-        name, address, adapter_path=adapter_path, timeout=timeout
+        name, address, adapter_path=adapter_path, timeout=timeout, hass=hass
     )
     return bonded, None
 
@@ -286,12 +286,42 @@ def _is_paired(objects: dict, path: str) -> bool:
     return bool(paired and paired.value)
 
 
+def _live_device_path(
+    hass: HomeAssistant | None, name: str, adapter_path: str | None
+) -> str | None:
+    """BlueZ object path of the panel's *current* advertised address.
+
+    ``_find_device`` matches on the identity address or the local name, and in
+    add-device mode the panel offers neither: it advertises a rotating RPA with
+    no name, so BlueZ knows it as e.g. ``dev_49_3E_CD_8E_2F_8B``. Scoped to the
+    pairing adapter, that search finds nothing and the loop below never calls
+    ``Pair()`` at all (observed on the van, 2026-08-23: agent registered, sixty
+    seconds of silence, timeout).
+
+    Ask the resolver instead, every iteration, so a rotation mid-pairing moves us
+    to the new address rather than stranding us on a dead one.
+    """
+    if hass is None:
+        return None
+    device = async_resolve_proxy_device(hass, name)
+    details = getattr(device, "details", None)
+    if not isinstance(details, dict):
+        return None
+    path = details.get("path")
+    if not isinstance(path, str) or not path.startswith("/org/bluez/"):
+        return None
+    if adapter_path and not path.startswith(f"{adapter_path}/"):
+        return None
+    return path
+
+
 async def _ensure_bonded_bluez(
     name: str,
     address: str,
     *,
     adapter_path: str | None = None,
     timeout: float = 60.0,
+    hass: HomeAssistant | None = None,
 ) -> bool:
     """Bond the Truma panel over local BlueZ (D-Bus). Return ``True`` if bonded.
 
@@ -342,7 +372,7 @@ async def _ensure_bonded_bluez(
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             objects = await object_manager.call_get_managed_objects()
-            path = _find_device(
+            path = _live_device_path(hass, name, adapter_path) or _find_device(
                 objects, name=name, address=address, adapter_path=adapter_path
             )
             if path and _is_paired(objects, path):
@@ -350,6 +380,8 @@ async def _ensure_bonded_bluez(
                 return True
             if path:
                 await _try_pair(bus, path)
+            else:
+                LOGGER.debug("Truma %s: no device object to pair yet", name)
             await asyncio.sleep(_POLL_INTERVAL)
 
         LOGGER.warning("Truma %s: pairing timed out after %ss", name, timeout)

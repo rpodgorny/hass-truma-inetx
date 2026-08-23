@@ -178,7 +178,7 @@ def _dispatch(*, remote: bool) -> str:
         chosen.append("proxy")
         return None
 
-    async def _bluez(_name, _address, *, adapter_path=None, timeout=60.0):
+    async def _bluez(_name, _address, *, adapter_path=None, timeout=60.0, hass=None):
         chosen.append("bluez")
         return True
 
@@ -254,6 +254,54 @@ def test_scoping_to_the_other_adapter_finds_no_bond() -> None:
     )
     assert path is None
     assert PAIRING._already_bonded(objs, path=path, adapter_path=HCI1) is False
+
+
+# --- pairing the RPA, not the identity address ----------------------------
+#
+# Observed on the van 2026-08-23 after the scoping fix: agent registered, then
+# 60 s of silence and a timeout, with no Device1.Pair call ever reaching
+# bluetoothd. Scoped to hci1, _find_device() looked for the identity address or
+# the local name; in add-device mode the panel advertises a rotating RPA and no
+# name, so nothing matched and the loop never had a path to pair.
+
+
+class _BleDevice:
+    def __init__(self, path: str) -> None:
+        self.details = {"path": path}
+
+
+def _with_resolved(path: str | None):
+    """Run _live_device_path with the resolver pinned, then put it back.
+
+    Restoring matters: ensure_bonded() calls the same resolver, so a leaked stub
+    silently sends the dispatch tests down the proxy branch.
+    """
+    original = PAIRING.async_resolve_proxy_device
+    PAIRING.async_resolve_proxy_device = lambda *a, **k: (
+        _BleDevice(path) if path else None
+    )
+    try:
+        return PAIRING._live_device_path(object(), PANEL, HCI1)
+    finally:
+        PAIRING.async_resolve_proxy_device = original
+
+
+def test_live_path_finds_the_rpa_under_the_pairing_adapter() -> None:
+    dev_path = f"{HCI1}/dev_49_3E_CD_8E_2F_8B"
+    assert _with_resolved(dev_path) == dev_path
+
+
+def test_live_path_rejects_a_device_on_another_adapter() -> None:
+    # A route via the disabled dongle must not be paired on hci1.
+    assert _with_resolved(f"{HCI0}/dev_49_3E_CD_8E_2F_8B") is None
+
+
+def test_live_path_when_nothing_resolves() -> None:
+    assert _with_resolved(None) is None
+
+
+def test_live_path_without_hass_is_none() -> None:
+    assert PAIRING._live_device_path(None, PANEL, HCI1) is None
 
 
 if __name__ == "__main__":
