@@ -529,6 +529,18 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         the seed missed. Each address is asked once: a device that answers
         must not be asked again, or every startup pays for the list twice.
         """
+        # Open with one broadcast. Only the heater and the panel answer it,
+        # and the directed rounds below cover both -- but it costs a single
+        # frame, and an answer from anything else lands its address in
+        # seen_devices, which is how a device outside every seeded class gets
+        # asked directly in the second round.
+        await client.send(
+            build_v3_frame(
+                DEV_BROADCAST, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
+            )
+        )
+        await asyncio.sleep(_PARAM_DISC_GAP)
+
         asked: set[int] = set()
         for _ in range(2):
             targets = (DEVICE_SEED | self._state.seen_devices) - asked

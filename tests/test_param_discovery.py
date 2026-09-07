@@ -22,7 +22,8 @@ What it pins:
 2. a device that speaks but is in no seed is asked anyway -- addresses are
    renumbered on re-pairing, so the seed can never be authoritative,
 3. no address is asked twice, or a bus that answers doubles every startup,
-4. the broker and broadcast pseudo-addresses are never treated as devices,
+4. neither pseudo-address is treated as a device -- the single broadcast that
+   is sent is an opener, and it pays for itself by feeding the directed round,
 5. discovery is reached from ``_run_startup``, and asking a dozen devices does
    not cost a dozen multi-second waits.
 
@@ -257,7 +258,7 @@ def test_no_device_is_asked_twice() -> None:
 
 
 def test_pseudo_addresses_are_not_devices() -> None:
-    """The broker and the broadcast address must never become targets."""
+    """Neither pseudo-address is a device, whatever arrives from it."""
     coord = _Coord()
     for src in (TC.DEV_BROADCAST, TC.DEV_MSG_BROKER):
         coord._on_frame({"src": src, "dest": APP_ADDR})
@@ -268,12 +269,26 @@ def test_pseudo_addresses_are_not_devices() -> None:
     client = _Client(coord)
     _run(coord._discover_params(client))
     dests = _discovery_dests(client)
-    assert TC.DEV_BROADCAST not in dests
-    assert TC.DEV_MSG_BROKER not in dests
+
+    assert TC.DEV_MSG_BROKER not in dests, "the message broker was asked"
+    # The broadcast is a deliberate opener, not a device: exactly one frame,
+    # and it must not be re-sent per round the way a target would be.
+    assert dests.count(TC.DEV_BROADCAST) == 1
+    assert dests[0] == TC.DEV_BROADCAST, "the broadcast is no longer the opener"
 
     # A real device on the same path still gets recorded.
     coord._on_frame({"src": SCHAUDT_BLOCK, "dest": APP_ADDR})
     assert coord._state.seen_devices == {SCHAUDT_BLOCK}
+
+
+def test_broadcast_answer_reaches_an_unseeded_device() -> None:
+    """The opener earns its frame only if its answers feed the next round."""
+    coord = _Coord()
+    client = _Client(coord, answers={TC.DEV_BROADCAST: UNSEEDED})
+    _run(coord._discover_params(client))
+    assert UNSEEDED in _discovery_dests(client), (
+        "a device that answered the broadcast was never asked directly"
+    )
 
 
 def test_startup_runs_discovery_without_paying_per_device() -> None:

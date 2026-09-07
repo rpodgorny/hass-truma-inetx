@@ -38,7 +38,9 @@ DEVICE_SEED = frozenset(
     # Power and climate: 0x0405 was a Schaudt electrical block, 0x0406 a
     # Dometic FreshJet roof air conditioner.
     | {0x0400 | i for i in range(1, 9)}
-    # Level sensors: 0x0603/0x0604 were the left and right gas bottles.
+    # 0x0603/0x0604 were the left and right gas bottles, 0x0601 the panel's
+    # own BLE device management -- so this class is not only level sensors,
+    # which is the reason instances are swept rather than guessed at.
     | {0x0600 | i for i in range(1, 9)}
 )
 
