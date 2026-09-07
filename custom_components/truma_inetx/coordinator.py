@@ -102,6 +102,11 @@ _PARAM_DISC_GAP = 0.15  # seconds
 # because the addresses they carry are what the next round is built from.
 _PARAM_DISC_SETTLE = 3  # seconds
 
+# How long to wait for the panel to answer registration with an address.
+# Measured on the van: a healthy panel answers in about a second, so this is
+# already generous -- it exists to cover a busy panel, not a dead link.
+_REGISTER_TIMEOUT = 20  # seconds
+
 
 class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
     """Hold Truma state and run the live BLE session."""
@@ -490,13 +495,44 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         return True
 
     async def _run_startup(self, client: TrumaBleClient) -> None:
-        """Register, subscribe to all topics, send identity, discover params."""
+        """Register, subscribe to all topics, send identity, discover params.
+
+        Raises if the panel never assigns us an address. That is the one point
+        in startup where the link proves it actually carries traffic, and
+        everything after it depends on the answer.
+        """
         # 1. Register and wait for an assigned address.
         await client.send(build_register_frame(client.assigned_addr))
-        for _ in range(20):
+        for _ in range(_REGISTER_TIMEOUT):
             await asyncio.sleep(1)
             if client.assigned_addr != DEV_APP_DEFAULT:
                 break
+        else:
+            # Every frame from here on would be sent from the default app
+            # address, which the message broker does not route, so carrying on
+            # can only produce a session that looks connected and delivers
+            # nothing. Measured on the van (2026-09-07 22:09): the link came
+            # up, notifications subscribed, and BlueZ then lost the ATT
+            # channel -- every write failed with "Service Discovery has not
+            # been performed yet", the panel never answered registration, and
+            # startup ran to completion anyway. Entities sat blank and
+            # "connected" for the full 90 s the stall watchdog takes, and 18
+            # parameter-discovery frames were spent on a dead link.
+            #
+            # Failing here instead hands the link straight back, which also
+            # frees the adapter's connection slot for the next attempt.
+            #
+            # Warn rather than leave it to the session-ended debug line: a
+            # link that connects and then carries nothing is the failure
+            # people report as "it just stopped working", and it is invisible
+            # without this.
+            message = (
+                f"Truma {self.unique_id}: the panel assigned us no address "
+                f"within {_REGISTER_TIMEOUT}s; the link is up but carries "
+                "nothing, so the session is being dropped and retried"
+            )
+            LOGGER.warning(message)
+            raise HomeAssistantError(message)
 
         # 2. Subscribe to all topic batches.
         for batch in TOPIC_BATCHES:

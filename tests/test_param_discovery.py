@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline check that parameter discovery reaches every device on the bus.
+"""Offline checks for the startup sequence: registration, then discovery.
 
 No hardware, no Home Assistant install: the HA/bleak imports are stubbed so the
 real ``coordinator._run_startup``, ``coordinator._discover_params`` and
@@ -26,7 +26,9 @@ What it pins:
    single broadcast that is sent is an opener, and it pays for itself by
    feeding the directed round,
 5. discovery is reached from ``_run_startup``, and asking a dozen devices does
-   not cost a dozen multi-second waits.
+   not cost a dozen multi-second waits,
+6. and a link that connects but never answers registration is dropped at once
+   rather than carrying on into a startup that cannot work.
 
 Run: ``python3 tests/test_param_discovery.py`` (needs ``cbor2``).
 """
@@ -338,6 +340,45 @@ def test_startup_runs_discovery_without_paying_per_device() -> None:
         f"discovery waited {discovery_wait}s for {per_device} devices; "
         "the wait is scaling with the bus again"
     )
+
+
+def test_a_link_that_carries_nothing_is_dropped_at_once() -> None:
+    """Measured on the van, 2026-09-07 22:09.
+
+    The link came up, notifications subscribed, and BlueZ then lost the ATT
+    channel: every write failed with "Service Discovery has not been performed
+    yet". The panel never answered registration, and startup carried on
+    regardless -- subscribing, sending identity and spending the whole
+    parameter-discovery seed on a dead link, while the entities sat blank and
+    "connected" until the 90 s stall watchdog finally noticed.
+    """
+    coord = _Coord()
+    client = _Client(coord)
+    # The panel answers registration by assigning an address. Leaving it at
+    # the default is exactly what a link carrying nothing looks like.
+    client.assigned_addr = TC.DEV_APP_DEFAULT
+
+    raised = None
+    try:
+        _run(coord._run_startup(client))
+    except Exception as exc:  # noqa: BLE001 - the type is HA's, stubbed here
+        raised = exc
+    assert raised is not None, "startup completed on a link that carries nothing"
+    assert "no address" in str(raised)
+
+    # It must give up before spending the seed: those frames are the cost this
+    # exists to avoid, and the link needs handing back so the adapter's
+    # connection slot is freed for the next attempt.
+    assert _discovery_dests(client) == [], "discovery ran on a dead link"
+
+
+def test_a_registered_link_still_runs_startup() -> None:
+    """The gate must not fire on a panel that answered."""
+    coord = _Coord()
+    client = _Client(coord)
+    assert client.assigned_addr != TC.DEV_APP_DEFAULT
+    _run(coord._run_startup(client))
+    assert set(TC.DEVICE_SEED) <= set(_discovery_dests(client))
 
 
 def _main() -> None:
