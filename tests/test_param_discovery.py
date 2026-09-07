@@ -22,8 +22,9 @@ What it pins:
 2. a device that speaks but is in no seed is asked anyway -- addresses are
    renumbered on re-pairing, so the seed can never be authoritative,
 3. no address is asked twice, or a bus that answers doubles every startup,
-4. neither pseudo-address is treated as a device -- the single broadcast that
-   is sent is an opener, and it pays for itself by feeding the directed round,
+4. neither pseudo-address is treated as a device, and neither are we -- the
+   single broadcast that is sent is an opener, and it pays for itself by
+   feeding the directed round,
 5. discovery is reached from ``_run_startup``, and asking a dozen devices does
    not cost a dozen multi-second waits.
 
@@ -282,6 +283,27 @@ def test_pseudo_addresses_are_not_devices() -> None:
     # A real device on the same path still gets recorded.
     coord._on_frame({"src": SCHAUDT_BLOCK, "dest": APP_ADDR})
     assert coord._state.seen_devices == {SCHAUDT_BLOCK}
+
+
+def test_we_never_ask_ourselves() -> None:
+    """Measured on the van: the panel puts our own address in src.
+
+    It is answered like any other address, so nothing complains -- the only
+    symptom is one wasted frame per connect and a device in the log that is
+    not a device.
+    """
+    coord = _Coord()
+    coord._state.assigned_addr = APP_ADDR
+    # A frame arriving from our own assigned address, exactly as measured.
+    coord._on_frame({"src": APP_ADDR, "dest": APP_ADDR})
+    assert APP_ADDR not in coord._state.seen_devices, "recorded ourselves"
+
+    # ...and even if one slipped into the set before registration completed,
+    # it must not survive as far as a discovery frame.
+    coord._state.seen_devices.add(APP_ADDR)
+    client = _Client(coord)
+    _run(coord._discover_params(client))
+    assert APP_ADDR not in _discovery_dests(client), "asked ourselves"
 
 
 def test_broadcast_answer_reaches_an_unseeded_device() -> None:

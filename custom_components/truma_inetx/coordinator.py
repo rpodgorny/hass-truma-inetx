@@ -545,7 +545,15 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         acked: set[int] = set()
         started = self.hass.loop.time()
         for _ in range(2):
-            targets = (DEVICE_SEED | self._state.seen_devices) - asked
+            # Measured on the van: the panel sends frames whose src is the
+            # address it assigned *us*, so without the last term we ask
+            # ourselves for parameters. It is answered like any other address
+            # and costs only a frame, which is why it would never be noticed.
+            targets = (
+                (DEVICE_SEED | self._state.seen_devices)
+                - asked
+                - {client.assigned_addr}
+            )
             if not targets:
                 break
             for dev_addr in sorted(targets):
@@ -564,13 +572,17 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         # costs a timeout instead, and the seed becomes a minute of dead time
         # per connect. Report both numbers so that is measurable from a log
         # rather than guessed at.
+        # Name the addresses that are not in the seed separately: those are the
+        # ones this installation taught us, and seeing them is how a bus the
+        # seed does not describe gets reported without asking for a capture.
         LOGGER.debug(
             "Truma %s: parameter discovery asked %d device(s), %d acknowledged, "
-            "in %.1fs (no ack: %s)",
+            "in %.1fs (learned here: %s) (no ack: %s)",
             self.unique_id,
             len(asked),
             len(acked),
             self.hass.loop.time() - started,
+            ", ".join(f"0x{a:04X}" for a in sorted(asked - DEVICE_SEED)) or "none",
             ", ".join(f"0x{a:04X}" for a in sorted(asked - acked)) or "none",
         )
 
@@ -582,9 +594,14 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
 
         # ...and proves its sender exists at that address, which is how
         # parameter discovery reaches devices no seed could have predicted.
-        # The two pseudo-addresses are not devices and must not be asked.
+        # Neither pseudo-address is a device, and nor are we: the panel puts
+        # our own assigned address in src on some frames.
         src = parsed.get("src")
-        if isinstance(src, int) and src not in (DEV_BROADCAST, DEV_MSG_BROKER):
+        if isinstance(src, int) and src not in (
+            DEV_BROADCAST,
+            DEV_MSG_BROKER,
+            self._state.assigned_addr,
+        ):
             self._state.seen_devices.add(src)
 
         control = parsed.get("control_raw")
