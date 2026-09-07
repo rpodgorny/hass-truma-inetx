@@ -14,6 +14,34 @@ DEV_PANEL = 0x0101
 DEV_HEATER = 0x0201
 DEV_APP_DEFAULT = 0x0500
 
+# Devices to ask for current values at startup even when they have not spoken
+# to us yet.
+#
+# A device address is class << 8 | instance, and only the panel and the heater
+# answer a broadcast parameter discovery. Everything else on the bus -- tank
+# level sensors, gas-bottle sensors, the electrical block, a roof air
+# conditioner -- publishes only when its value *changes*, so after a restart it
+# stays silent and its parameters stay empty until someone moves a float or
+# flips a switch. The panel meanwhile displays those values happily, which is
+# what makes the integration look broken (reported on a Combi 6 E + iNet X Pro
+# with two LevelControl sensors, issue #7: the electrical block went from 4 to
+# 31 parameters -- FreshWater.Level, GreyWater.Level, LinePower.Plugged, the
+# battery voltages -- once it was addressed directly).
+#
+# Instances are swept rather than listed because they are not stable: a device
+# is renumbered when it is re-paired, so the exact addresses seen in one
+# installation are a starting point, not a map. Addressing one that is not
+# there costs a single frame and no reply -- the panel acknowledges the
+# transport, the message broker drops it.
+DEVICE_SEED = frozenset(
+    {DEV_PANEL, DEV_HEATER}
+    # Power and climate: 0x0405 was a Schaudt electrical block, 0x0406 a
+    # Dometic FreshJet roof air conditioner.
+    | {0x0400 | i for i in range(1, 9)}
+    # Level sensors: 0x0603/0x0604 were the left and right gas bottles.
+    | {0x0600 | i for i in range(1, 9)}
+)
+
 # Control types (V3 header byte 6)
 CTRL_REGISTRATION = 0x01
 CTRL_DISCOVERY = 0x02

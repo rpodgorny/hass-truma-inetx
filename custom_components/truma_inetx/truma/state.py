@@ -132,6 +132,13 @@ class TrumaState:
     # Raw storage for debugging
     raw_params: dict = field(default_factory=dict)
 
+    # Every source address that has sent us a frame this session. Parameter
+    # discovery is addressed device by device (see DEVICE_SEED), and a device
+    # that has spoken once is proof its address exists -- which matters because
+    # addresses are renumbered on re-pairing, so no fixed list can be right for
+    # every installation.
+    seen_devices: set = field(default_factory=set)
+
     def update(self, topic: str, param: str, value: Any) -> None:
         """Update state from a decoded BLE notification."""
         self.last_update = time.time()

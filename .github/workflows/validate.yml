@@ -35,3 +35,7 @@ jobs:
           python-version: "3.12"
       - run: python3 tests/test_pairing_rotation.py
       - run: python3 tests/test_no_proxy_issue.py
+      # The only test that needs the protocol library: it builds real frames
+      # and parses them back rather than trusting a stub to be faithful.
+      - run: pip install cbor2==5.6.5
+      - run: python3 tests/test_param_discovery.py

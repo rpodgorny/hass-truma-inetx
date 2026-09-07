@@ -34,8 +34,9 @@ from .const import (
 from .truma.const import (
     CTRL_MBP,
     DEV_APP_DEFAULT,
-    DEV_HEATER,
-    DEV_PANEL,
+    DEV_BROADCAST,
+    DEV_MSG_BROKER,
+    DEVICE_SEED,
     MBP_PARAM_DISC,
     TOPIC_BATCHES,
 )
@@ -90,6 +91,16 @@ _POLL_MAX_DWELL = 40  # seconds
 # (~20 s measured), so allow generously more than that before giving up.
 _WRITE_CONNECT_TIMEOUT = 75  # seconds
 _STORAGE_VERSION = 1
+
+# Parameter discovery is sent to each bus device separately (see DEVICE_SEED),
+# so the number of frames is a dozen or two rather than two. Nothing is waited
+# for in between -- the replies come back as ordinary notifications and are
+# handled by _on_frame whenever they land -- so the gap only exists to avoid
+# filling the transport queue faster than the panel drains it.
+_PARAM_DISC_GAP = 0.15  # seconds
+# ...but do wait once after each round, long enough for the replies to arrive,
+# because the addresses they carry are what the next round is built from.
+_PARAM_DISC_SETTLE = 3  # seconds
 
 
 class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
@@ -498,20 +509,54 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             await client.send(frame)
             await asyncio.sleep(0.5)
 
-        # 4. Request current values from heater and panel.
-        for dev_addr in (DEV_HEATER, DEV_PANEL):
-            await client.send(
-                build_v3_frame(
-                    dev_addr, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
+        # 4. Request current values from every device on the bus.
+        await self._discover_params(client)
+
+    async def _discover_params(self, client: TrumaBleClient) -> None:
+        """Ask each bus device for its current parameter values, one by one.
+
+        Asking only the heater and the panel (what this used to do) leaves
+        every other device empty until it happens to push a change of its own,
+        so tank levels, gas-bottle levels and the mains/battery readings are
+        blank after every restart while the panel shows them on its screen.
+        A broadcast does not help: nothing but the heater and the panel answers
+        one.
+
+        The address list is the seed unioned with whoever has already spoken
+        to us, because the seed cannot be authoritative -- devices are
+        renumbered when they are re-paired. The replies to the first round
+        carry their senders' addresses, so a second round picks up anything
+        the seed missed. Each address is asked once: a device that answers
+        must not be asked again, or every startup pays for the list twice.
+        """
+        asked: set[int] = set()
+        for _ in range(2):
+            targets = (DEVICE_SEED | self._state.seen_devices) - asked
+            if not targets:
+                break
+            for dev_addr in sorted(targets):
+                await client.send(
+                    build_v3_frame(
+                        dev_addr, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
+                    )
                 )
-            )
-            await asyncio.sleep(3)
+                asked.add(dev_addr)
+                await asyncio.sleep(_PARAM_DISC_GAP)
+            await asyncio.sleep(_PARAM_DISC_SETTLE)
 
     @callback
     def _on_frame(self, parsed: dict) -> None:
         """Handle a decoded V3 frame and update state."""
         # Any frame proves the link is alive; feed the stall watchdog.
         self._last_frame = self.hass.loop.time()
+
+        # ...and proves its sender exists at that address, which is how
+        # parameter discovery reaches devices no seed could have predicted.
+        # The two pseudo-addresses are not devices and must not be asked.
+        src = parsed.get("src")
+        if isinstance(src, int) and src not in (DEV_BROADCAST, DEV_MSG_BROKER):
+            self._state.seen_devices.add(src)
+
         control = parsed.get("control_raw")
         sub_type = parsed.get("sub_type")
         cbor = parsed.get("cbor")
