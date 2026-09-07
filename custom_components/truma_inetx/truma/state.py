@@ -60,6 +60,7 @@ PARAM_VALIDATION = {
     "WaterHeating.Active": [0, 1],
     "EnergySrc.DieselLevel": [0, 1],
     "EnergySrc.ElectricLevel": [0, 1, 2],
+    "Switches.FreshWaterPump": [0, 1],
 }
 
 _TOPIC_PARAM_MAP = {
@@ -82,6 +83,9 @@ _TOPIC_PARAM_MAP = {
     ("ErrorReset", "ErrCode"): "error_codes",
     ("Panel", "UserInactiveSince"): "panel_inactive_since",
     ("Temperature", "Internal"): "internal_temp",
+    ("Switches", "FreshWaterPump"): "water_pump",
+    ("FreshWater", "Level"): "fresh_water_level",
+    ("GreyWater", "Level"): "grey_water_level",
 }
 
 
@@ -124,6 +128,15 @@ class TrumaState:
     # Internal temp
     internal_temp: Optional[int] = None
 
+    # Water. The tanks and the pump belong to whichever device owns them --
+    # an electrical block on the vehicles seen so far, not the heater and not
+    # the panel. Levels are a percentage the sensor reports in quarter steps
+    # (0/25/50/75/100), so there is nothing to scale and nothing below the
+    # decimal point.
+    water_pump: Optional[int] = None
+    fresh_water_level: Optional[int] = None
+    grey_water_level: Optional[int] = None
+
     # Metadata
     last_update: float = 0.0
     connected: bool = False
@@ -144,10 +157,29 @@ class TrumaState:
     # from the next connect onwards.
     seen_devices: set = field(default_factory=set)
 
-    def update(self, topic: str, param: str, value: Any) -> None:
-        """Update state from a decoded BLE notification."""
+    # Topic name -> the device address that last reported it. A write has to
+    # reach the device that owns the topic, and for anything outside the fixed
+    # table below there is no way to know that in advance: the fresh-water
+    # pump sits on an electrical block whose address differs per vehicle and
+    # is renumbered when it is re-paired. Whoever reports a topic is the
+    # authority on where a write to it should go.
+    topic_source: dict = field(default_factory=dict)
+
+    def update(
+        self, topic: str, param: str, value: Any, src: Optional[int] = None
+    ) -> None:
+        """Update state from a decoded BLE notification.
+
+        ``src`` is the V3 header's source address, i.e. the device that sent
+        this value. It is remembered per topic so a write can be addressed
+        back to it; see :meth:`get_command_dest`.
+        """
         self.last_update = time.time()
         self.raw_params[f"{topic}.{param}"] = value
+        # 0 is the message broker, not a device, so it must not be learned as
+        # a write destination.
+        if isinstance(src, int) and src:
+            self.topic_source[topic] = src
 
         # Convert value to int if possible
         v = int(value) if isinstance(value, (int, float)) else value
@@ -283,7 +315,19 @@ class TrumaState:
                 return False, f"{key}: value {value} not in range {rule[0]}-{rule[1]}"
         return True, "ok"
 
-    @staticmethod
-    def get_command_dest(topic: str) -> int:
-        """Get destination device address for a command topic."""
-        return COMMAND_DEST.get(topic, 0x0101)  # default to panel
+    def get_command_dest(self, topic: str) -> int:
+        """Get destination device address for a command topic.
+
+        The fixed table wins wherever it has an entry. Those destinations are
+        measured, and a topic the panel relays on our behalf has to keep going
+        to the panel however the value reaches us.
+
+        Everything else is addressed to whoever last reported it. That is the
+        only workable answer for the water topics, whose owning device has no
+        fixed address, and it degrades to the panel when nothing has reported
+        the topic yet -- which is the behaviour this replaced.
+        """
+        dest = COMMAND_DEST.get(topic)
+        if dest is not None:
+            return dest
+        return self.topic_source.get(topic, 0x0101)  # default to panel

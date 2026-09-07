@@ -13,6 +13,17 @@
     "switch": {
       "diesel": {
         "default": "mdi:fuel"
+      },
+      "water_pump": {
+        "default": "mdi:water-pump"
+      }
+    },
+    "sensor": {
+      "fresh_water_level": {
+        "default": "mdi:water"
+      },
+      "grey_water_level": {
+        "default": "mdi:water-opacity"
       }
     }
   }

@@ -622,7 +622,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         if control == 0x03 and sub_type == 0x00:
             tn, pn, v = cbor.get("tn"), cbor.get("pn"), cbor.get("v")
             if tn and pn and v is not None:
-                self._state.update(tn, pn, v)
+                self._state.update(tn, pn, v, parsed.get("src"))
                 self.async_set_updated_data(self._state)
             return
 
@@ -637,7 +637,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                         continue
                     pn, v = param.get("pn"), param.get("v")
                     if tn and pn and v is not None:
-                        self._state.update(tn, pn, v)
+                        self._state.update(tn, pn, v, parsed.get("src"))
             self.async_set_updated_data(self._state)
             return
 
@@ -695,7 +695,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         try:
             client = await self._client_for_write()
 
-            dest = TrumaState.get_command_dest(topic)
+            dest = self._state.get_command_dest(topic)
             frame = build_write_frame(client.assigned_addr, dest, topic, param, value)
             LOGGER.debug(
                 "Truma write %s.%s = %s -> 0x%04X", topic, param, value, dest

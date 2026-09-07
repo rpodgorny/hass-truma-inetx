@@ -11,12 +11,16 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfElectricPotential, UnitOfTemperature
+from homeassistant.const import (
+    PERCENTAGE,
+    UnitOfElectricPotential,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import TrumaConfigEntry
-from .entity import TrumaEntity
+from .entity import TrumaEntity, async_add_when_reported
 from .truma.state import TrumaState
 
 # Entities are coordinator-driven and have no update() method, so Home
@@ -74,6 +78,37 @@ SENSORS: tuple[TrumaSensorDescription, ...] = (
     ),
 )
 
+# Sensors for hardware most vehicles do not have. Each is created only once
+# its parameter has actually been reported -- see async_add_when_reported.
+# There is no water device class in Home Assistant, so these carry an icon
+# instead (icons.json) and no device class at all.
+OPTIONAL_SENSORS: tuple[TrumaSensorDescription, ...] = (
+    TrumaSensorDescription(
+        key="fresh_water_level",
+        translation_key="fresh_water_level",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        # The tank sensor reports quarter steps (0/25/50/75/100 measured on a
+        # Weinsberg), so a decimal place would invent precision.
+        suggested_display_precision=0,
+        value_fn=lambda s: s.fresh_water_level,
+    ),
+    TrumaSensorDescription(
+        key="grey_water_level",
+        translation_key="grey_water_level",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=0,
+        value_fn=lambda s: s.grey_water_level,
+    ),
+)
+
+# Which reported parameter proves the hardware behind each optional sensor.
+OPTIONAL_SENSOR_PARAM = {
+    "fresh_water_level": "FreshWater.Level",
+    "grey_water_level": "GreyWater.Level",
+}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -83,6 +118,16 @@ async def async_setup_entry(
     """Set up Truma sensors."""
     coordinator = entry.runtime_data
     async_add_entities(TrumaSensor(coordinator, desc) for desc in SENSORS)
+    async_add_when_reported(
+        coordinator,
+        async_add_entities,
+        {
+            OPTIONAL_SENSOR_PARAM[desc.key]: (
+                lambda d=desc: TrumaSensor(coordinator, d)
+            )
+            for desc in OPTIONAL_SENSORS
+        },
+    )
 
 
 class TrumaSensor(TrumaEntity, SensorEntity):

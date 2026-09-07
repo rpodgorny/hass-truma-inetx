@@ -67,6 +67,12 @@
       "current_temp": {
         "name": "Room temperature"
       },
+      "fresh_water_level": {
+        "name": "Fresh water"
+      },
+      "grey_water_level": {
+        "name": "Grey water"
+      },
       "internal_temp": {
         "name": "Internal temperature"
       },
@@ -80,6 +86,9 @@
     "switch": {
       "diesel": {
         "name": "Diesel burner"
+      },
+      "water_pump": {
+        "name": "Fresh water pump"
       }
     }
   },
