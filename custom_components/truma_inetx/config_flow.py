@@ -26,8 +26,8 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
-from .bt import async_resolve_proxy_device
-from .const import DOMAIN, LOCAL_NAME_PREFIX, LOGGER
+from .bt import advert_name, async_resolve_proxy_device, is_panel_advert
+from .const import DOMAIN, LOGGER
 from .coordinator import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
 from .pairing import ensure_bonded
 
@@ -96,11 +96,19 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         # correctly-named discovery instead of a second card titled with the
         # raw MAC. A name-carrying advertisement follows shortly and keys the
         # flow properly.
-        if not discovery_info.name or not discovery_info.name.startswith(
-            LOCAL_NAME_PREFIX
-        ):
+        #
+        # What is deliberately NOT required is that the name start with the
+        # original panel's prefix. That test turned a renamed panel — the iNet X
+        # Panel 2 of issue #6 — into a silent abort: the service-UUID matcher
+        # routes its advert here, this step drops it, and no discovery card is
+        # ever shown. From the outside that is indistinguishable from the
+        # integration not hearing the panel at all. Reaching us at all means a
+        # Truma-proprietary service UUID matched, which is identification
+        # enough; the name is only wanted as a key.
+        name = advert_name(discovery_info)
+        if name is None:
             return self.async_abort(reason="awaiting_name")
-        await self.async_set_unique_id(discovery_info.name)
+        await self.async_set_unique_id(name)
         # The RPA rotates roughly every 15 minutes and every rotation lands
         # here with a new address. `reload_on_update` defaults to True, which
         # reloaded the whole config entry on each one -- tearing down and
@@ -148,12 +156,15 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
 
         configured_names = self._async_current_ids()
         for info in async_discovered_service_info(self.hass):
-            if not info.name or info.name in configured_names:
+            if not is_panel_advert(info):
                 continue
-            if not info.name.startswith(LOCAL_NAME_PREFIX):
+            # Same reasoning as async_step_bluetooth: a panel is identified by
+            # its service UUID or its name, but only a real name can key it.
+            name = advert_name(info)
+            if name is None or name in configured_names:
                 continue
             # dedupe by stable name; keep the most recent advertisement
-            self._discovered[info.name] = info
+            self._discovered[name] = info
 
         if not self._discovered:
             return self.async_abort(reason="no_devices_found")

@@ -131,7 +131,7 @@ def _load():
     _mod("habluetooth", BaseHaRemoteScanner=_RemoteScanner)
 
     _mod("truma_pkg", __path__=[str(SRC)])
-    _mod("truma_pkg.const", LOGGER=_Logger())
+    _mod("truma_pkg.const", LOGGER=_Logger(), LOCAL_NAME_PREFIX="Truma iNetX")
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", SERVICE_UUID=SERVICE_UUID, CHAR_CMD="cmd-char")
 

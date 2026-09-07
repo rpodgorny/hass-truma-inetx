@@ -12,14 +12,18 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from bleak.backends.device import BLEDevice
 
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
-from .const import LOGGER
+from .const import LOCAL_NAME_PREFIX, LOGGER
 from .truma.const import SERVICE_UUID
+
+if TYPE_CHECKING:
+    from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
 # What the panel actually puts in its advertisement. SERVICE_UUID above is the
 # GATT service, only visible after connecting, so it never matches an advert.
@@ -28,10 +32,49 @@ from .truma.const import SERVICE_UUID
 # the panel is invisible even though the radio hears it perfectly.
 ADVERT_SERVICE_UUID = "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
 
+# Everything the panel puts on air that identifies it as a Truma panel. Both
+# UUIDs are proprietary to Truma, so either one matching is evidence on its
+# own -- no local name required.
+PANEL_SERVICE_UUIDS = frozenset({ADVERT_SERVICE_UUID, SERVICE_UUID})
+
 # How recently the panel must have been heard for a connect to be worth
 # starting, and how long to wait for that to happen.
 ADVERT_FRESH_SECONDS = 5.0
 ADVERT_WAIT_TIMEOUT = 30.0
+
+
+def is_panel_advert(info: BluetoothServiceInfoBleak) -> bool:
+    """Return True when this advertisement belongs to a Truma panel.
+
+    The local name is the obvious test, but it is Truma's to change. The iNet X
+    Panel 2 (issue #6) is sold as a drop-in replacement for the panel this
+    integration was written against; the manifest's service-UUID matchers still
+    route it to us, while a renamed advert no longer starts with the prefix the
+    original panel uses. Testing the name alone made such a panel invisible to
+    setup -- advertising, reachable, and never offered.
+
+    So the proprietary service UUIDs match in their own right, and the name is
+    only a convenience for the panel this was written against. Whether the
+    advert can *key* a config entry is a separate question -- see
+    :func:`advert_name`.
+    """
+    if info.name and info.name.startswith(LOCAL_NAME_PREFIX):
+        return True
+    return not PANEL_SERVICE_UUIDS.isdisjoint(info.service_uuids)
+
+
+def advert_name(info: BluetoothServiceInfoBleak) -> str | None:
+    """The panel's stable advertised name, or ``None`` if it has not given one.
+
+    Home Assistant substitutes the address when an advertisement carries no
+    local name -- which the panel's add-device adverts do not. That address is
+    a rotating RPA, so keying anything on it produces a fresh, MAC-titled
+    discovery every rotation instead of one correctly-named panel. Callers that
+    need a key must wait for a named advert; one follows shortly.
+    """
+    if not info.name or info.name.upper() == info.address.upper():
+        return None
+    return info.name
 
 
 def is_remote_scanner(scanner: object) -> bool:
@@ -52,9 +95,7 @@ def _panel_infos(hass: HomeAssistant, name: str) -> list:
     return [
         info
         for info in bluetooth.async_discovered_service_info(hass, connectable=False)
-        if info.name == name
-        or SERVICE_UUID in info.service_uuids
-        or ADVERT_SERVICE_UUID in info.service_uuids
+        if info.name == name or not PANEL_SERVICE_UUIDS.isdisjoint(info.service_uuids)
     ]
 
 
