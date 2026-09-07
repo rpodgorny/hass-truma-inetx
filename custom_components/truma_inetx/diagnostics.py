@@ -31,8 +31,16 @@ async def async_get_config_entry_diagnostics(
     """Return diagnostics for a config entry."""
     coordinator = entry.runtime_data
     state = coordinator.data
+    state_dict = asdict(state) if state is not None else None
+    if state_dict is not None:
+        # asdict leaves seen_devices a set, which does not survive the JSON
+        # dump. Hex is also how these addresses are read: a download is the
+        # evidence for what is actually on someone's bus.
+        state_dict["seen_devices"] = [
+            f"0x{addr:04X}" for addr in sorted(state_dict["seen_devices"])
+        ]
     return {
         "entry": async_redact_data(entry.as_dict(), TO_REDACT),
         "last_update_success": coordinator.last_update_success,
-        "state": asdict(state) if state is not None else None,
+        "state": state_dict,
     }

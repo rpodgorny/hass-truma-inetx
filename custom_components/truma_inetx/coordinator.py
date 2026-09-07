@@ -542,19 +542,37 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         await asyncio.sleep(_PARAM_DISC_GAP)
 
         asked: set[int] = set()
+        acked: set[int] = set()
+        started = self.hass.loop.time()
         for _ in range(2):
             targets = (DEVICE_SEED | self._state.seen_devices) - asked
             if not targets:
                 break
             for dev_addr in sorted(targets):
-                await client.send(
+                if await client.send(
                     build_v3_frame(
                         dev_addr, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
                     )
-                )
+                ):
+                    acked.add(dev_addr)
                 asked.add(dev_addr)
                 await asyncio.sleep(_PARAM_DISC_GAP)
             await asyncio.sleep(_PARAM_DISC_SETTLE)
+
+        # An address with nothing behind it should cost one frame -- but if the
+        # panel withholds the transport acknowledgement for those, each one
+        # costs a timeout instead, and the seed becomes a minute of dead time
+        # per connect. Report both numbers so that is measurable from a log
+        # rather than guessed at.
+        LOGGER.debug(
+            "Truma %s: parameter discovery asked %d device(s), %d acknowledged, "
+            "in %.1fs (no ack: %s)",
+            self.unique_id,
+            len(asked),
+            len(acked),
+            self.hass.loop.time() - started,
+            ", ".join(f"0x{a:04X}" for a in sorted(asked - acked)) or "none",
+        )
 
     @callback
     def _on_frame(self, parsed: dict) -> None:

@@ -145,12 +145,15 @@ class _Client:
         self._coord = coord
         self._answers = answers or {}
 
-    async def send(self, frame: bytes) -> None:
+    async def send(self, frame: bytes) -> bool:
         self.sent.append(frame)
         parsed = PROTO.parse_v3_frame(frame)
         speaker = self._answers.get(parsed["dest"])
         if speaker is not None:
             self._coord._on_frame({"src": speaker, "dest": APP_ADDR})
+        # The real transport returns whether the panel took the frame, which
+        # discovery counts to report what an unpopulated address costs.
+        return True
 
 
 class _Coord:
