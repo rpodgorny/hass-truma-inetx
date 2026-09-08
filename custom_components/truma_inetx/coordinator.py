@@ -814,7 +814,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         The panel confirms by pushing an updated value, which flows back through
         the normal notification path and updates the entity.
         """
-        ok, msg = TrumaState.validate_command(topic, param, value)
+        ok, msg = self._state.validate_write(topic, param, value)
         if not ok:
             raise HomeAssistantError(f"Invalid Truma command: {msg}")
 

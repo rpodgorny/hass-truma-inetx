@@ -256,6 +256,54 @@ class TrumaState:
         known.update(meta)
         return changed
 
+    def allowed_values(self, topic: str, param: str) -> Optional[list]:
+        """The values the panel says *this* vehicle can be set to, or None.
+
+        A panel enumerates a parameter per installation, not per protocol. The
+        van this was measured on has no air conditioner, and its
+        ``RoomClimate.Mode`` enum is simply ``{0: Off, 3: Heating,
+        5: Ventilating}`` -- 1 and 2 are absent rather than present-and-
+        unavailable. A Combi 6 E reports automatic and cooling there (#11).
+        Which is why no list written into this file can be right for both, and
+        why the panel is asked instead.
+
+        ``None`` means the panel described no enum for the parameter, and the
+        caller's own table is all there is.
+
+        Only the values are returned, never the panel's names for them. Those
+        arrive in the panel's display language -- the same three water-heating
+        steps come back as ``40 / 60 / 70`` here and as Eco / Comfort / Hot on
+        the Combi 6 E in #12 -- so they are evidence about which value means
+        what, and they have no business reaching a user-facing string.
+        """
+        meta = self.param_meta.get(f"{topic}.{param}")
+        names = meta.get("enum") if meta else None
+        if not names:
+            return None
+        unavailable = set(meta.get("enum_unavailable", ()))
+        values = [
+            int(value)
+            for value in names
+            if value not in unavailable and str(value).lstrip("-").isdigit()
+        ]
+        return sorted(values) or None
+
+    def validate_write(self, topic: str, param: str, value: int) -> tuple:
+        """Validate a write, preferring what the panel enumerated to our table.
+
+        ``PARAM_VALIDATION`` is a guess assembled from the vehicles reported so
+        far, and it rejects what it has not seen: a Combi 6 E cannot be put
+        into automatic or cooling through this integration because ``[0, 3, 5]``
+        says those do not exist (#11). The panel's own enum is that vehicle's
+        answer to the same question, so where there is one, it wins.
+        """
+        allowed = self.allowed_values(topic, param)
+        if allowed is None:
+            return self.validate_command(topic, param, value)
+        if value not in allowed:
+            return False, f"{topic}.{param}: the panel offers only {allowed}"
+        return True, "ok"
+
     @staticmethod
     def wire_to_celsius(wire_value: Optional[int]) -> Optional[float]:
         """Convert wire value (tenths of C) to Celsius."""

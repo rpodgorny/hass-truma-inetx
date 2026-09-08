@@ -14,11 +14,32 @@ from .entity import TrumaEntity
 PARALLEL_UPDATES = 0
 
 WATER_OFF = "off"
-WATER_OPTIONS = {WATER_OFF: None, "40 °C": 0, "60 °C": 1, "70 °C": 2}
 _WATER_MODE_TO_LABEL = {0: "40 °C", 1: "60 °C", 2: "70 °C"}
+WATER_OPTIONS = {WATER_OFF: None} | {
+    label: value for value, label in _WATER_MODE_TO_LABEL.items()
+}
 
-ELECTRIC_OPTIONS = {"off": 0, "900 W": 1, "1800 W": 2}
 _ELECTRIC_VALUE_TO_LABEL = {0: "off", 1: "900 W", 2: "1800 W"}
+ELECTRIC_OPTIONS = {label: value for value, label in _ELECTRIC_VALUE_TO_LABEL.items()}
+
+
+def _offered(state, topic: str, param: str, labels: dict) -> list:
+    """The labels for the values this panel offers, in value order.
+
+    The panel enumerates each parameter for the vehicle it is installed in, so
+    it is the authority on which steps exist. Its *names* for them are not
+    used: they arrive in the panel's display language, and the same three water
+    steps come back as ``40 / 60 / 70`` on one vehicle and as Eco / Comfort /
+    Hot on another (#12). The labels stay ours, translatable and stable; only
+    which of them to show is the panel's call.
+
+    A panel that describes nothing gets the full list, which is what every
+    vehicle was offered before this existed.
+    """
+    values = state.allowed_values(topic, param)
+    if values is None:
+        values = list(labels)
+    return [labels[value] for value in values if value in labels]
 
 
 async def async_setup_entry(
@@ -37,11 +58,18 @@ class TrumaWaterModeSelect(TrumaEntity, SelectEntity):
     """Water heating mode (off / 40 / 60 / 70 °C)."""
 
     _attr_translation_key = "water_mode"
-    _attr_options = list(WATER_OPTIONS)
 
     def __init__(self, coordinator: TrumaCoordinator) -> None:
         """Initialize."""
         super().__init__(coordinator, "water_mode")
+
+    @property
+    def options(self) -> list[str]:
+        """Off, plus the temperature steps this panel offers."""
+        return [
+            WATER_OFF,
+            *_offered(self.data, "WaterHeating", "Mode", _WATER_MODE_TO_LABEL),
+        ]
 
     @property
     def current_option(self) -> str | None:
@@ -65,11 +93,21 @@ class TrumaElectricLevelSelect(TrumaEntity, SelectEntity):
     """Supplemental electric heating level (off / 900 / 1800 W)."""
 
     _attr_translation_key = "electric_level"
-    _attr_options = list(ELECTRIC_OPTIONS)
 
     def __init__(self, coordinator: TrumaCoordinator) -> None:
         """Initialize."""
         super().__init__(coordinator, "electric_level")
+
+    @property
+    def options(self) -> list[str]:
+        """The electric steps this panel offers.
+
+        A heater without the electric element still has the parameter; its
+        panel is the one that says which levels mean anything on it.
+        """
+        return _offered(
+            self.data, "EnergySrc", "ElectricLevel", _ELECTRIC_VALUE_TO_LABEL
+        )
 
     @property
     def current_option(self) -> str | None:

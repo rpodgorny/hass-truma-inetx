@@ -73,13 +73,13 @@ and clears the issue on the next successful connect.
 
 | Entity | Platform | Notes |
 |---|---|---|
-| Truma iNet X | `climate` | Off / Heat / Fan-only, 5–30 °C in 1 °C steps. Offers only the control the current mode uses: the target temperature while heating, the fan speed as the fan mode (`off`, `1`–`10`) while venting |
+| Truma iNet X | `climate` | Whichever modes the panel offers — Off / Heat / Fan-only everywhere, plus Auto, Cool or Dry where the vehicle has them. 5–30 °C in 1 °C steps. Offers only the control the current mode uses: the target temperature while heating, the fan speed as the fan mode (`off`, `1`–`10`) while venting |
 | Room temperature | `sensor` | °C |
 | Water temperature | `sensor` | °C |
 | Internal temperature | `sensor` | °C |
 | Supply voltage | `sensor` | V |
-| Water heating | `select` | Off / 40 °C / 60 °C / 70 °C |
-| Electric heating | `select` | Supplemental electric element: off / 900 W / 1800 W |
+| Water heating | `select` | Off / 40 °C / 60 °C / 70 °C — the steps the panel offers |
+| Electric heating | `select` | Supplemental electric element: off / 900 W / 1800 W — the steps the panel offers |
 | Diesel burner | `switch` | |
 | Fan level | `number` | 0–10 |
 | Flame | `binary_sensor` | Burner currently firing |
@@ -87,6 +87,14 @@ and clears the issue on the next successful connect.
 | Fresh water | `sensor` | % — only where the vehicle has a tank sensor |
 | Grey water | `sensor` | % — only where the vehicle has a tank sensor |
 | Fresh water pump | `switch` | Only where the vehicle has one |
+
+The climate entity's mode list and the two selects' options are not fixed. The
+panel enumerates each parameter for the vehicle it is installed in — a van with no air conditioner
+does not list a cooling mode, and a heater without the electric element does
+not list 1800 W — so the entities offer what the panel offers, falling back to
+the full list where it describes nothing. The panel's own names for the values
+are never shown: they arrive in the panel's display language, and the labels
+here stay translatable.
 
 The last three are created the first time the hardware behind them reports a
 value, rather than up front: most vehicles have none of it, and an entity that
@@ -260,6 +268,7 @@ python3 tests/test_pairing_transport_dispatch.py  # bonding uses the transport i
 python3 tests/test_device_from_bluez.py           # BLEDevice built from BlueZ's object
 python3 tests/test_no_proxy_issue.py              # the "nothing can reach it" repair
 python3 tests/test_water_entities.py              # water entities and write addressing
+python3 tests/test_panel_declared_options.py       # offering what the panel says exists
 ```
 
 The remaining four drive real code that imports a library, so they need it

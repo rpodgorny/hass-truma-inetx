@@ -38,6 +38,7 @@ jobs:
       - run: python3 tests/test_device_from_bluez.py
       - run: python3 tests/test_no_proxy_issue.py
       - run: python3 tests/test_water_entities.py
+      - run: python3 tests/test_panel_declared_options.py
       # The config flow builds its voluptuous schema at import time, and this
       # test drives the real flow rather than a stub of it.
       - run: pip install voluptuous

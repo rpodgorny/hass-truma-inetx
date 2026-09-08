@@ -16,18 +16,41 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import TrumaConfigEntry
 from .entity import TrumaEntity
-from .truma.state import RoomClimateMode, TrumaState
+from .truma.state import TrumaState
 
 # Entities are coordinator-driven and have no update() method, so Home
 # Assistant would create no semaphore anyway; stated explicitly.
 PARALLEL_UPDATES = 0
 
-_HVAC_TO_MODE = {
-    HVACMode.OFF: int(RoomClimateMode.OFF),
-    HVACMode.HEAT: int(RoomClimateMode.HEATING),
-    HVACMode.FAN_ONLY: int(RoomClimateMode.VENTILATING),
+# What a RoomClimate.Mode value means. 0, 3 and 5 are measured on two
+# vehicles; 1, 2, 4 and 6 come from a Combi 6 E's panel (#11, #7) and from an
+# independent decoding of the protocol, and cost nothing to name here -- a
+# vehicle whose panel does not enumerate them never reaches them.
+#
+# 4 is heating with air-conditioner assistance, which is still heating as far
+# as Home Assistant's model goes; it shares HVACMode.HEAT and the reverse
+# table below deliberately sends plain heating instead.
+_MODE_TO_HVAC = {
+    0: HVACMode.OFF,
+    1: HVACMode.AUTO,
+    2: HVACMode.COOL,
+    3: HVACMode.HEAT,
+    4: HVACMode.HEAT,
+    5: HVACMode.FAN_ONLY,
+    6: HVACMode.DRY,
 }
-_MODE_TO_HVAC = {v: k for k, v in _HVAC_TO_MODE.items()}
+_HVAC_TO_MODE = {
+    HVACMode.OFF: 0,
+    HVACMode.AUTO: 1,
+    HVACMode.COOL: 2,
+    HVACMode.HEAT: 3,
+    HVACMode.FAN_ONLY: 5,
+    HVACMode.DRY: 6,
+}
+# What to offer while the panel has described nothing: the three modes every
+# vehicle seen so far has, which is what this entity offered unconditionally
+# before the panel was asked.
+_DEFAULT_HVAC_MODES = [HVACMode.OFF, HVACMode.HEAT, HVACMode.FAN_ONLY]
 
 # AirCirculation.FanLevel is 0-10. Exposing it as the climate entity's fan mode
 # puts it in the same card as the mode and setpoint, which is where you want it
@@ -51,7 +74,6 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
 
     _attr_name = None  # primary feature → uses the device name
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.FAN_ONLY]
     _attr_fan_modes = list(_LEVEL_TO_FAN_MODE.values())
     _attr_min_temp = 5
     _attr_max_temp = 30
@@ -81,6 +103,35 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
         # it is the resting target you come back to, which is how every other
         # thermostat in HA behaves.
         return features | ClimateEntityFeature.TARGET_TEMPERATURE
+
+    @property
+    def hvac_modes(self) -> list[HVACMode]:
+        """The modes this vehicle actually has, as its panel enumerates them.
+
+        A fixed list is wrong in both directions: it offers cooling on a van
+        with no air conditioner, and it withholds it from one that has (#11).
+        The panel enumerates the parameter per installation, so that is what is
+        offered -- names ignored, since they arrive in the panel's language;
+        only which values exist crosses over.
+
+        A value the panel offers and the table above has no name for is left
+        out rather than guessed at, and OFF is always offered: a heating
+        control that cannot be switched off is worse than one that shows a mode
+        the panel did not mention.
+        """
+        values = self.data.allowed_values("RoomClimate", "Mode")
+        if values is None:
+            return _DEFAULT_HVAC_MODES
+        modes: list[HVACMode] = []
+        for value in values:
+            mode = _MODE_TO_HVAC.get(value)
+            if mode is not None and mode not in modes:
+                modes.append(mode)
+        if not modes:
+            return _DEFAULT_HVAC_MODES
+        if HVACMode.OFF not in modes:
+            modes.insert(0, HVACMode.OFF)
+        return modes
 
     @property
     def current_temperature(self) -> float | None:
