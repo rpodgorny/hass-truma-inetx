@@ -22,6 +22,9 @@
       }
     },
     "sensor": {
+      "flame_status": {
+        "default": "mdi:fire"
+      },
       "fresh_water_level": {
         "default": "mdi:water"
       },

@@ -90,6 +90,7 @@ and clears the issue on the next successful connect.
 | Fresh water pump | `switch` | Only where the vehicle has one |
 | Starter battery | `sensor` | V — only where something reports `VBat.Voltage` |
 | Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
+| Flame status | `sensor` | Diagnostic, disabled by default — the raw `System.FlameStatus` value |
 
 The climate entity's mode list and the two selects' options are not fixed. The
 panel enumerates each parameter for the vehicle it is installed in — a van with no air conditioner
@@ -113,6 +114,14 @@ gas/electric Combi, switching the electric element off was measured turning the
 gas source on by itself. A control over something the appliance also drives
 would fight it and flap, so the reading reflects the heater's choice rather
 than pretending to make it.
+
+The flame status sensor exists because nothing published says what
+`System.FlameStatus` means. It takes 0, 1 and 2; the binary sensor above has to
+answer on or off, and does it by treating anything non-zero as lit. The panel
+describes the parameter with the same type code it gives `AirCirculation.Active`
+and the other `Active` fields, which are the protocol's OFF / ACTIVE / IDLE
+triple — good evidence, not proof. Watching the raw value through an ignition
+is what would settle it.
 
 On a vehicle that already had the electric select or the diesel switch before
 they became conditional, Home Assistant keeps the old entity in its registry

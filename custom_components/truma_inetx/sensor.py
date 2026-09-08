@@ -13,6 +13,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import (
     PERCENTAGE,
+    EntityCategory,
     UnitOfElectricPotential,
     UnitOfTemperature,
 )
@@ -75,6 +76,31 @@ SENSORS: tuple[TrumaSensorDescription, ...] = (
         value_fn=lambda s: (
             None if s.voltage_vcc12 is None else round(s.voltage_vcc12 / 1000.0, 2)
         ),
+    ),
+    TrumaSensorDescription(
+        key="flame_status",
+        translation_key="flame_status",
+        # No state class on purpose: 0, 1 and 2 are states, not a quantity, so
+        # long-term statistics would average a code into a number that means
+        # nothing.
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        # The raw System.FlameStatus integer, for issue #15 and nothing else.
+        #
+        # The binary sensor beside it has to answer on/off, and does so by
+        # treating anything non-zero as lit -- which is a guess, because the
+        # parameter takes 0, 1 and 2 on a Combi 6 E and Truma publishes no
+        # meaning for any of them. The panel does not name the values either:
+        # it describes the parameter as type 105, the type it also gives
+        # AirCirculation.Active, AirHeating.Active and WaterHeating.Active, and
+        # those are the protocol's OFF / ACTIVE / IDLE triple. Strong evidence,
+        # not proof, and only the raw number can settle it -- 1 while the
+        # burner fires and 2 once the target is reached would confirm it.
+        #
+        # Disabled by default and filed as diagnostic: it exists so somebody
+        # standing next to a running heater can watch the value in a history
+        # graph, not because a user needs it.
+        value_fn=lambda s: s.flame_status,
     ),
 )
 

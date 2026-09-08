@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline checks for the energy sources and the vehicle batteries.
+"""Offline checks for the energy sources, the batteries and the raw flame value.
 
 No hardware and no Home Assistant install: HA is stubbed and the real
 ``truma/state.py``, ``sensor.py``, ``switch.py`` and ``binary_sensor.py`` are
@@ -18,12 +18,17 @@ Why this exists:
 - **#17.** The starter and leisure battery voltages ride on the electrical
   block, in tenths of a volt -- a different scale from ``Eol.Vcc12``, which is
   millivolts.
+- **#15.** ``System.FlameStatus`` takes 0, 1 and 2, and nothing published says
+  what they mean. The binary sensor must answer on/off, so the raw value needs
+  somewhere to be seen.
+
 What it pins:
 
 1. gas, diesel and both batteries reach the state fields their entities read,
 2. gas is a read-only reflection -- no platform writes ``EnergySrc.GasLevel``,
 3. each of them is created when, and only when, its parameter is reported,
-4. the batteries are scaled by ten, not by a thousand.
+4. the batteries are scaled by ten, not by a thousand,
+5. the raw flame value is exposed unrounded, as a disabled diagnostic.
 
 Run: ``python3 tests/test_energy_entities.py``
 """
@@ -31,6 +36,7 @@ Run: ``python3 tests/test_energy_entities.py``
 from __future__ import annotations
 
 import asyncio
+import enum
 import importlib.util
 import sys
 import types
@@ -58,7 +64,13 @@ class _EntityDescription:
     state_class: object | None = None
     native_unit_of_measurement: str | None = None
     suggested_display_precision: int | None = None
+    entity_category: object | None = None
     entity_registry_enabled_default: bool = True
+
+
+class _EntityCategory(enum.StrEnum):
+    DIAGNOSTIC = "diagnostic"
+    CONFIG = "config"
 
 
 def _load():
@@ -76,6 +88,7 @@ def _load():
     _mod(
         "homeassistant.const",
         PERCENTAGE="%",
+        EntityCategory=_EntityCategory,
         UnitOfElectricPotential=types.SimpleNamespace(VOLT="V"),
         UnitOfTemperature=types.SimpleNamespace(CELSIUS="°C"),
     )
@@ -290,6 +303,20 @@ def test_the_batteries_are_tenths_of_a_volt_not_millivolts() -> None:
     # The supply voltage keeps its own, different scale.
     coordinator.report("Eol", "Vcc12", 13700)
     assert _by_key(made, "voltage").native_value == 13.7
+
+
+def test_the_raw_flame_value_is_visible_and_unrounded() -> None:
+    """#15: the binary sensor has to say on/off; the number says what it saw."""
+    coordinator = _FakeCoordinator()
+    made = _setup(SENSOR, coordinator)
+    raw = _by_key(made, "flame_status")
+
+    assert raw.entity_description.entity_registry_enabled_default is False
+    assert raw.entity_description.entity_category is _EntityCategory.DIAGNOSTIC
+
+    assert raw.native_value is None
+    coordinator.report("System", "FlameStatus", 2, HEATER)
+    assert raw.native_value == 2, "the third state was folded away again"
 
 
 def _main() -> None:
