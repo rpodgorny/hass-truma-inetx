@@ -184,9 +184,14 @@ def async_resolve_proxy_device(
     )
     # A proxy is still preferred: its controller resolves private addresses, so
     # it works on any host. A local adapter only works where the kernel puts the
-    # peer's current RPA on air rather than its identity address -- stock Linux
-    # does not, see DUCATO_STATE.md. Fall back to one anyway so a patched host
-    # can run without a proxy at all.
+    # peer's current RPA on air rather than its identity address. Kernels below
+    # 6.19 do exactly that in hci_connect_le(), so they need no proxy at all;
+    # 14b06c3a88f7 took it away in 6.19, leaving the identity address on air
+    # unless the controller has LL Privacy and BlueZ programmed the peer's IRK
+    # into the resolving list (bluez#2356 says it does not, for dual-mode
+    # bonds). A kernel fix is posted upstream and not yet merged. Fall back to a
+    # local adapter either way -- on an older or patched host it is all that is
+    # needed.
     local: object | None = None
     for info in rpas:
         # Skip an address the coordinator has told us won't establish (the

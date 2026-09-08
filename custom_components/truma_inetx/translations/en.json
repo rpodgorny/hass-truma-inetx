@@ -9,7 +9,7 @@
           "address": "Device"
         },
         "data_description": {
-          "address": "The Truma panel to pair with. Only panels currently advertising within range of an ESP32 Bluetooth proxy are listed."
+          "address": "The Truma panel to pair with. Only panels currently advertising within range of Home Assistant's Bluetooth, whether that is an ESP32 proxy or a local adapter, are listed."
         }
       },
       "confirm": {
@@ -38,7 +38,7 @@
   "issues": {
     "no_proxy_route": {
       "title": "Nothing can reach the Truma panel",
-      "description": "Home Assistant can hear the Truma panel advertising, but nothing is able to connect to it.\n\nThe panel uses a rotating Bluetooth private address. Reconnecting to it requires the panel's current address to be put on air. An ESPHome Bluetooth proxy's controller does that for you. A local adapter can only do it if its controller supports LL Privacy, which the Raspberry Pi's built-in adapter and most USB dongles do not; such an adapter typically pairs with the panel once and then never reconnects.\n\n**To fix this, add an ESPHome Bluetooth proxy within range of the panel.**\n\nIf you already have one, check that it is online and that the panel is in range of it."
+      "description": "Home Assistant can hear the Truma panel advertising, but nothing is able to connect to it.\n\nThe panel uses a rotating Bluetooth private address. Reconnecting to it requires the panel's current address to be put on air. An ESPHome Bluetooth proxy's controller does that for you, and so does a Linux kernel below 6.19. From 6.19 onwards the kernel puts the panel's identity address on air instead, and the panel does not answer it; a local adapter then only works if its controller supports LL Privacy and BlueZ has programmed the panel's key into the resolving list, which it currently does not do. A kernel fix for this is posted upstream and not yet merged.\n\n**On kernel 6.19 or later, add an ESPHome Bluetooth proxy within range of the panel.**\n\nIf you already have one, check that it is online and that the panel is in range of it."
     }
   },
   "entity": {

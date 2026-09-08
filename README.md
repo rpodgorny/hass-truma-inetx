@@ -12,22 +12,40 @@ burner and the fan — no cloud, no Truma account, no LIN wiring.
 Developed against an iNet X driving a **Truma Combi**. Other Truma appliances
 speak the same protocol but are untested; reports welcome.
 
-## ⚠️ An ESP32 Bluetooth proxy is required
+## An ESP32 Bluetooth proxy is the reliable route
 
-This is not a preference — it is the only configuration that works.
+A proxy works everywhere. A local adapter works on some kernels and not
+others, and which one you are on decides it.
 
 The panel advertises a **fast-rotating Resolvable Private Address** and only
-accepts an encrypted reconnect from a client that can resolve that address back
-to the bond. Phones do this in the Bluetooth controller. BlueZ on Linux
-(Raspberry Pi, x86, any adapter tried — onboard BCM, CSR, RTL8761B) does not:
-it can *pair* the panel, but every later reconnect lands on an address it cannot
-map to the stored key, so the link is dropped. That was verified exhaustively —
-IRK stored, LL-Privacy enabled, `Experimental` flags, three adapters — and it
-still fails at the controller level.
+accepts an encrypted reconnect from a client that puts that current address on
+air. Phones resolve it in the Bluetooth controller, and ESP-IDF does the same,
+so an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html)
+always works.
 
-ESP-IDF resolves RPAs in-controller like a phone does, so an
-[ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html)
-works where the host adapter cannot.
+On Linux it depends on the kernel version:
+
+- **Below 6.19** a local adapter reconnects fine. `hci_connect_le()`
+  substitutes the peer's cached RPA for the identity address before it puts a
+  connection on air, so no LL Privacy and no proxy is needed. Kernel 6.12, the
+  one the Pi 5 in [#13](https://github.com/rpodgorny/hass-truma-inetx/issues/13)
+  runs, is in this range, and `14b06c3a88f7` has not been backported to any
+  6.12, 6.17 or 6.18 stable release.
+- **6.19 and later** it usually does not. Commit
+  [`14b06c3a88f7`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=14b06c3a88f7)
+  made the kernel keep the identity address all the way to the controller, so
+  the panel never hears the connect. A local adapter then only works if the
+  controller supports LL Privacy *and* BlueZ has programmed the panel's IRK
+  into its resolving list, which currently does not happen for dual-mode bonds
+  ([bluez#2356](https://github.com/bluez/bluez/issues/2356)).
+
+A kernel fix is
+[posted to linux-bluetooth](https://lore.kernel.org/linux-bluetooth/20260908012048.3681904-2-radek@podgorny.cz/)
+and is working its way upstream. Until it lands, a proxy is the answer on 6.19
+and later.
+
+Older reports in this repo claim BlueZ can never do this. That was wrong: the
+adapters tested happened to be on kernels carrying the regression.
 
 **Stock proxy firmware is enough** — nothing custom is needed. A plain
 `bluetooth_proxy: active: true` on an `esp-idf` build is all this integration
