@@ -268,13 +268,12 @@ python3 tests/test_pairing_transport_dispatch.py  # bonding uses the transport i
 python3 tests/test_device_from_bluez.py           # BLEDevice built from BlueZ's object
 python3 tests/test_no_proxy_issue.py              # the "nothing can reach it" repair
 python3 tests/test_water_entities.py              # water entities and write addressing
-python3 tests/test_panel_declared_options.py       # offering what the panel says exists
 ```
 
-The remaining four drive real code that imports a library, so they need it
-installed — `voluptuous` for the config flow's schema, `cbor2` for the three
-that build real protocol frames and parse them back rather than trusting a stub
-to be faithful:
+The remaining five drive real code that imports a library, so they need it
+installed — `voluptuous` for the config flow's schema, `cbor2` for the four
+that reach the protocol module, whether to build real frames and parse them back
+or by way of the coordinator that imports it:
 
 ```bash
 pip install voluptuous
@@ -284,6 +283,7 @@ pip install cbor2==5.6.5
 python3 tests/test_param_discovery.py             # startup registration + discovery
 python3 tests/test_measure_request.py             # asking the tanks to measure
 python3 tests/test_param_meta.py                  # what the panel says a value means
+python3 tests/test_panel_declared_options.py      # offering what the panel says exists
 ```
 
 ## Credits and licensing
