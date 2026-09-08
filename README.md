@@ -63,23 +63,29 @@ bluetooth_proxy:
 Put the proxy **within a few metres of the panel**. Distance shows up as
 `ESP_GATT_CONN_FAIL_ESTABLISH` connect failures rather than as a clean error.
 
+If the integration can hear the panel advertising but cannot connect to it
+repeatedly, it raises an issue under Settings → **Repairs** saying so, rather
+than leaving the entities unavailable with no explanation. It stays quiet while
+the panel is simply switched off or out of range — that is not the same fault —
+and clears the issue on the next successful connect.
+
 ## Entities
 
 | Entity | Platform | Notes |
 |---|---|---|
-| Truma iNet X | `climate` | Off / Heat / Fan-only. Offers only the control the current mode uses: the target temperature while heating, the fan speed as the fan mode (`off`, `1`–`10`) while venting |
+| Truma iNet X | `climate` | Off / Heat / Fan-only, 5–30 °C in 1 °C steps. Offers only the control the current mode uses: the target temperature while heating, the fan speed as the fan mode (`off`, `1`–`10`) while venting |
 | Room temperature | `sensor` | °C |
 | Water temperature | `sensor` | °C |
 | Internal temperature | `sensor` | °C |
 | Supply voltage | `sensor` | V |
-| Water heating | `select` | Off / Eco / High / Boost |
-| Electric heating | `select` | Electric heating element level |
+| Water heating | `select` | Off / 40 °C / 60 °C / 70 °C |
+| Electric heating | `select` | Supplemental electric element: off / 900 W / 1800 W |
 | Diesel burner | `switch` | |
 | Fan level | `number` | 0–10 |
 | Flame | `binary_sensor` | Burner currently firing |
 | BLE connection | `binary_sensor` | Diagnostic — is the panel connected |
-| Fresh water level | `sensor` | % — only where the vehicle has a tank sensor |
-| Grey water level | `sensor` | % — only where the vehicle has a tank sensor |
+| Fresh water | `sensor` | % — only where the vehicle has a tank sensor |
+| Grey water | `sensor` | % — only where the vehicle has a tank sensor |
 | Fresh water pump | `switch` | Only where the vehicle has one |
 
 The last three are created the first time the hardware behind them reports a
@@ -98,7 +104,9 @@ held, addressed to whichever device reported the tank.
 The panel drives its own fan while heating and has no setpoint at all while
 venting, so exactly one of the two controls is meaningful at any time. The
 climate entity reflects that: `supported_features` follows the mode rather than
-advertising both at once.
+advertising both at once. Off keeps the setpoint, the way every other
+thermostat in Home Assistant does — it is the resting target you come back to.
+The `number` entity exposes the fan level in every mode, for automations.
 
 ## Dashboard card
 
@@ -126,7 +134,7 @@ caches assets for weeks and a browser hard-refresh does not bypass it — withou
 a changing URL an updated card would never reach the browser.
 
 The trade-off: `add_extra_js_url` loads the module on every page load for every
-user, not only when the card is on screen. It is about 13 KB.
+user, not only when the card is on screen. It is about 19 KB.
 
 The card does not reimplement the dial — it instantiates Home Assistant's own
 `ha-control-circular-slider` and `ha-outlined-icon-button` and reuses the
@@ -208,6 +216,18 @@ address, which pairs normally.
 
 To re-pair later, use **Reconfigure** on the device.
 
+## Diagnostics
+
+The device page's ⋮ → **Download diagnostics** dumps the config entry, whether
+the last update succeeded, and the full decoded panel state — including
+`seen_devices`, every bus address the integration has heard from, which is the
+evidence for what is actually on a given vehicle's bus.
+
+The BLE address, the panel's name and the persisted app identity (`muid` /
+`uuid`) are redacted: the address is a private address that still pins the panel
+to a location, and the identity is what the panel bonds against. The panel state
+itself carries nothing identifying.
+
 ## Known limitations
 
 - **Reconnects can wedge.** If the link drops, reconnecting to the same address
@@ -223,12 +243,25 @@ To re-pair later, use **Reconfigure** on the device.
 ## Development
 
 The checks in `tests/` are self-contained. They stub Home Assistant, bleak and
-dbus, so they need neither an HA install nor hardware — the ones that build
-real protocol frames need `cbor2` and nothing else:
+dbus, so they need neither an HA install nor hardware, and each file is a
+script — run one directly, or all of them:
 
 ```bash
-python3 tests/test_pairing_rotation.py     # pairing address rotation
-python3 tests/test_measure_request.py      # asking the tanks to measure
+python3 tests/test_pairing_rotation.py            # pairing address rotation
+python3 tests/test_pairing_transport_dispatch.py  # bonding uses the transport it has
+python3 tests/test_panel2_discovery.py            # a renamed panel is still offered
+python3 tests/test_device_from_bluez.py           # BLEDevice built from BlueZ's object
+python3 tests/test_no_proxy_issue.py              # the "nothing can reach it" repair
+python3 tests/test_water_entities.py              # water entities and write addressing
+```
+
+Two of them build real protocol frames and parse them back rather than trusting
+a stub to be faithful, so they need `cbor2` — nothing else:
+
+```bash
+pip install cbor2==5.6.5
+python3 tests/test_param_discovery.py             # startup registration + discovery
+python3 tests/test_measure_request.py             # asking the tanks to measure
 ```
 
 ## Credits and licensing
@@ -242,9 +275,17 @@ The wire protocol implementation in `custom_components/truma_inetx/truma/`
 [daaaaan/truma-inetx-ble](https://github.com/daaaaan/truma-inetx-ble)**, whose
 reverse-engineering of the iNet X protocol made this integration possible.
 That project publishes no licence, so its author retains all rights and the
-GPL-3.0 above does **not** apply to those files. They are kept unmodified and
-isolated in their own subpackage; if upstream adds a licence and ships an
-installable package, that subpackage will be replaced by a dependency.
+GPL-3.0 above does **not** apply to those files. They are isolated in their own
+subpackage so the boundary stays visible; if upstream adds a licence and ships
+an installable package, that subpackage will be replaced by a dependency.
+
+`protocol.py` is vendored unchanged. `state.py` and `const.py` carry local
+additions on top of the vendored code: the fresh-water pump and the two tank
+levels, `seen_devices` and `topic_source` (which bus device reported a topic),
+the extra device seeds and topics that parameter discovery walks, and the
+measure-request constants. Those additions are original work in this
+repository, but they sit inside files whose base is not, so the licence
+position above governs the files as a whole.
 
 The integration icon is the Truma iNet X system mark, used descriptively to
 identify the device this integration talks to — see
