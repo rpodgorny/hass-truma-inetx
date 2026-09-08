@@ -89,3 +89,25 @@ COMMAND_DEST = {
 ADAPTER_PATH = "/org/bluez/hci1"
 IDENTITY_FILE = "/data/dbus-truma/.truma_identity.json"
 BLUEZ = "org.bluez"
+
+# Topics whose device measures on demand rather than continuously.
+#
+# A tank sensor answers with the level it measured when it was last asked, not
+# the level now. The panel hides this because it asks for a fresh measurement
+# whenever its water screen is opened -- so the panel is right and everyone
+# reading the bus is stale. Reported on a Weinsberg (issue #4): a grey tank
+# emptied by hand still read 25 % afterwards, and a parameter discovery
+# returned that same 25 % because it is genuinely the last measurement taken.
+#
+# Asking is a write of 1 to the topic's MeasureRequest parameter; the device
+# answers with a fresh Level a moment later, through the ordinary
+# notification path.
+#
+# The value is the parameter whose arrival proves the hardware exists, so a
+# vehicle with no tanks is never asked -- most have neither, and the topics
+# are subscribed on every vehicle regardless.
+MEASURE_REQUEST_TOPICS = {
+    "FreshWater": "Level",
+    "GreyWater": "Level",
+}
+MEASURE_REQUEST_PARAM = "MeasureRequest"

@@ -78,9 +78,22 @@ Put the proxy **within a few metres of the panel**. Distance shows up as
 | Fan level | `number` | 0–10 |
 | Flame | `binary_sensor` | Burner currently firing |
 | BLE connection | `binary_sensor` | Diagnostic — is the panel connected |
+| Fresh water level | `sensor` | % — only where the vehicle has a tank sensor |
+| Grey water level | `sensor` | % — only where the vehicle has a tank sensor |
+| Fresh water pump | `switch` | Only where the vehicle has one |
+
+The last three are created the first time the hardware behind them reports a
+value, rather than up front: most vehicles have none of it, and an entity that
+is permanently unknown because the hardware does not exist looks exactly like
+one that is unknown because the integration is broken.
 
 Updates are pushed as the panel sends them (roughly 25 frames/minute), not
-polled.
+polled. The tank levels are the exception. A tank sensor answers with the
+level it measured when it was last *asked*, and nothing on the bus asks it
+except the panel, when its water screen is opened — so a tank emptied by hand
+would otherwise keep reporting its old level indefinitely. The integration
+asks for a fresh measurement once per connect and every 60 s while the link is
+held, addressed to whichever device reported the tank.
 
 The panel drives its own fan while heating and has no setpoint at all while
 venting, so exactly one of the two controls is meaningful at any time. The
@@ -209,12 +222,13 @@ To re-pair later, use **Reconfigure** on the device.
 
 ## Development
 
-`tests/test_pairing_rotation.py` is a self-contained check of the pairing
-address-rotation logic. It stubs Home Assistant, bleak and dbus, so it needs
-neither an HA install nor hardware:
+The checks in `tests/` are self-contained. They stub Home Assistant, bleak and
+dbus, so they need neither an HA install nor hardware — the ones that build
+real protocol frames need `cbor2` and nothing else:
 
 ```bash
-python3 tests/test_pairing_rotation.py
+python3 tests/test_pairing_rotation.py     # pairing address rotation
+python3 tests/test_measure_request.py      # asking the tanks to measure
 ```
 
 ## Credits and licensing

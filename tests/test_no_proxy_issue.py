@@ -143,9 +143,9 @@ def _load():
     _mod("truma_pkg", __path__=[str(SRC)])
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", SERVICE_UUID=SERVICE_UUID,
-         DEVICE_SEED=frozenset(), **dict.fromkeys(
+         DEVICE_SEED=frozenset(), MEASURE_REQUEST_TOPICS={}, **dict.fromkeys(
         ("CTRL_MBP", "DEV_APP_DEFAULT", "DEV_BROADCAST", "DEV_MSG_BROKER",
-         "MBP_PARAM_DISC", "TOPIC_BATCHES"), 0))
+         "MBP_PARAM_DISC", "MEASURE_REQUEST_PARAM", "TOPIC_BATCHES"), 0))
     _mod("truma_pkg.truma.protocol", **dict.fromkeys(
         ("build_identity_frames", "build_register_frame", "build_subscribe_frame",
          "build_v3_frame", "build_write_frame"), None))

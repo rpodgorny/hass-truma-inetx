@@ -38,6 +38,8 @@ from .truma.const import (
     DEV_MSG_BROKER,
     DEVICE_SEED,
     MBP_PARAM_DISC,
+    MEASURE_REQUEST_PARAM,
+    MEASURE_REQUEST_TOPICS,
     TOPIC_BATCHES,
 )
 from .truma.protocol import (
@@ -101,6 +103,19 @@ _PARAM_DISC_GAP = 0.15  # seconds
 # ...but do wait once after each round, long enough for the replies to arrive,
 # because the addresses they carry are what the next round is built from.
 _PARAM_DISC_SETTLE = 3  # seconds
+
+# How often to ask the on-demand sensors for a fresh measurement while the
+# link is held open (see MEASURE_REQUEST_TOPICS for why asking is needed at
+# all). A minute is what the reporter's own build used, which is the only
+# cadence anyone has run against the hardware; it is also about as often as a
+# tank level can meaningfully change, and it costs two frames.
+#
+# In poll mode this is not used: every poll re-runs startup, which asks once,
+# so the reading is as fresh as the poll it came with.
+_MEASURE_INTERVAL = 60  # seconds
+# Same reasoning as _PARAM_DISC_GAP -- do not hand the transport a second
+# frame before it has drained the first.
+_MEASURE_GAP = 0.15  # seconds
 
 # How long to wait for the panel to answer registration with an address.
 # Measured on the van: a healthy panel answers in about a second, so this is
@@ -482,9 +497,18 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             )
             return True
 
-        # Connected mode: hold the link, watching for a data stall.
+        # Connected mode: hold the link, watching for a data stall and keeping
+        # the on-demand sensors measuring.
+        next_measure = self.hass.loop.time() + _MEASURE_INTERVAL
         while not self._stop and client.connected:
             await asyncio.sleep(1)
+            now = self.hass.loop.time()
+            if now >= next_measure:
+                # Schedule from now rather than from the previous slot: a send
+                # that blocks on its acknowledgement must not leave a backlog
+                # of missed slots to fire back to back.
+                next_measure = now + _MEASURE_INTERVAL
+                await self._request_measurements(client)
             if self.hass.loop.time() - self._last_frame > _DATA_STALL_TIMEOUT:
                 LOGGER.warning(
                     "Truma %s: no data for %ss; link is stale, reconnecting",
@@ -547,6 +571,12 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
 
         # 4. Request current values from every device on the bus.
         await self._discover_params(client)
+
+        # 5. ...and for the sensors that only measure when asked, ask. Step 4
+        # returns their last measurement, which on a tank can be hours old, so
+        # without this the first reading of every session is stale — and in
+        # poll mode, where the link is not held, it would be the only reading.
+        await self._request_measurements(client)
 
     async def _discover_params(self, client: TrumaBleClient) -> None:
         """Ask each bus device for its current parameter values, one by one.
@@ -621,6 +651,44 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             ", ".join(f"0x{a:04X}" for a in sorted(asked - DEVICE_SEED)) or "none",
             ", ".join(f"0x{a:04X}" for a in sorted(asked - acked)) or "none",
         )
+
+    async def _request_measurements(self, client: TrumaBleClient) -> None:
+        """Ask the on-demand sensors to take a fresh reading.
+
+        A tank sensor reports the level it last measured and nothing else, so
+        its value only moves when someone asks it to measure — which the panel
+        does when its water screen is opened, and nothing else on the bus does.
+        That is the whole of issue #4: the sensor was right, it was answering a
+        question asked hours ago.
+
+        A topic is asked only once its own parameter has been reported, which
+        is the same evidence the entities are created on (see
+        ``async_add_when_reported``). Most vehicles have no tanks at all, and
+        every one of them subscribes to these topics regardless, so asking
+        unconditionally would put two writes a minute on every bus to answer a
+        question nobody had.
+
+        The destination is whoever reported the topic. The tanks hang off an
+        electrical block whose address differs per vehicle and is renumbered
+        when it is re-paired, so there is no address to hard-code — 0x0405 was
+        this reporter's, not anybody's.
+        """
+        for topic, evidence in MEASURE_REQUEST_TOPICS.items():
+            if f"{topic}.{evidence}" not in self._state.raw_params:
+                continue
+            dest = self._state.get_command_dest(topic)
+            LOGGER.debug(
+                "Truma %s: asking 0x%04X for a fresh %s measurement",
+                self.unique_id,
+                dest,
+                topic,
+            )
+            await client.send(
+                build_write_frame(
+                    client.assigned_addr, dest, topic, MEASURE_REQUEST_PARAM, 1
+                )
+            )
+            await asyncio.sleep(_MEASURE_GAP)
 
     @callback
     def _on_frame(self, parsed: dict) -> None:

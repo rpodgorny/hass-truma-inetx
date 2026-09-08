@@ -180,6 +180,10 @@ class _Coord:
     _discover_params = COORD.TrumaCoordinator._discover_params
     _run_startup = COORD.TrumaCoordinator._run_startup
     _on_frame = COORD.TrumaCoordinator._on_frame
+    # Startup ends by asking the on-demand sensors to measure. Nothing here
+    # reports a tank, so it sends nothing -- which is the point: this file is
+    # about discovery, and tests/test_measure_request.py owns that step.
+    _request_measurements = COORD.TrumaCoordinator._request_measurements
 
 
 def _run(coro):
