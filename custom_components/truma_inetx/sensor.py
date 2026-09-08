@@ -16,6 +16,7 @@ from homeassistant.const import (
     EntityCategory,
     UnitOfElectricPotential,
     UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -145,6 +146,21 @@ OPTIONAL_SENSORS: tuple[TrumaSensorDescription, ...] = (
             else s.starter_battery_voltage / 10.0
         ),
     ),
+    # The duration beside WaterHeating.FasterHeatingMode, in seconds. Whether
+    # it counts down or states how long the mode was configured for is not
+    # known -- the reverse-engineered schema says "duration in seconds" and
+    # nothing else -- so it is reported raw and filed as diagnostic rather
+    # than dressed up as a timer.
+    TrumaSensorDescription(
+        key="faster_water_heating_time",
+        translation_key="faster_water_heating_time",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        # No state class: until it is known whether this counts down, a
+        # long-term statistic of it would mean nothing.
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda s: s.water_faster_heating_time,
+    ),
     TrumaSensorDescription(
         key="leisure_battery_voltage",
         translation_key="leisure_battery_voltage",
@@ -166,6 +182,7 @@ OPTIONAL_SENSOR_PARAM = {
     "grey_water_level": "GreyWater.Level",
     "starter_battery_voltage": "VBat.Voltage",
     "leisure_battery_voltage": "L1Bat.Voltage",
+    "faster_water_heating_time": "WaterHeating.FasterHeatingModeTime",
 }
 
 

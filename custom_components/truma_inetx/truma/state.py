@@ -69,6 +69,8 @@ PARAM_VALIDATION = {
     "AirCirculation.Active": [0, 1],
     "WaterHeating.Mode": [0, 1, 2],
     "WaterHeating.Active": [0, 1],
+    "WaterHeating.BoostMode": [0, 1],
+    "WaterHeating.FasterHeatingMode": [0, 1],
     "EnergySrc.DieselLevel": [0, 1],
     "EnergySrc.ElectricLevel": [0, 1, 2],
     "Switches.FreshWaterPump": [0, 1],
@@ -92,6 +94,9 @@ _TOPIC_PARAM_MAP = {
     ("WaterHeating", "Mode"): "water_mode",
     ("WaterHeating", "Active"): "water_active",
     ("WaterHeating", "Temp"): "water_current_temp",
+    ("WaterHeating", "BoostMode"): "water_boost",
+    ("WaterHeating", "FasterHeatingMode"): "water_faster_heating",
+    ("WaterHeating", "FasterHeatingModeTime"): "water_faster_heating_time",
     ("EnergySrc", "DieselLevel"): "diesel_level",
     ("EnergySrc", "ElectricLevel"): "electric_level",
     ("EnergySrc", "GasLevel"): "gas_level",
@@ -131,6 +136,15 @@ class TrumaState:
     water_mode: Optional[int] = None
     water_active: Optional[int] = None
     water_current_temp: Optional[int] = None
+    # The panel's two ways of putting the water first, from the
+    # reverse-engineered schema in daaaaan/truma-inetx-ble: both documented as
+    # 0/1 and nothing more, with the timed one carrying a duration in seconds
+    # beside it. Which of the two the panel's "boost" writes is unmeasured, so
+    # both are carried and each entity waits for its own parameter -- a vehicle
+    # that reports neither is given neither.
+    water_boost: Optional[int] = None
+    water_faster_heating: Optional[int] = None
+    water_faster_heating_time: Optional[int] = None  # seconds
 
     # Energy
     diesel_level: Optional[int] = None
@@ -381,6 +395,9 @@ class TrumaState:
                 "active": self.water_active,
                 "active_name": water_active_name,
                 "current_temp_c": self.wire_to_celsius(self.water_current_temp),
+                "boost": self.water_boost,
+                "faster_heating": self.water_faster_heating,
+                "faster_heating_time_s": self.water_faster_heating_time,
             }
         else:
             water_heating = None

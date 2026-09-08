@@ -17,6 +17,12 @@
       "diesel": {
         "default": "mdi:fuel"
       },
+      "faster_water_heating": {
+        "default": "mdi:water-boiler"
+      },
+      "water_boost": {
+        "default": "mdi:water-thermometer"
+      },
       "water_pump": {
         "default": "mdi:water-pump"
       }

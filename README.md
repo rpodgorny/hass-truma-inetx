@@ -88,6 +88,9 @@ and clears the issue on the next successful connect.
 | Fresh water | `sensor` | % — only where the vehicle has a tank sensor |
 | Grey water | `sensor` | % — only where the vehicle has a tank sensor |
 | Fresh water pump | `switch` | Only where the vehicle has one |
+| Water boost | `switch` | `WaterHeating.BoostMode`. Only where the heater reports it |
+| Faster water heating | `switch` | `WaterHeating.FasterHeatingMode`. Only where the heater reports it |
+| Faster water heating time | `sensor` | Diagnostic, seconds — the duration beside it. Only where the heater reports it |
 | Starter battery | `sensor` | V — only where something reports `VBat.Voltage` |
 | Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
 | Flame status | `sensor` | Diagnostic, disabled by default — the raw `System.FlameStatus` value |
@@ -114,6 +117,16 @@ gas/electric Combi, switching the electric element off was measured turning the
 gas source on by itself. A control over something the appliance also drives
 would fight it and flap, so the reading reflects the heater's choice rather
 than pretending to make it.
+
+The two water-priority switches are the panel's way of putting the burner's
+whole output into the boiler. Which of them the panel's own button writes is
+not known: the reverse-engineered schema behind this integration lists
+`WaterHeating.BoostMode` and `WaterHeating.FasterHeatingMode` as separate
+parameters, both 0/1, the second with a duration in seconds beside it, and no
+dump from a vehicle has shown either yet. Both are therefore offered and each
+waits for its own parameter, so a heater that reports neither is given neither.
+If yours shows one of them, a diagnostics download naming it would settle the
+question — see issue #7.
 
 The flame status sensor exists because nothing published says what
 `System.FlameStatus` means. It takes 0, 1 and 2; the binary sensor above has to

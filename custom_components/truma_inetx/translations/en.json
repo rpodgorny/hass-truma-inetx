@@ -70,6 +70,9 @@
       "current_temp": {
         "name": "Room temperature"
       },
+      "faster_water_heating_time": {
+        "name": "Faster water heating time"
+      },
       "flame_status": {
         "name": "Flame status"
       },
@@ -98,6 +101,12 @@
     "switch": {
       "diesel": {
         "name": "Diesel burner"
+      },
+      "faster_water_heating": {
+        "name": "Faster water heating"
+      },
+      "water_boost": {
+        "name": "Water boost"
       },
       "water_pump": {
         "name": "Fresh water pump"

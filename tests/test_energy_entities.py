@@ -91,6 +91,7 @@ def _load():
         EntityCategory=_EntityCategory,
         UnitOfElectricPotential=types.SimpleNamespace(VOLT="V"),
         UnitOfTemperature=types.SimpleNamespace(CELSIUS="°C"),
+        UnitOfTime=types.SimpleNamespace(SECONDS="s"),
     )
     _mod("homeassistant.helpers", __path__=[])
     _mod("homeassistant.helpers.device_registry", DeviceInfo=dict)
@@ -105,7 +106,7 @@ def _load():
         SensorEntity=object,
         SensorEntityDescription=_EntityDescription,
         SensorDeviceClass=types.SimpleNamespace(
-            TEMPERATURE="temperature", VOLTAGE="voltage"
+            TEMPERATURE="temperature", VOLTAGE="voltage", DURATION="duration"
         ),
         SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement"),
     )
