@@ -249,16 +249,20 @@ script — run one directly, or all of them:
 ```bash
 python3 tests/test_pairing_rotation.py            # pairing address rotation
 python3 tests/test_pairing_transport_dispatch.py  # bonding uses the transport it has
-python3 tests/test_panel2_discovery.py            # a renamed panel is still offered
 python3 tests/test_device_from_bluez.py           # BLEDevice built from BlueZ's object
 python3 tests/test_no_proxy_issue.py              # the "nothing can reach it" repair
 python3 tests/test_water_entities.py              # water entities and write addressing
 ```
 
-Two of them build real protocol frames and parse them back rather than trusting
-a stub to be faithful, so they need `cbor2` — nothing else:
+The remaining three drive real code that imports a library, so they need it
+installed — `voluptuous` for the config flow's schema, `cbor2` for the two that
+build real protocol frames and parse them back rather than trusting a stub to
+be faithful:
 
 ```bash
+pip install voluptuous
+python3 tests/test_panel2_discovery.py            # a renamed panel is still offered
+
 pip install cbor2==5.6.5
 python3 tests/test_param_discovery.py             # startup registration + discovery
 python3 tests/test_measure_request.py             # asking the tanks to measure

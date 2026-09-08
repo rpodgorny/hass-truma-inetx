@@ -35,10 +35,13 @@ jobs:
           python-version: "3.12"
       - run: python3 tests/test_pairing_rotation.py
       - run: python3 tests/test_pairing_transport_dispatch.py
-      - run: python3 tests/test_panel2_discovery.py
       - run: python3 tests/test_device_from_bluez.py
       - run: python3 tests/test_no_proxy_issue.py
       - run: python3 tests/test_water_entities.py
+      # The config flow builds its voluptuous schema at import time, and this
+      # test drives the real flow rather than a stub of it.
+      - run: pip install voluptuous
+      - run: python3 tests/test_panel2_discovery.py
       # The tests that need the protocol library: they build real frames and
       # parse them back rather than trusting a stub to be faithful.
       - run: pip install cbor2==5.6.5
