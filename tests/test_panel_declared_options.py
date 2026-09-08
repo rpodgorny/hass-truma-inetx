@@ -28,7 +28,10 @@ What it pins:
    Combi 6 E), so only the values cross over,
 4. a write is validated against the panel's enum where there is one, so a mode
    this heater really has stops being rejected by our own table,
-5. and off is always offered, whatever the panel says.
+5. off is always offered, whatever the panel says,
+6. and the electric select is not created at all until the vehicle reports an
+   electric element -- a Combi D has none, and its panel never mentions the
+   parameter.
 
 Run: ``python3 tests/test_panel_declared_options.py``
 """
@@ -92,6 +95,9 @@ def _load():
     class _Coordinator:
         def __class_getitem__(cls, _item):
             return cls
+
+        def __init__(self, coordinator=None) -> None:
+            self.coordinator = coordinator
 
     _mod("homeassistant.helpers.update_coordinator",
          DataUpdateCoordinator=_Coordinator, CoordinatorEntity=_Coordinator)
@@ -253,6 +259,78 @@ def test_allowed_values_reports_values_never_names() -> None:
 
     assert state.allowed_values("WaterHeating", "Mode") == [0, 1, 2]
     assert state.allowed_values("WaterHeating", "Nothing") is None
+
+
+class _FakeCoordinator:
+    """Enough coordinator for the select platform's setup to run."""
+
+    unique_id = "Truma iNetX-FFB4D1"
+
+    def __init__(self, state) -> None:
+        self.data = state
+        self._listeners: list = []
+        coordinator = self
+
+        class _Entry:
+            runtime_data = coordinator
+
+            @staticmethod
+            def async_on_unload(_unsub) -> None:
+                pass
+
+        self.config_entry = _Entry()
+        self.entry = _Entry()
+
+    def async_add_listener(self, cb):
+        self._listeners.append(cb)
+        return lambda: self._listeners.remove(cb)
+
+    def report(self, topic: str, param: str, value: int) -> None:
+        """Deliver a parameter the way a decoded frame would."""
+        self.data.update(topic, param, value)
+        for cb in list(self._listeners):
+            cb()
+
+
+def _setup_selects(coordinator) -> list:
+    """Run the real platform setup, collecting what it creates."""
+    made: list = []
+    import asyncio
+
+    asyncio.run(
+        SELECT.async_setup_entry(None, coordinator.entry, lambda new: made.extend(new))
+    )
+    return made
+
+
+def test_the_electric_select_waits_for_an_electric_element() -> None:
+    """Measured on a Combi D van: the panel never mentions ElectricLevel.
+
+    That select was offering off / 900 W / 1800 W against hardware that has
+    none of them, which reads as a broken integration rather than as absent
+    hardware -- the same reasoning the water entities already follow.
+    """
+    coordinator = _FakeCoordinator(STATE.TrumaState())
+    made = _setup_selects(coordinator)
+
+    assert [type(entity).__name__ for entity in made] == ["TrumaWaterModeSelect"], made
+
+    # A heater that has the element says so, and then it appears.
+    coordinator.report("EnergySrc", "ElectricLevel", 0)
+    assert [type(entity).__name__ for entity in made] == [
+        "TrumaWaterModeSelect",
+        "TrumaElectricLevelSelect",
+    ], made
+
+    # ...and only once, however many frames follow.
+    coordinator.report("EnergySrc", "ElectricLevel", 1)
+    assert len(made) == 2, made
+
+
+def test_water_heating_is_not_gated_on_anything() -> None:
+    """Every vehicle this runs on has water heating; it is the heater itself."""
+    made = _setup_selects(_FakeCoordinator(STATE.TrumaState()))
+    assert len(made) == 1
 
 
 def _main() -> None:

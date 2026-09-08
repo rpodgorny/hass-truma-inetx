@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
-from .entity import TrumaEntity
+from .entity import TrumaEntity, async_add_when_reported
 
 # Entities are coordinator-driven and have no update() method, so Home
 # Assistant would create no semaphore anyway; stated explicitly.
@@ -49,8 +49,16 @@ async def async_setup_entry(
 ) -> None:
     """Set up Truma select entities."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        [TrumaWaterModeSelect(coordinator), TrumaElectricLevelSelect(coordinator)]
+    async_add_entities([TrumaWaterModeSelect(coordinator)])
+    # The supplemental electric element is an option, not standard: a Combi D
+    # has none, and its panel does not describe EnergySrc.ElectricLevel at all
+    # (measured on a Combi D van, whose select was offering off / 900 W /
+    # 1800 W against hardware that cannot do any of them). The parameter
+    # arriving is the evidence the element exists.
+    async_add_when_reported(
+        coordinator,
+        async_add_entities,
+        {"EnergySrc.ElectricLevel": lambda: TrumaElectricLevelSelect(coordinator)},
     )
 
 

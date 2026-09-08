@@ -79,7 +79,7 @@ and clears the issue on the next successful connect.
 | Internal temperature | `sensor` | °C |
 | Supply voltage | `sensor` | V |
 | Water heating | `select` | Off / 40 °C / 60 °C / 70 °C — the steps the panel offers |
-| Electric heating | `select` | Supplemental electric element: off / 900 W / 1800 W — the steps the panel offers |
+| Electric heating | `select` | Supplemental electric element: off / 900 W / 1800 W — the steps the panel offers. Only where the vehicle has the element |
 | Diesel burner | `switch` | |
 | Fan level | `number` | 0–10 |
 | Flame | `binary_sensor` | Burner currently firing |
@@ -96,10 +96,18 @@ the full list where it describes nothing. The panel's own names for the values
 are never shown: they arrive in the panel's display language, and the labels
 here stay translatable.
 
-The last three are created the first time the hardware behind them reports a
-value, rather than up front: most vehicles have none of it, and an entity that
-is permanently unknown because the hardware does not exist looks exactly like
-one that is unknown because the integration is broken.
+The water entities and the electric select are created the first time the
+hardware behind them reports a value, rather than up front: most vehicles have
+none of it — a Combi D has no electric element and its panel never mentions the
+parameter — and an entity that is permanently unknown because the hardware does
+not exist looks exactly like one that is unknown because the integration is
+broken.
+
+On a vehicle that already had the electric select before this became
+conditional, Home Assistant keeps the old entity in its registry and shows it
+as unavailable. Deleting it once from the device page is the only cleanup; the
+integration does not remove entities by itself, because a parameter that has
+not been reported *yet* is not the same as hardware that does not exist.
 
 Updates are pushed as the panel sends them (roughly 25 frames/minute), not
 polled. The tank levels are the exception. A tank sensor answers with the
