@@ -63,6 +63,11 @@ PARAM_VALIDATION = {
     "Switches.FreshWaterPump": [0, 1],
 }
 
+# The keys a parameter's own description arrives under, alongside "tn"/"pn"/
+# "v". Panels send them on plain value updates as well as in the answer to a
+# discovery request, so both paths feed TrumaState.learn_param().
+_PARAM_META_KEYS = ("type", "perm", "avail", "min", "max")
+
 _TOPIC_PARAM_MAP = {
     ("RoomClimate", "Mode"): "room_mode",
     ("RoomClimate", "TgtTemp"): "room_target_temp",
@@ -145,6 +150,18 @@ class TrumaState:
     # Raw storage for debugging
     raw_params: dict = field(default_factory=dict)
 
+    # "Topic.Param" -> what the panel says the parameter *is*, as opposed to
+    # what it currently reads: its range, and for an enum the panel's own name
+    # for every value. This is the only documentation of the protocol that
+    # exists -- Truma publishes none -- and it arrives free, beside each value.
+    # Issue #15 is what happens without it: System.FlameStatus takes 0, 1 and 2
+    # on a Combi 6 E, is modelled as a binary sensor, and whatever 2 means is
+    # folded into on or off because nobody knows which it is.
+    #
+    # Deliberately not wired into any entity: it is evidence to read in a
+    # diagnostics download, not a schema to start behaving differently on.
+    param_meta: dict = field(default_factory=dict)
+
     # Every source address that has sent us a frame. Parameter discovery is
     # addressed device by device (see DEVICE_SEED), and a device that has
     # spoken once is proof its address exists -- which matters because
@@ -187,6 +204,57 @@ class TrumaState:
         field_name = _TOPIC_PARAM_MAP.get((topic, param))
         if field_name and isinstance(v, int):
             setattr(self, field_name, v)
+
+    def learn_param(self, topic: str, param: str, entry: Any) -> bool:
+        """Record what the panel says about a parameter. True if that is new.
+
+        Every value the panel sends is wrapped in a description of the
+        parameter carrying it: ``type``, ``perm`` (writable?), ``avail``,
+        ``min``, ``max``, and ``enum`` -- a list of ``{"n": name, "a":
+        available, "v": value}`` in which the panel names each value itself.
+        All of it used to be dropped, which is why the meaning of a value has
+        had to be measured on somebody's vehicle instead of read off the bus.
+
+        ``a`` is per-installation, not per-protocol: a heater without a diesel
+        burner still gets an enum that names the diesel value, marked
+        unavailable. That distinction is worth keeping -- it says which values
+        a given vehicle can actually produce.
+        """
+        if not isinstance(entry, dict):
+            return False
+
+        meta: dict = {
+            key: entry[key] for key in _PARAM_META_KEYS if entry.get(key) is not None
+        }
+
+        elements = entry.get("enum")
+        if isinstance(elements, list):
+            names: dict = {}
+            unavailable: list = []
+            for element in elements:
+                if not isinstance(element, dict):
+                    continue
+                value, name = element.get("v"), element.get("n")
+                if not isinstance(value, int) or name is None:
+                    continue
+                names[str(value)] = str(name)
+                if not element.get("a", True):
+                    unavailable.append(str(value))
+            if names:
+                meta["enum"] = names
+            if unavailable:
+                meta["enum_unavailable"] = unavailable
+
+        if not meta:
+            return False
+
+        # Merge rather than replace. A plain value update may describe less
+        # than the answer to a discovery request did, and dropping the enum
+        # again on the next frame would defeat the whole point.
+        known = self.param_meta.setdefault(f"{topic}.{param}", {})
+        changed = any(known.get(key) != value for key, value in meta.items())
+        known.update(meta)
+        return changed
 
     @staticmethod
     def wire_to_celsius(wire_value: Optional[int]) -> Optional[float]:

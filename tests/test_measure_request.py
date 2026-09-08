@@ -227,6 +227,9 @@ class _Coord:
     _request_measurements = COORD.TrumaCoordinator._request_measurements
     _finish_startup = COORD.TrumaCoordinator._finish_startup
     _on_frame = COORD.TrumaCoordinator._on_frame
+    # _on_frame keeps whatever the panel says a parameter is, beside its
+    # value; nothing here reads it, but the frames still travel through it.
+    _learn_param = COORD.TrumaCoordinator._learn_param
 
 
 class _StartupCoord(_Coord):

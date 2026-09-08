@@ -725,6 +725,8 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         # Info message -> single parameter update.
         if control == 0x03 and sub_type == 0x00:
             tn, pn, v = cbor.get("tn"), cbor.get("pn"), cbor.get("v")
+            if tn and pn:
+                self._learn_param(tn, pn, cbor)
             if tn and pn and v is not None:
                 self._state.update(tn, pn, v, parsed.get("src"))
                 self.async_set_updated_data(self._state)
@@ -740,10 +742,34 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                     if not isinstance(param, dict):
                         continue
                     pn, v = param.get("pn"), param.get("v")
+                    if tn and pn:
+                        self._learn_param(tn, pn, param)
                     if tn and pn and v is not None:
                         self._state.update(tn, pn, v, parsed.get("src"))
             self.async_set_updated_data(self._state)
             return
+
+    def _learn_param(self, topic: str, param: str, entry: dict) -> None:
+        """Keep the panel's description of a parameter, and log it once.
+
+        The panel names its own enum values (see TrumaState.learn_param), so a
+        question like issue #15 -- what does System.FlameStatus == 2 mean on a
+        Combi 6 E, when the integration models it as on/off -- is answered by a
+        debug log or a diagnostics download rather than by asking somebody to
+        watch their panel while their heater ignites.
+
+        Logged only when the description changes, which in practice means once
+        per parameter per installation: the state object outlives a reconnect,
+        and a panel describes a parameter the same way every time.
+        """
+        if self._state.learn_param(topic, param, entry):
+            LOGGER.debug(
+                "Truma %s: panel describes %s.%s as %s",
+                self.unique_id,
+                topic,
+                param,
+                self._state.param_meta.get(f"{topic}.{param}"),
+            )
 
     @callback
     def _mark_disconnected(self) -> None:

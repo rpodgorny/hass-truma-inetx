@@ -47,3 +47,4 @@ jobs:
       - run: pip install cbor2==5.6.5
       - run: python3 tests/test_param_discovery.py
       - run: python3 tests/test_measure_request.py
+      - run: python3 tests/test_param_meta.py

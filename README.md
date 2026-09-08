@@ -223,6 +223,14 @@ the last update succeeded, and the full decoded panel state — including
 `seen_devices`, every bus address the integration has heard from, which is the
 evidence for what is actually on a given vehicle's bus.
 
+The state also carries `param_meta`: what the panel says each parameter *is*,
+as opposed to what it currently reads — its range, whether it can be written,
+and for an enum the panel's own name for every value, with the ones this
+vehicle cannot produce marked. Truma documents none of the protocol, but the
+panel describes it in every frame, so a download answers "what does this value
+mean" without anyone having to watch their heater and write it down. The same
+descriptions are logged, once each, at debug level.
+
 The BLE address, the panel's name and the persisted app identity (`muid` /
 `uuid`) are redacted: the address is a private address that still pins the panel
 to a location, and the identity is what the panel bonds against. The panel state
@@ -254,10 +262,10 @@ python3 tests/test_no_proxy_issue.py              # the "nothing can reach it" r
 python3 tests/test_water_entities.py              # water entities and write addressing
 ```
 
-The remaining three drive real code that imports a library, so they need it
-installed — `voluptuous` for the config flow's schema, `cbor2` for the two that
-build real protocol frames and parse them back rather than trusting a stub to
-be faithful:
+The remaining four drive real code that imports a library, so they need it
+installed — `voluptuous` for the config flow's schema, `cbor2` for the three
+that build real protocol frames and parse them back rather than trusting a stub
+to be faithful:
 
 ```bash
 pip install voluptuous
@@ -266,6 +274,7 @@ python3 tests/test_panel2_discovery.py            # a renamed panel is still off
 pip install cbor2==5.6.5
 python3 tests/test_param_discovery.py             # startup registration + discovery
 python3 tests/test_measure_request.py             # asking the tanks to measure
+python3 tests/test_param_meta.py                  # what the panel says a value means
 ```
 
 ## Credits and licensing
