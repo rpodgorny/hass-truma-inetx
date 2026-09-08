@@ -21,7 +21,8 @@ What it pins:
 3. the measured destination table still wins for every topic it names, so this
    changes nothing for the heater and the panel,
 4. a water write goes to whoever reported the topic, falling back to the panel
-   while nothing has,
+   while nothing has -- and so does a cooling write, which used to go to the
+   heater and be swallowed there (#10),
 5. the pump only accepts 0 and 1,
 6. an entity is created when -- and only when -- its parameter is reported,
    and only once,
@@ -49,6 +50,8 @@ BROKER = 0x0000
 # The electrical block, as measured on a Weinsberg and on a second vehicle.
 # Named here only to prove nothing in the source needs to name it.
 BOARD = 0x0405
+# The roof air conditioner on the Combi 6 E of issue #10, for the same reason.
+ROOF_AC = 0x0406
 
 
 def _load_state():
@@ -188,8 +191,33 @@ def test_the_measured_table_still_wins() -> None:
 
     assert s.get_command_dest("RoomClimate") == PANEL
     assert s.get_command_dest("AirHeating") == HEATER
-    for topic in ("WaterHeating", "AirCirculation", "EnergySrc", "AirCooling"):
+    for topic in ("WaterHeating", "AirCirculation", "EnergySrc"):
         assert s.get_command_dest(topic) == STATE.COMMAND_DEST[topic]
+
+
+def test_cooling_goes_to_the_air_conditioner_not_the_heater() -> None:
+    """#10: AirCooling was addressed to the Combi, which cannot cool.
+
+    Measured on a Combi 6 E with a Dometic FreshJet 2200: the write to the
+    heater is acknowledged by the transport and then silently dropped, and the
+    same write to the roof unit's own address starts it cooling. The unit's
+    address is 0x0406 there, and naming it here would break the next vehicle,
+    so what is pinned is that the *topic's reporter* is used.
+    """
+    s = STATE.TrumaState()
+    # Nothing has reported cooling yet: fall back to the panel, as for any
+    # other unknown topic. Never the heater.
+    assert s.get_command_dest("AirCooling") == PANEL
+    assert "AirCooling" not in STATE.COMMAND_DEST
+
+    s.update("AirCooling", "TgtTemp", 170, ROOF_AC)
+    assert s.get_command_dest("AirCooling") == ROOF_AC, (
+        "cooling is still addressed to the heater, which swallows it"
+    )
+
+    # The heater may well relay the topic; that does not make it the owner.
+    # And no fixed destination anywhere may be the roof unit's address either.
+    assert ROOF_AC not in STATE.COMMAND_DEST.values()
 
 
 def test_a_water_write_goes_to_whoever_owns_the_topic() -> None:

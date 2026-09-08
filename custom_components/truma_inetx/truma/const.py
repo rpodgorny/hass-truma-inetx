@@ -75,17 +75,6 @@ TOPIC_BATCHES = [
     ["System", "Resources", "PowerMgmt"],
 ]
 
-# Command routing: topic -> destination device
-COMMAND_DEST = {
-    "RoomClimate": DEV_PANEL,
-    "AirHeating": DEV_HEATER,
-    "WaterHeating": DEV_HEATER,
-    "AirCirculation": DEV_HEATER,
-    "AirCooling": DEV_HEATER,
-    "EnergySrc": DEV_HEATER,
-    # Default to panel for unknown topics
-}
-
 ADAPTER_PATH = "/org/bluez/hci1"
 IDENTITY_FILE = "/data/dbus-truma/.truma_identity.json"
 BLUEZ = "org.bluez"

@@ -38,13 +38,24 @@ class ElectricLevel(IntEnum):
     W1800 = 2  # 1800W
 
 
-# Command routing: topic -> destination device address
+# Command routing: topic -> destination device address.
+#
+# Only topics whose owner really is fixed belong here. Everything else is
+# addressed to whoever reported it; see get_command_dest.
+#
+# AirCooling used to be in this table, addressed to the heater -- which on the
+# vehicles that actually have cooling is not the device that does it. Measured
+# on a Combi 6 E with a Dometic FreshJet 2200 at 0x0406 (#10): a write of
+# AirCooling.TgtTemp to 0x0201 is acknowledged by the transport and then
+# silently dropped -- no error, nothing cools -- while the same write to
+# 0x0406 is acknowledged and the roof unit starts. Hard-coding 0x0406 would be
+# as wrong as hard-coding the heater, because a device is renumbered when it is
+# re-paired, so the topic's own reporter is the only durable answer.
 COMMAND_DEST = {
     "RoomClimate": 0x0101,    # panel
     "AirHeating": 0x0201,     # heater
     "WaterHeating": 0x0201,   # heater
     "AirCirculation": 0x0201, # heater
-    "AirCooling": 0x0201,     # heater
     "EnergySrc": 0x0201,      # heater
 }
 
