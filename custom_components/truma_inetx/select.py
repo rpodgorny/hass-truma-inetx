@@ -14,7 +14,12 @@ from .entity import TrumaEntity, async_add_when_reported
 PARALLEL_UPDATES = 0
 
 WATER_OFF = "off"
-_WATER_MODE_TO_LABEL = {0: "40 °C", 1: "60 °C", 2: "70 °C"}
+# Both halves on purpose (#12). A panel that shows Eco / Comfort / Hot and a
+# panel that shows 40 / 60 / 70 are the same three steps, so the name matches
+# what is written on the vehicle and the temperature says what the name means
+# to anyone whose panel does not use words. Our own text, not the panel's --
+# see _offered.
+_WATER_MODE_TO_LABEL = {0: "Eco (40 °C)", 1: "Comfort (60 °C)", 2: "Hot (70 °C)"}
 WATER_OPTIONS = {WATER_OFF: None} | {
     label: value for value, label in _WATER_MODE_TO_LABEL.items()
 }
@@ -30,8 +35,10 @@ def _offered(state, topic: str, param: str, labels: dict) -> list:
     it is the authority on which steps exist. Its *names* for them are not
     used: they arrive in the panel's display language, and the same three water
     steps come back as ``40 / 60 / 70`` on one vehicle and as Eco / Comfort /
-    Hot on another (#12). The labels stay ours, translatable and stable; only
-    which of them to show is the panel's call.
+    Hot on another (#12). Taking them as they come would make the option
+    strings -- which automations match on -- differ per vehicle and per panel
+    language. So the labels stay ours and carry both halves; only which of them
+    to show is the panel's call.
 
     A panel that describes nothing gets the full list, which is what every
     vehicle was offered before this existed.
@@ -63,7 +70,7 @@ async def async_setup_entry(
 
 
 class TrumaWaterModeSelect(TrumaEntity, SelectEntity):
-    """Water heating mode (off / 40 / 60 / 70 °C)."""
+    """Water heating mode (off / Eco / Comfort / Hot)."""
 
     _attr_translation_key = "water_mode"
 

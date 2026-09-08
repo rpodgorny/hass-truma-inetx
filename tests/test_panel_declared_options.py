@@ -194,14 +194,15 @@ def test_a_value_we_have_no_name_for_is_left_out_and_off_stays() -> None:
 def test_the_water_steps_come_from_the_panel_but_the_words_do_not() -> None:
     """#12: this panel says 40/60/70, a Combi 6 E says Eco/Comfort/Hot.
 
-    Either way the select shows our own labels -- the panel's names are in the
-    panel's language, and a select option is user-facing text.
+    Either way the select shows our own labels, which carry both halves -- the
+    panel's own names are in the panel's language, and a select option is
+    user-facing text automations match on.
     """
     state = STATE.TrumaState()
     _described(state, "WaterHeating", "Mode", {0: "Eco", 1: "Comfort", 2: "Hot"})
 
     options = SELECT.TrumaWaterModeSelect.options.fget(_Holder(state))
-    assert options == ["off", "40 °C", "60 °C", "70 °C"], options
+    assert options == ["off", "Eco (40 °C)", "Comfort (60 °C)", "Hot (70 °C)"], options
 
 
 def test_a_step_the_vehicle_does_not_have_is_not_offered() -> None:
@@ -223,7 +224,7 @@ def test_a_step_the_vehicle_does_not_have_is_not_offered() -> None:
 def test_a_silent_panel_leaves_both_selects_as_they_were() -> None:
     state = STATE.TrumaState()
     assert SELECT.TrumaWaterModeSelect.options.fget(_Holder(state)) == [
-        "off", "40 °C", "60 °C", "70 °C",
+        "off", "Eco (40 °C)", "Comfort (60 °C)", "Hot (70 °C)",
     ]
     assert SELECT.TrumaElectricLevelSelect.options.fget(_Holder(state)) == [
         "off", "900 W", "1800 W",

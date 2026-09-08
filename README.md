@@ -78,7 +78,7 @@ and clears the issue on the next successful connect.
 | Water temperature | `sensor` | °C |
 | Internal temperature | `sensor` | °C |
 | Supply voltage | `sensor` | V |
-| Water heating | `select` | Off / 40 °C / 60 °C / 70 °C — the steps the panel offers |
+| Water heating | `select` | Off / Eco (40 °C) / Comfort (60 °C) / Hot (70 °C) — the steps the panel offers |
 | Electric heating | `select` | Supplemental electric element: off / 900 W / 1800 W — the steps the panel offers. Only where the vehicle has the element |
 | Diesel burner | `switch` | Only where the heater has a diesel burner |
 | Gas | `binary_sensor` | Whether the heater is drawing on gas. Read-only — the heater moves this itself. Only where it burns gas |
@@ -122,6 +122,12 @@ describes the parameter with the same type code it gives `AirCirculation.Active`
 and the other `Active` fields, which are the protocol's OFF / ACTIVE / IDLE
 triple — good evidence, not proof. Watching the raw value through an ignition
 is what would settle it.
+
+The water select's options changed in 0.7.1b4, from `40 °C / 60 °C / 70 °C` to
+`Eco (40 °C) / Comfort (60 °C) / Hot (70 °C)`, so that the name matches what the
+panel writes on the vehicle and the temperature says what the name means. An
+automation or script that calls `select.select_option` with one of the old
+strings has to be updated; the values on the wire are unchanged.
 
 On a vehicle that already had the electric select or the diesel switch before
 they became conditional, Home Assistant keeps the old entity in its registry
