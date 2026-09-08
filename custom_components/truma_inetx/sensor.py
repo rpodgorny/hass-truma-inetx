@@ -101,12 +101,45 @@ OPTIONAL_SENSORS: tuple[TrumaSensorDescription, ...] = (
         suggested_display_precision=0,
         value_fn=lambda s: s.grey_water_level,
     ),
+    # The vehicle's batteries (#17). Reported by the electrical block, which
+    # most installations do not have, so both wait for their parameter like
+    # the tanks do. Tenths of a volt on the wire: 137 is 13.7 V.
+    TrumaSensorDescription(
+        key="starter_battery_voltage",
+        translation_key="starter_battery_voltage",
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        # One decimal is all the wire carries; the VOLTAGE device class would
+        # otherwise round to whole volts and hide it.
+        suggested_display_precision=1,
+        value_fn=lambda s: (
+            None
+            if s.starter_battery_voltage is None
+            else s.starter_battery_voltage / 10.0
+        ),
+    ),
+    TrumaSensorDescription(
+        key="leisure_battery_voltage",
+        translation_key="leisure_battery_voltage",
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        suggested_display_precision=1,
+        value_fn=lambda s: (
+            None
+            if s.leisure_battery_voltage is None
+            else s.leisure_battery_voltage / 10.0
+        ),
+    ),
 )
 
 # Which reported parameter proves the hardware behind each optional sensor.
 OPTIONAL_SENSOR_PARAM = {
     "fresh_water_level": "FreshWater.Level",
     "grey_water_level": "GreyWater.Level",
+    "starter_battery_voltage": "VBat.Voltage",
+    "leisure_battery_voltage": "L1Bat.Voltage",
 }
 
 

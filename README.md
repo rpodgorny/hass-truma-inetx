@@ -80,13 +80,16 @@ and clears the issue on the next successful connect.
 | Supply voltage | `sensor` | V |
 | Water heating | `select` | Off / 40 °C / 60 °C / 70 °C — the steps the panel offers |
 | Electric heating | `select` | Supplemental electric element: off / 900 W / 1800 W — the steps the panel offers. Only where the vehicle has the element |
-| Diesel burner | `switch` | |
+| Diesel burner | `switch` | Only where the heater has a diesel burner |
+| Gas | `binary_sensor` | Whether the heater is drawing on gas. Read-only — the heater moves this itself. Only where it burns gas |
 | Fan level | `number` | 0–10 |
 | Flame | `binary_sensor` | Burner currently firing |
 | BLE connection | `binary_sensor` | Diagnostic — is the panel connected |
 | Fresh water | `sensor` | % — only where the vehicle has a tank sensor |
 | Grey water | `sensor` | % — only where the vehicle has a tank sensor |
 | Fresh water pump | `switch` | Only where the vehicle has one |
+| Starter battery | `sensor` | V — only where something reports `VBat.Voltage` |
+| Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
 
 The climate entity's mode list and the two selects' options are not fixed. The
 panel enumerates each parameter for the vehicle it is installed in — a van with no air conditioner
@@ -96,18 +99,27 @@ the full list where it describes nothing. The panel's own names for the values
 are never shown: they arrive in the panel's display language, and the labels
 here stay translatable.
 
-The water entities and the electric select are created the first time the
-hardware behind them reports a value, rather than up front: most vehicles have
-none of it — a Combi D has no electric element and its panel never mentions the
-parameter — and an entity that is permanently unknown because the hardware does
-not exist looks exactly like one that is unknown because the integration is
-broken.
+Everything marked "only where" is created the first time the hardware behind it
+reports a value, rather than up front: vehicles differ far more than the
+protocol does — a Combi D has no electric element and its panel never mentions
+the parameter, a gas/electric Combi has no diesel burner, most vans have no
+tanks and no electrical block — and an entity that is permanently unknown
+because the hardware does not exist looks exactly like one that is unknown
+because the integration is broken.
 
-On a vehicle that already had the electric select before this became
-conditional, Home Assistant keeps the old entity in its registry and shows it
-as unavailable. Deleting it once from the device page is the only cleanup; the
-integration does not remove entities by itself, because a parameter that has
-not been reported *yet* is not the same as hardware that does not exist.
+Gas is deliberately a sensor and not a switch. `EnergySrc.GasLevel` is
+writable and the write does go through, but the heater writes it too: on a
+gas/electric Combi, switching the electric element off was measured turning the
+gas source on by itself. A control over something the appliance also drives
+would fight it and flap, so the reading reflects the heater's choice rather
+than pretending to make it.
+
+On a vehicle that already had the electric select or the diesel switch before
+they became conditional, Home Assistant keeps the old entity in its registry
+and shows it as unavailable. Deleting it once from the device page is the only
+cleanup; the integration does not remove entities by itself, because a
+parameter that has not been reported *yet* is not the same as hardware that
+does not exist.
 
 Updates are pushed as the panel sends them (roughly 25 frames/minute), not
 polled. The tank levels are the exception. A tank sensor answers with the
@@ -276,6 +288,7 @@ python3 tests/test_pairing_transport_dispatch.py  # bonding uses the transport i
 python3 tests/test_device_from_bluez.py           # BLEDevice built from BlueZ's object
 python3 tests/test_no_proxy_issue.py              # the "nothing can reach it" repair
 python3 tests/test_water_entities.py              # water entities and write addressing
+python3 tests/test_energy_entities.py             # energy sources, batteries, raw flame value
 ```
 
 The remaining five drive real code that imports a library, so they need it

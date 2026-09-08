@@ -94,6 +94,7 @@ _TOPIC_PARAM_MAP = {
     ("WaterHeating", "Temp"): "water_current_temp",
     ("EnergySrc", "DieselLevel"): "diesel_level",
     ("EnergySrc", "ElectricLevel"): "electric_level",
+    ("EnergySrc", "GasLevel"): "gas_level",
     ("System", "FlameStatus"): "flame_status",
     ("Eol", "Vcc12"): "voltage_vcc12",
     ("ErrorReset", "ErrCode"): "error_codes",
@@ -102,6 +103,8 @@ _TOPIC_PARAM_MAP = {
     ("Switches", "FreshWaterPump"): "water_pump",
     ("FreshWater", "Level"): "fresh_water_level",
     ("GreyWater", "Level"): "grey_water_level",
+    ("VBat", "Voltage"): "starter_battery_voltage",
+    ("L1Bat", "Voltage"): "leisure_battery_voltage",
 }
 
 
@@ -132,6 +135,11 @@ class TrumaState:
     # Energy
     diesel_level: Optional[int] = None
     electric_level: Optional[int] = None
+    # Gas is reflected, never commanded (#16). On a gas/electric Combi the
+    # heater moves this itself -- switching the electric element off was
+    # measured turning the gas source on with nothing written from here -- so a
+    # switch modelling it as the user's to own would fight the heater and flap.
+    gas_level: Optional[int] = None
 
     # System
     flame_status: Optional[int] = None
@@ -152,6 +160,14 @@ class TrumaState:
     water_pump: Optional[int] = None
     fresh_water_level: Optional[int] = None
     grey_water_level: Optional[int] = None
+
+    # Vehicle batteries, reported by the electrical block rather than by the
+    # heater: VBat is the starter battery, L1Bat the leisure one (#17). Both
+    # arrive in tenths of a volt -- 137 is 13.7 V -- which is a different scale
+    # from Eol.Vcc12 above, and the reason they are kept as separate fields
+    # rather than folded into the supply-voltage sensor.
+    starter_battery_voltage: Optional[int] = None
+    leisure_battery_voltage: Optional[int] = None
 
     # Metadata
     last_update: float = 0.0
@@ -388,7 +404,11 @@ class TrumaState:
             air_heating = None
 
         # Energy section
-        if self.diesel_level is not None or self.electric_level is not None:
+        if (
+            self.diesel_level is not None
+            or self.electric_level is not None
+            or self.gas_level is not None
+        ):
             diesel_name = (
                 DieselLevel(self.diesel_level).name
                 if self.diesel_level in (0, 1)
@@ -404,6 +424,11 @@ class TrumaState:
                 "diesel_name": diesel_name,
                 "electric": self.electric_level,
                 "electric_name": electric_name,
+                # No name for gas: the panel enumerates DieselLevel as
+                # "Diesel off"/"Diesel on" and nothing has yet shown what it
+                # calls the gas values, so inventing a pair here would be
+                # dressing a guess up as a reading.
+                "gas": self.gas_level,
             }
         else:
             energy = None

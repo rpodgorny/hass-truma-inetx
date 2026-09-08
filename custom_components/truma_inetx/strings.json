@@ -48,6 +48,9 @@
       },
       "flame": {
         "name": "Flame"
+      },
+      "gas": {
+        "name": "Gas"
       }
     },
     "number": {
@@ -75,6 +78,12 @@
       },
       "internal_temp": {
         "name": "Internal temperature"
+      },
+      "leisure_battery_voltage": {
+        "name": "Leisure battery"
+      },
+      "starter_battery_voltage": {
+        "name": "Starter battery"
       },
       "voltage": {
         "name": "Supply voltage"

@@ -292,14 +292,16 @@ def _translation_keys(platform: str) -> set[str]:
     check the table rather than to run it.
     """
     text = (SRC / f"{platform}.py").read_text()
-    return set(re.findall(r'translation_key="([a-z_0-9]+)"', text))
+    # Both spellings: a description's ``translation_key=`` and an entity
+    # class's ``_attr_translation_key =``.
+    return set(re.findall(r'translation_key\s*=\s*"([a-z_0-9]+)"', text))
 
 
 def test_every_new_entity_is_named_and_iconed() -> None:
     strings = json.loads((SRC / "strings.json").read_text())["entity"]
     icons = json.loads((SRC / "icons.json").read_text())["entity"]
 
-    for platform in ("sensor", "switch"):
+    for platform in ("binary_sensor", "number", "select", "sensor", "switch"):
         for key in _translation_keys(platform):
             assert key in strings.get(platform, {}), (
                 f"{platform}.{key} has no name in strings.json"
@@ -323,7 +325,7 @@ def test_optional_sensors_all_declare_what_proves_them() -> None:
     text = (SRC / "sensor.py").read_text()
     block = text[text.index("OPTIONAL_SENSORS"): text.index("async def async_setup_entry")]
     keys = set(re.findall(r'key="([a-z_0-9]+)"', block))
-    mapped = set(re.findall(r'"([a-z_0-9]+)": "[A-Za-z]+\.[A-Za-z]+"', block))
+    mapped = set(re.findall(r'"([a-z_0-9]+)": "[A-Za-z0-9]+\.[A-Za-z0-9]+"', block))
     assert keys == mapped, f"OPTIONAL_SENSOR_PARAM does not cover {keys ^ mapped}"
 
 

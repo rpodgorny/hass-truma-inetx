@@ -3,6 +3,9 @@
     "binary_sensor": {
       "flame": {
         "default": "mdi:fire"
+      },
+      "gas": {
+        "default": "mdi:gas-cylinder"
       }
     },
     "number": {
