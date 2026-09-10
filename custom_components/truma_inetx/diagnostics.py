@@ -39,6 +39,14 @@ async def async_get_config_entry_diagnostics(
         state_dict["seen_devices"] = [
             f"0x{addr:04X}" for addr in sorted(state_dict["seen_devices"])
         ]
+        # device_params is keyed by those same addresses, and json.dumps
+        # renders an int key as bare decimal -- 1539, not 0x0603 -- which then
+        # has to be converted by hand to line up against seen_devices,
+        # topic_source, or anything quoted in an issue. Same form, same reason.
+        state_dict["device_params"] = {
+            f"0x{addr:04X}": params
+            for addr, params in sorted(state_dict["device_params"].items())
+        }
     return {
         "entry": async_redact_data(entry.as_dict(), TO_REDACT),
         "last_update_success": coordinator.last_update_success,

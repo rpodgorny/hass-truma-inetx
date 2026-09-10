@@ -223,6 +223,30 @@ class TrumaState:
     # authority on where a write to it should go.
     topic_source: dict = field(default_factory=dict)
 
+    # The same values as raw_params, kept under the address that sent them:
+    # ``{0x0201: {"AirCirculation.FanLevel": 4}, 0x0406: {...}}``.
+    #
+    # A topic is a message class, not a device. Subscription names topics and
+    # is addressed to the broker, so every device implementing a topic
+    # publishes under it and the only thing telling two publishers apart is
+    # the src address in the frame header. Two instances of one device class
+    # therefore share every key: a Combi and a roof air conditioner both
+    # report AirCirculation.FanLevel, and a pair of gas-bottle sensors at
+    # 0x0603/0x0604 share the whole of GasBtl.
+    #
+    # Flattened into raw_params they overwrite each other, and #9 is what that
+    # looks like on a vehicle: not a merely stale reading, but GasBtl.Name
+    # from one bottle standing beside GasBtl.FillLevelP from the other in the
+    # same record, reading entirely plausibly -- 49 % under the name of the
+    # bottle that is full. Identify goes the same way, because every device on
+    # the bus describes itself under it, so the panel's own name and serial
+    # end up being whichever sensor spoke last.
+    #
+    # raw_params stays as the flat view the entities already read; it is right
+    # wherever only one device reports a topic, which is most of them. This is
+    # the one to read wherever more than one device can answer.
+    device_params: dict = field(default_factory=dict)
+
     def update(
         self, topic: str, param: str, value: Any, src: Optional[int] = None
     ) -> None:
@@ -230,14 +254,19 @@ class TrumaState:
 
         ``src`` is the V3 header's source address, i.e. the device that sent
         this value. It is remembered per topic so a write can be addressed
-        back to it; see :meth:`get_command_dest`.
+        back to it (see :meth:`get_command_dest`), and the value is filed
+        under it as well, so that two devices reporting one topic do not
+        overwrite each other (see :attr:`device_params`).
         """
         self.last_update = time.time()
         self.raw_params[f"{topic}.{param}"] = value
-        # 0 is the message broker, not a device, so it must not be learned as
-        # a write destination.
+        # 0 is the message broker, not a device: it must not be learned as a
+        # write destination, and it owns no parameters either. Both stores are
+        # fed on the same condition, so whatever the flat view holds is always
+        # attributable in the per-device one.
         if isinstance(src, int) and src:
             self.topic_source[topic] = src
+            self.device_params.setdefault(src, {})[f"{topic}.{param}"] = value
 
         # Convert value to int if possible
         v = int(value) if isinstance(value, (int, float)) else value
@@ -245,6 +274,18 @@ class TrumaState:
         field_name = _TOPIC_PARAM_MAP.get((topic, param))
         if field_name and isinstance(v, int):
             setattr(self, field_name, v)
+
+    def device_param(self, addr: int, topic: str, param: str) -> Any:
+        """What one device reports for a parameter, or None if it has not.
+
+        raw_params is last-writer-wins across the whole bus, which is correct
+        only while a single device reports the topic. Where two can -- a
+        Combi's AirCirculation.FanLevel against a roof air conditioner's,
+        anything under GasBtl on a vehicle with two bottle sensors, Identify
+        against every device that has one -- this is the only reading that
+        means what it says.
+        """
+        return self.device_params.get(addr, {}).get(f"{topic}.{param}")
 
     def learn_param(self, topic: str, param: str, entry: Any) -> bool:
         """Record what the panel says about a parameter. True if that is new.
