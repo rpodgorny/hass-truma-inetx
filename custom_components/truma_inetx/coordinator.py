@@ -279,10 +279,14 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                 connected = await self._connect_and_run()
             except Exception as exc:  # noqa: BLE001
                 LOGGER.debug("Truma session ended: %s", exc)
-                # If the attempt never got a link up, banish that address so the
-                # resolver rotates to another advertised RPA next round instead
-                # of hammering a post-pairing phantom (see bt.py). Only a failed
-                # *connect* leaves _last_addr set; a later failure clears it.
+                # If the attempt never got a link up, demote that address so
+                # the resolver rotates to another advertised RPA next round
+                # instead of hammering a post-pairing phantom (see bt.py). It
+                # is a demotion, not a ban: when it is the only route left the
+                # resolver still hands it back, which is what a transient
+                # failure (the panel holding the slot of a just-closed session)
+                # needs. Only a failed *connect* leaves _last_addr set; a later
+                # failure clears it.
                 if self._last_addr:
                     self._avoid.add(self._last_addr)
             finally:
@@ -388,16 +392,16 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             self.hass, self.unique_id, avoid=self._avoid
         )
         if ble_device is None and self._avoid:
-            # Every address we know about has failed to establish. Rather than
-            # stay stuck reporting "not advertising", forget the failures and
-            # start over — the phantom may have cleared, or the panel may have
-            # rotated back to a usable RPA.
+            # Nothing is on air at all, so the grudges are about addresses the
+            # panel no longer uses. Drop them: a set that only ever grew would
+            # keep demoting whatever the panel comes back on. (It cannot be
+            # "everything was avoided" — avoid only demotes, so a reachable
+            # address is always returned; see bt.async_resolve_proxy_device.)
             LOGGER.debug(
-                "Truma %s: all candidates avoided; clearing and retrying",
+                "Truma %s: nothing advertising; forgetting past failures",
                 self.unique_id,
             )
             self._avoid.clear()
-            ble_device = async_resolve_proxy_device(self.hass, self.unique_id)
         if ble_device is None:
             # Silence usually means the opposite of unreachable: BlueZ is
             # already holding a link, so the panel has a central and stops

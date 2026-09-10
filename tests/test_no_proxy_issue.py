@@ -336,8 +336,12 @@ def test_identity_is_last_resort() -> None:
     assert BT.async_resolve_proxy_device(None, PANEL) == f"proxy:{IDENTITY}"
 
 
-def test_avoided_address_is_skipped() -> None:
-    """A banished RPA must not come back as the local fallback either."""
+def test_avoided_address_is_demoted() -> None:
+    """A failed RPA loses to every other candidate, on either transport.
+
+    This is the rotation the avoid set exists for: the post-pairing phantom is
+    the fresher of the two adverts, so without the demotion it wins forever.
+    """
     _set_adverts(
         _Info(name=PANEL, address=RPA, time=2.0),
         _Info(name=PANEL, address=RPA2, time=1.0),
@@ -347,6 +351,54 @@ def test_avoided_address_is_skipped() -> None:
         _ScannerDevice(RPA2, remote=False),
     )
     assert BT.async_resolve_proxy_device(None, PANEL, avoid=[RPA]) == f"local:{RPA2}"
+
+
+def test_avoided_identity_is_still_offered() -> None:
+    """The identity address must survive the avoid set (issue #14).
+
+    It never rotates, so it can never be the post-pairing phantom the set was
+    built for. Excluding it meant one transient failure -- the panel still
+    holding the slot of a just-closed session, say -- erased the only route a
+    host that connects over the identity has, and the host then sat there
+    unreachable until something else cleared the set.
+    """
+    _set_adverts(_Info(name=PANEL, address=IDENTITY))
+    _set_route(_ScannerDevice(IDENTITY, remote=False))
+    assert (
+        BT.async_resolve_proxy_device(None, PANEL, avoid=[IDENTITY])
+        == f"local:{IDENTITY}"
+    )
+
+
+def test_avoided_rpa_loses_to_the_identity() -> None:
+    """A failed RPA must rank below the identity, fresher or not.
+
+    The identity is otherwise the last resort, so the only way it gets tried on
+    a host where it is the working route is by the RPAs demoting themselves.
+    """
+    _set_adverts(
+        _Info(name=PANEL, address=RPA, time=2.0),
+        _Info(name=PANEL, address=IDENTITY, time=1.0),
+    )
+    _set_route(
+        _ScannerDevice(RPA, remote=False),
+        _ScannerDevice(IDENTITY, remote=False),
+    )
+    assert (
+        BT.async_resolve_proxy_device(None, PANEL, avoid=[RPA]) == f"local:{IDENTITY}"
+    )
+
+
+def test_sole_avoided_address_is_retried() -> None:
+    """The last route left is handed back even after it failed.
+
+    The set cannot tell a phantom from a failure that heals, and returning
+    ``None`` here would report "not advertising" for a panel we can plainly
+    hear -- which is what raises the "you need a proxy" repair issue.
+    """
+    _set_adverts(_Info(name=PANEL, address=RPA))
+    _set_route(_ScannerDevice(RPA, remote=True))
+    assert BT.async_resolve_proxy_device(None, PANEL, avoid=[RPA]) == f"proxy:{RPA}"
 
 
 def test_advert_uuid_matches() -> None:
@@ -417,7 +469,10 @@ if __name__ == "__main__":
     test_local_used_when_no_proxy()
     test_none_when_unreachable()
     test_identity_is_last_resort()
-    test_avoided_address_is_skipped()
+    test_avoided_address_is_demoted()
+    test_avoided_identity_is_still_offered()
+    test_avoided_rpa_loses_to_the_identity()
+    test_sole_avoided_address_is_retried()
     test_advert_uuid_matches()
     test_waits_for_a_fresh_advert()
     test_poll_interval_defaults_to_staying_connected()

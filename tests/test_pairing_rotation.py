@@ -13,12 +13,13 @@ bond for, which pairs cleanly. Total ~9s.
 
 What it pins:
 
-1. an address that fails to bond is banished, and the next pass gets the
+1. an address that fails to bond is demoted, and the next pass gets the
    panel's other RPA,
 2. bonding succeeds on that second address,
-3. when every candidate has been banished the avoid set is cleared rather than
-   stalling forever (a rejected address heals after a panel power-cycle),
-4. an address that bonds first try is never banished.
+3. when the demoted address is the only one advertised it is retried rather
+   than the loop stalling forever (a rejected address heals after a panel
+   power-cycle),
+4. an address that bonds first try is never demoted.
 
 Run: ``python3 scripts/test_pairing_rotation.py``
 """
@@ -121,21 +122,19 @@ class _Client:
 def _run(pairing, *, bondable: set[str], addresses: list[str], stop_after: int):
     """Drive ``_ensure_bonded_proxy`` against a panel advertising ``addresses``.
 
-    The fake resolver mimics the real one: freshest first, skipping anything in
-    the avoid set, and returning ``None`` once everything is banished (which is
-    what drives the loop's clear-and-retry fallback).
+    The fake resolver mimics the real one: freshest first, but anything in the
+    avoid set sinks below everything else rather than being withheld, so the
+    last remaining address comes back even after it has failed.
     """
     log = {"avoid": [], "tried": []}
 
     def resolve(_hass, _name, *, avoid=()):
-        banished = {a.upper() for a in avoid}
-        log["avoid"].append(banished)
+        demoted = {a.upper() for a in avoid}
+        log["avoid"].append(demoted)
         if len(log["avoid"]) > stop_after:
             raise _StopTest
-        for address in addresses:
-            if address.upper() not in banished:
-                return _Device(address)
-        return None
+        ranked = sorted(addresses, key=lambda a: a.upper() in demoted)
+        return _Device(ranked[0]) if ranked else None
 
     async def connect(_cls, device, _address, **_kw):
         log["tried"].append(device.address)
@@ -166,15 +165,14 @@ def main() -> None:
     )
     assert result is not None, "should bond after rotating off the rejected RPA"
     assert log["tried"] == [stale, fresh], f"unexpected order: {log['tried']}"
-    assert log["avoid"][1] == {stale.upper()}, "rejected RPA should be banished"
+    assert log["avoid"][1] == {stale.upper()}, "rejected RPA should be demoted"
 
     # 3. Only the rejected address is advertised (the case a panel power-cycle
-    # fixes): the avoid set must be cleared rather than stalling forever, so
-    # the address gets retried instead of staying banished.
+    # fixes): it must be retried rather than the loop stalling forever, since
+    # a demotion is not a ban and the panel may have healed.
     result, log = _run(pairing, bondable=set(), addresses=[stale], stop_after=4)
     assert result is None
-    assert log["tried"].count(stale) >= 2, "banished address must be retried"
-    assert set() in log["avoid"][1:], "avoid set was never cleared"
+    assert log["tried"].count(stale) >= 2, "demoted address must be retried"
 
     # 4. A first-try bond leaves the address alone.
     result, log = _run(

@@ -138,13 +138,13 @@ def async_resolve_proxy_device(
     the local one registers a BlueZ pairing agent.
 
     The "resolved identity" pseudo-address (whose last bytes match the name
-    suffix, e.g. ``...FFB4D1``) is ranked last — via a proxy it usually dials a
-    stale cached bonded RPA rather than the live one, but it is the panel's
-    real on-air address while in add-device mode, so it is worth a try once the
-    RPAs are exhausted.
+    suffix, e.g. ``...FFB4D1``) is ranked below the RPAs — via a proxy it
+    usually dials a stale cached bonded RPA rather than the live one, but it is
+    the panel's real on-air address while in add-device mode, so it is worth a
+    try once the RPAs are exhausted.
 
-    ``avoid`` is a set of RPA addresses to skip. This exists because of a
-    specific, observed failure mode after pairing:
+    ``avoid`` is a set of addresses that failed to establish. This exists
+    because of a specific, observed failure mode after pairing:
 
     Right after the bond, the panel keeps *advertising* the RPA it paired on
     but stops *accepting connections* on it (a panel-side phantom from the
@@ -156,6 +156,16 @@ def async_resolve_proxy_device(
     address indefinitely, leaving the device "unavailable" until someone
     power-cycles the panel. The coordinator feeds back each address that failed
     to establish so we rotate to the panel's other advertised RPA instead.
+
+    ``avoid`` **demotes**, it does not exclude. A failed address ranks below
+    every address that has not failed, which is enough to rotate off a phantom
+    while a live RPA is on air — but when the failed address is the only route
+    left we hand it back and let the caller retry, because the set cannot tell
+    a phantom from a transient failure. Excluding was a bug (#14): it erased
+    the identity address, which never rotates and so can never be the phantom,
+    so one failure against it — the panel still holding the slot of a
+    just-closed session, say — banished the only route a host connecting over
+    the identity has.
     """
     infos = _panel_infos(hass, name)
     suffix = name.rsplit("-", 1)[-1].upper()
@@ -166,19 +176,27 @@ def async_resolve_proxy_device(
         return bool(suffix) and address.replace(":", "").upper().endswith(suffix)
 
     avoid_norm = {a.upper() for a in avoid}
-    rpas = [i for i in infos if not _is_identity(i.address)]
-    rpas.sort(key=lambda i: i.time, reverse=True)
+    # Rank, never remove. Freshest first, but an avoided address sinks below
+    # every other candidate and the identity address sinks below the RPAs:
+    #
+    #   fresh→stale RPAs | identity | avoided RPAs | avoided identity
+    #
     # The panel also advertises its identity address at times (measured: both at
     # once after bonding, identity only while in add-device mode). When it does,
     # the identity IS its on-air address and connecting to it is correct -- so
     # keep it as a last resort rather than refusing to connect at all.
-    idents = [i for i in infos if _is_identity(i.address)]
-    idents.sort(key=lambda i: i.time, reverse=True)
-    rpas = rpas + idents
+    candidates = sorted(
+        infos,
+        key=lambda i: (
+            i.address.upper() in avoid_norm,
+            _is_identity(i.address),
+            -i.time,
+        ),
+    )
     LOGGER.debug(
-        "Truma %s candidates (fresh→stale RPAs): %s | avoid: %s | identity present: %s",
+        "Truma %s candidates (best→worst): %s | avoid: %s | identity present: %s",
         name,
-        [(i.address, round(i.time, 1), i.rssi, i.connectable) for i in rpas],
+        [(i.address, round(i.time, 1), i.rssi, i.connectable) for i in candidates],
         sorted(avoid_norm),
         any(_is_identity(i.address) for i in infos),
     )
@@ -193,11 +211,7 @@ def async_resolve_proxy_device(
     # local adapter either way -- on an older or patched host it is all that is
     # needed.
     local: object | None = None
-    for info in rpas:
-        # Skip an address the coordinator has told us won't establish (the
-        # post-pairing phantom RPA described above), so we try the next one.
-        if info.address.upper() in avoid_norm:
-            continue
+    for info in candidates:
         for sd in bluetooth.async_scanner_devices_by_address(
             hass, info.address, connectable=True
         ):

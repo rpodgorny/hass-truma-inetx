@@ -116,16 +116,21 @@ async def _ensure_bonded_proxy(
     # never completes a bond (0x3e on connect, or error 97 / "insufficient
     # authentication" on the protected write). The resolver returns the freshest
     # first, so without feedback we'd re-pick and hammer the phantom until
-    # timeout. Track addresses that failed and skip them so we rotate to the
-    # live RPA — the same avoid-rotation the coordinator uses for reconnect.
+    # timeout. Track addresses that failed so the resolver demotes them and we
+    # rotate to the live RPA — the same avoid-rotation the coordinator uses for
+    # reconnect. Demotion, not exclusion: when the failed address is all the
+    # panel is advertising it comes back and we retry it, which is right,
+    # because a bond can also fail for reasons that heal.
     avoid: set[str] = set()
     while time.monotonic() < deadline:
         device = async_resolve_proxy_device(hass, name, avoid=avoid)
         if device is None:
-            # Every candidate has failed at least once (or none advertised yet).
-            # Clear the avoid set so previously-failed addresses get another try
-            # rather than stalling — a phantom can heal, and the live RPA may
-            # only just have appeared.
+            # Nothing is on air yet. Any address we failed on is one the panel
+            # has since rotated away from, so forget them rather than carrying
+            # grudges into the next advert. (A candidate that is still on air
+            # is never withheld — avoid only demotes, see
+            # bt.async_resolve_proxy_device — so this cannot mean "all
+            # banished".)
             avoid.clear()
             await asyncio.sleep(1.5)
             continue
@@ -164,8 +169,8 @@ async def _ensure_bonded_proxy(
             last_exc = exc
             LOGGER.debug("Truma %s proxy connect: %s", name, exc)
         # This address didn't bond (connect failed, or the encrypt/verify tries
-        # failed) — drop the client, avoid the address, and let the resolver
-        # hand us the panel's other RPA.
+        # failed) — drop the client, demote the address, and let the resolver
+        # hand us the panel's other RPA if it has one.
         if client is not None:
             try:
                 await client.disconnect()
