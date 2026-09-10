@@ -247,6 +247,20 @@ class TrumaState:
     # the one to read wherever more than one device can answer.
     device_params: dict = field(default_factory=dict)
 
+    # param_meta split the same way, and for the same reason: a description is
+    # as much the property of the device that gave it as a value is. Two
+    # devices reporting one topic describe it separately -- a Combi's fan and
+    # a roof air conditioner's need not run to the same maximum, and a panel
+    # enumerates each per installation -- but learn_param merges rather than
+    # replaces, so flattened they do not overwrite each other, they *blend*.
+    # The result is a description no device on the bus ever gave: an enum from
+    # one, a range from the other, and nothing saying so.
+    #
+    # Harmless between two of a kind, since a pair of identical bottle sensors
+    # describe GasBtl identically. Not harmless where the devices differ, and
+    # that is the case a merged description hides best.
+    device_param_meta: dict = field(default_factory=dict)
+
     def update(
         self, topic: str, param: str, value: Any, src: Optional[int] = None
     ) -> None:
@@ -287,7 +301,41 @@ class TrumaState:
         """
         return self.device_params.get(addr, {}).get(f"{topic}.{param}")
 
-    def learn_param(self, topic: str, param: str, entry: Any) -> bool:
+    def topic_publishers(self, topic: str) -> list:
+        """Every device that has reported under a topic, lowest address first.
+
+        topic_source answers "who spoke last", which is all a write can use.
+        This answers "how many could have", which is what says whether that
+        first answer means anything. More than one publisher is the condition
+        under which a flat reading, a merged description or a learned write
+        destination stops being trustworthy.
+        """
+        prefix = f"{topic}."
+        return sorted(
+            addr
+            for addr, params in self.device_params.items()
+            if any(key.startswith(prefix) for key in params)
+        )
+
+    def contested_topics(self) -> dict:
+        """Topics more than one device reports, each with its publishers.
+
+        This is the condition every flat view in here is wrong under, worked
+        out once rather than by hand from a diagnostics download. Empty on a
+        vehicle where each topic has a single owner, which is the common case
+        and the reason the flat views were right for so long.
+        """
+        topics = {
+            key.split(".", 1)[0]
+            for params in self.device_params.values()
+            for key in params
+        }
+        found = {topic: self.topic_publishers(topic) for topic in sorted(topics)}
+        return {topic: addrs for topic, addrs in found.items() if len(addrs) > 1}
+
+    def learn_param(
+        self, topic: str, param: str, entry: Any, src: Optional[int] = None
+    ) -> bool:
         """Record what the panel says about a parameter. True if that is new.
 
         Every value the panel sends is wrapped in a description of the
@@ -333,12 +381,25 @@ class TrumaState:
         # Merge rather than replace. A plain value update may describe less
         # than the answer to a discovery request did, and dropping the enum
         # again on the next frame would defeat the whole point.
-        known = self.param_meta.setdefault(f"{topic}.{param}", {})
-        changed = any(known.get(key) != value for key, value in meta.items())
+        key = f"{topic}.{param}"
+        known = self.param_meta.setdefault(key, {})
+        changed = any(known.get(name) != value for name, value in meta.items())
         known.update(meta)
+
+        # The same merge under the device that gave the description, so that
+        # two of them blending in the flat view can be told apart afterwards.
+        # 0 is the message broker and describes nothing, as in update().
+        if isinstance(src, int) and src:
+            self.device_param_meta.setdefault(src, {}).setdefault(key, {}).update(meta)
+
+        # "Changed" stays a question about the flat view: it exists to log a
+        # description once per installation, and per-device it would say the
+        # same thing again for every device that agrees.
         return changed
 
-    def allowed_values(self, topic: str, param: str) -> Optional[list]:
+    def allowed_values(
+        self, topic: str, param: str, addr: Optional[int] = None
+    ) -> Optional[list]:
         """The values the panel says *this* vehicle can be set to, or None.
 
         A panel enumerates a parameter per installation, not per protocol. The
@@ -357,8 +418,17 @@ class TrumaState:
         steps come back as ``40 / 60 / 70`` here and as Eco / Comfort / Hot on
         the Combi 6 E in #12 -- so they are evidence about which value means
         what, and they have no business reaching a user-facing string.
+
+        ``addr`` asks one device rather than the bus. Worth naming wherever
+        two of them describe the topic: an enum is merged in whole, so the
+        flat answer is simply whichever device described it last, and a
+        control built from it offers values its own device will refuse.
         """
-        meta = self.param_meta.get(f"{topic}.{param}")
+        if addr is None:
+            source = self.param_meta
+        else:
+            source = self.device_param_meta.get(addr, {})
+        meta = source.get(f"{topic}.{param}")
         names = meta.get("enum") if meta else None
         if not names:
             return None

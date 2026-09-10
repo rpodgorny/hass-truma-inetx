@@ -25,7 +25,11 @@ What it pins:
    itself under the same topic,
 4. the message broker is not filed as a device,
 5. the flat view every entity already reads is undisturbed,
-6. and a diagnostics download names the devices in the form addresses are
+6. two descriptions of one parameter are not blended into a third that no
+   device gave, and either can be asked for on its own,
+7. the topics with more than one device behind them are named rather than
+   left to be worked out by hand,
+8. and a diagnostics download names the devices in the form addresses are
    read and quoted in, not as decimal.
 
 Run: ``python3 tests/test_device_params.py`` (needs ``cbor2``).
@@ -157,6 +161,17 @@ def _report(coord: _Coord, src: int, topic: str, param: str, value) -> None:
     coord._on_frame(parsed)
 
 
+def _describe(coord: _Coord, src: int, topic: str, param: str, **entry) -> None:
+    """One device publishes a value *and* the panel's description of it."""
+    frame = PROTO.build_v3_frame(
+        APP_ADDR, src, TC.CTRL_MBP, TC.MBP_INFO, 0,
+        cbor2.dumps({"tn": topic, "pn": param, **entry}),
+    )
+    parsed = PROTO.parse_v3_frame(frame)
+    assert parsed is not None
+    coord._on_frame(parsed)
+
+
 def test_two_fans_under_one_parameter_name_stay_two_readings() -> None:
     """The whole of issue #9, as first reported.
 
@@ -240,7 +255,7 @@ def test_the_flat_view_is_undisturbed() -> None:
 def test_a_download_names_the_devices_the_way_they_are_quoted() -> None:
     """A dump is the evidence someone pastes into an issue; 0x0603, not 1539."""
     coord = _Coord()
-    _report(coord, BOTTLE_LEFT, "GasBtl", "FillLevelP", 49)
+    _describe(coord, BOTTLE_LEFT, "GasBtl", "FillLevelP", v=49, max=100)
     _report(coord, BOTTLE_RIGHT, "GasBtl", "FillLevelP", 100)
 
     entry = types.SimpleNamespace(
@@ -249,11 +264,78 @@ def test_a_download_names_the_devices_the_way_they_are_quoted() -> None:
     dumped = json.loads(json.dumps(
         asyncio.run(DIAG.async_get_config_entry_diagnostics(None, entry))
     ))
+    state = dumped["state"]
 
-    devices = dumped["state"]["device_params"]
+    devices = state["device_params"]
     assert set(devices) == {"0x0603", "0x0604"}, devices
     assert devices["0x0603"]["GasBtl.FillLevelP"] == 49
     assert devices["0x0604"]["GasBtl.FillLevelP"] == 100
+    # Descriptions are filed and rendered the same way.
+    assert state["device_param_meta"]["0x0603"]["GasBtl.FillLevelP"]["max"] == 100
+    # And the download says outright which topics it is unsafe to read flat.
+    assert state["contested_topics"] == {"GasBtl": ["0x0603", "0x0604"]}
+
+
+def test_two_descriptions_are_not_blended_into_a_third() -> None:
+    """learn_param merges, so flattened the two do not overwrite -- they mix.
+
+    A Combi's fan and a roof air conditioner's need not run to the same
+    maximum, and each is described separately. Merged, the range comes from
+    one device and the enum from the other, and the result is a description
+    that no device on the bus ever gave.
+    """
+    coord = _Coord()
+    _describe(coord, COMBI, "AirCirculation", "FanLevel", v=4, min=0, max=4,
+              enum=[{"n": "Off", "a": True, "v": 0},
+                    {"n": "Max", "a": True, "v": 4}])
+    _describe(coord, ROOF_AC, "AirCirculation", "FanLevel", v=2, min=1, max=10)
+
+    state = coord._state
+    combi = state.device_param_meta[COMBI]["AirCirculation.FanLevel"]
+    roof = state.device_param_meta[ROOF_AC]["AirCirculation.FanLevel"]
+    assert (combi["min"], combi["max"]) == (0, 4), combi
+    assert (roof["min"], roof["max"]) == (1, 10), roof
+    assert "enum" not in roof, "the roof unit described no enum and was given one"
+
+    # The flat view is the blend, unchanged: a range from the roof unit and an
+    # enum from the Combi, in one record, with nothing saying so.
+    flat = state.param_meta["AirCirculation.FanLevel"]
+    assert (flat["min"], flat["max"], set(flat["enum"])) == (1, 10, {"0", "4"})
+
+
+def test_allowed_values_can_be_asked_of_one_device() -> None:
+    """A control offered the merged enum offers values its device refuses."""
+    coord = _Coord()
+    _describe(coord, COMBI, "AirCirculation", "FanLevel", v=1,
+              enum=[{"n": "Off", "a": True, "v": 0},
+                    {"n": "Low", "a": True, "v": 1}])
+    _describe(coord, ROOF_AC, "AirCirculation", "FanLevel", v=7,
+              enum=[{"n": "Low", "a": True, "v": 1},
+                    {"n": "High", "a": True, "v": 7}])
+
+    state = coord._state
+    assert state.allowed_values("AirCirculation", "FanLevel", COMBI) == [0, 1]
+    assert state.allowed_values("AirCirculation", "FanLevel", ROOF_AC) == [1, 7]
+    # Asked of the bus it is still whoever described it last, which is the
+    # behaviour every existing caller keeps.
+    assert state.allowed_values("AirCirculation", "FanLevel") == [1, 7]
+
+
+def test_contested_topics_names_what_cannot_be_trusted() -> None:
+    """The condition the flat views are wrong under, stated rather than implied."""
+    coord = _Coord()
+    _report(coord, COMBI, "AirCirculation", "FanLevel", 4)
+    _report(coord, ROOF_AC, "AirCirculation", "FanLevel", 2)
+    _report(coord, BOTTLE_LEFT, "GasBtl", "FillLevelP", 49)
+    _report(coord, BOTTLE_RIGHT, "GasBtl", "FillLevelP", 100)
+    _report(coord, PANEL, "RoomClimate", "Mode", 3)
+
+    state = coord._state
+    assert state.topic_publishers("AirCirculation") == [COMBI, ROOF_AC]
+    assert state.contested_topics() == {
+        "AirCirculation": [COMBI, ROOF_AC],
+        "GasBtl": [BOTTLE_LEFT, BOTTLE_RIGHT],
+    }, "a topic with one owner is not contested and must not be listed"
 
 
 def _main() -> None:

@@ -47,6 +47,18 @@ async def async_get_config_entry_diagnostics(
             f"0x{addr:04X}": params
             for addr, params in sorted(state_dict["device_params"].items())
         }
+        state_dict["device_param_meta"] = {
+            f"0x{addr:04X}": params
+            for addr, params in sorted(state_dict["device_param_meta"].items())
+        }
+        # And the answer to the question a reader of this file now has to ask
+        # before trusting raw_params, param_meta or topic_source at all: which
+        # topics have more than one device behind them on *this* vehicle.
+        # Usually empty, which is itself worth saying out loud.
+        state_dict["contested_topics"] = {
+            topic: [f"0x{addr:04X}" for addr in addrs]
+            for topic, addrs in state.contested_topics().items()
+        }
     return {
         "entry": async_redact_data(entry.as_dict(), TO_REDACT),
         "last_update_success": coordinator.last_update_success,

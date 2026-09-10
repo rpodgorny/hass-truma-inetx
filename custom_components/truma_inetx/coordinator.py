@@ -726,7 +726,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         if control == 0x03 and sub_type == 0x00:
             tn, pn, v = cbor.get("tn"), cbor.get("pn"), cbor.get("v")
             if tn and pn:
-                self._learn_param(tn, pn, cbor)
+                self._learn_param(tn, pn, cbor, parsed.get("src"))
             if tn and pn and v is not None:
                 self._state.update(tn, pn, v, parsed.get("src"))
                 self.async_set_updated_data(self._state)
@@ -743,13 +743,15 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                         continue
                     pn, v = param.get("pn"), param.get("v")
                     if tn and pn:
-                        self._learn_param(tn, pn, param)
+                        self._learn_param(tn, pn, param, parsed.get("src"))
                     if tn and pn and v is not None:
                         self._state.update(tn, pn, v, parsed.get("src"))
             self.async_set_updated_data(self._state)
             return
 
-    def _learn_param(self, topic: str, param: str, entry: dict) -> None:
+    def _learn_param(
+        self, topic: str, param: str, entry: dict, src: int | None = None
+    ) -> None:
         """Keep the panel's description of a parameter, and log it once.
 
         The panel names its own enum values (see TrumaState.learn_param), so a
@@ -762,7 +764,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         per parameter per installation: the state object outlives a reconnect,
         and a panel describes a parameter the same way every time.
         """
-        if self._state.learn_param(topic, param, entry):
+        if self._state.learn_param(topic, param, entry, src):
             LOGGER.debug(
                 "Truma %s: panel describes %s.%s as %s",
                 self.unique_id,
