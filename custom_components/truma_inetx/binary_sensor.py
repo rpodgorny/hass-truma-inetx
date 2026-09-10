@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
 from .entity import TrumaEntity, async_add_when_reported
+from .truma.state import ActiveState
 
 # Entities are coordinator-driven and have no update() method, so Home
 # Assistant would create no semaphore anyway; stated explicitly.
@@ -47,10 +48,26 @@ class TrumaFlameSensor(TrumaEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Whether the burner flame is active."""
+        """Whether the burner is actually firing.
+
+        ``System.FlameStatus`` is type 105, the family the various ``Active``
+        parameters belong to, and it takes three values: 0 off, 1 running,
+        2 idle. Measured on a Combi 6 E against an independent shore-power
+        meter (#15) -- the value went 1 -> 2 in the same second the draw fell
+        from 1787 W to 105 W, with ``AirHeating.Active`` making the same move
+        in the same record.
+
+        So "anything above zero" is not on. 2 is the appliance standing by,
+        and reporting a flame while it stands by is worse than reporting
+        nothing at all: it is the reading an automation would act on.
+
+        It does not name the energy source either, which was the other
+        candidate reading: on the one vehicle reported that has both, it read
+        1 with gas off and a 1775 W element running.
+        """
         if self.data.flame_status is None:
             return None
-        return bool(self.data.flame_status)
+        return self.data.flame_status == ActiveState.ACTIVE
 
 
 class TrumaGasSensor(TrumaEntity, BinarySensorEntity):

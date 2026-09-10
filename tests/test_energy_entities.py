@@ -20,7 +20,9 @@ Why this exists:
   millivolts.
 - **#15.** ``System.FlameStatus`` takes 0, 1 and 2, and nothing published says
   what they mean. The binary sensor must answer on/off, so the raw value needs
-  somewhere to be seen.
+  somewhere to be seen -- and the on/off question turned out to be answerable:
+  measured on a Combi 6 E against a shore-power meter, 2 is the appliance
+  standing by, not a second kind of firing.
 
 What it pins:
 
@@ -28,7 +30,9 @@ What it pins:
 2. gas is a read-only reflection -- no platform writes ``EnergySrc.GasLevel``,
 3. each of them is created when, and only when, its parameter is reported,
 4. the batteries are scaled by ten, not by a thousand,
-5. the raw flame value is exposed unrounded, as a disabled diagnostic.
+5. the raw flame value is exposed unrounded, as a disabled diagnostic,
+6. and the flame binary sensor is on while the burner runs and off while it
+   merely stands by.
 
 Run: ``python3 tests/test_energy_entities.py``
 """
@@ -318,6 +322,25 @@ def test_the_raw_flame_value_is_visible_and_unrounded() -> None:
     assert raw.native_value is None
     coordinator.report("System", "FlameStatus", 2, HEATER)
     assert raw.native_value == 2, "the third state was folded away again"
+
+
+def test_the_flame_sensor_is_on_only_while_it_is_firing() -> None:
+    """#15, measured: 0 off, 1 running, 2 idle -- not 0 off, anything else on.
+
+    On a Combi 6 E the value went 1 -> 2 in the same second shore power fell
+    from 1787 W to 105 W. Read as ``> 0``, standing by looked like a flame.
+    """
+    coordinator = _FakeCoordinator()
+    # Created unconditionally, unlike gas -- every heater has a burner state.
+    flame = BINARY.TrumaFlameSensor(coordinator)
+
+    assert flame.is_on is None, "nothing reported yet is unknown, not off"
+    coordinator.report("System", "FlameStatus", 0, HEATER)
+    assert flame.is_on is False
+    coordinator.report("System", "FlameStatus", 1, HEATER)
+    assert flame.is_on is True
+    coordinator.report("System", "FlameStatus", 2, HEATER)
+    assert flame.is_on is False, "2 is the appliance standing by, not a flame"
 
 
 def _main() -> None:
