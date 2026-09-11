@@ -26,7 +26,11 @@ async def async_setup_entry(
     """Set up Truma binary sensors."""
     coordinator = entry.runtime_data
     async_add_entities(
-        [TrumaFlameSensor(coordinator), TrumaConnectionSensor(coordinator)]
+        [
+            TrumaFlameSensor(coordinator),
+            TrumaConnectionSensor(coordinator),
+            TrumaProxySensor(coordinator),
+        ]
     )
     # Gas appears only on a heater that burns it, and then only to be read.
     async_add_when_reported(
@@ -116,4 +120,22 @@ class TrumaConnectionSensor(TrumaEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         """Whether the BLE link to the panel is up."""
-        return self.data.connected
+        return self.coordinator.panel_link_connected
+
+
+class TrumaProxySensor(TrumaEntity, BinarySensorEntity):
+    """Availability of the ESPHome proxy used for this panel."""
+
+    _attr_translation_key = "proxy_connection"
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = None
+    _gate_on_connected = False
+
+    def __init__(self, coordinator: TrumaCoordinator) -> None:
+        """Initialize."""
+        super().__init__(coordinator, "proxy_connection")
+
+    @property
+    def is_on(self) -> bool | None:
+        """Whether the identified Bluetooth proxy is registered in HA."""
+        return self.coordinator.proxy_available

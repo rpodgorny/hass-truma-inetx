@@ -106,6 +106,7 @@ def _load():
         SensorEntity=object,
         SensorEntityDescription=_EntityDescription,
         SensorDeviceClass=types.SimpleNamespace(
+            ENUM="enum",
             TEMPERATURE="temperature", VOLTAGE="voltage", DURATION="duration"
         ),
         SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement"),

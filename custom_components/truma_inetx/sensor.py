@@ -193,6 +193,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up Truma sensors."""
     coordinator = entry.runtime_data
+    async_add_entities([TrumaOperationSensor(coordinator)])
     async_add_entities(TrumaSensor(coordinator, desc) for desc in SENSORS)
     async_add_when_reported(
         coordinator,
@@ -204,6 +205,31 @@ async def async_setup_entry(
             for desc in OPTIONAL_SENSORS
         },
     )
+
+
+class TrumaOperationSensor(TrumaEntity, SensorEntity):
+    """Actual operation lifecycle, available even before a BLE connection."""
+
+    entity_description = SensorEntityDescription(
+        key="operation", translation_key="operation", device_class=SensorDeviceClass.ENUM
+    )
+    _attr_options = ["idle", "syncing", "changing", "error"]
+    _attr_icon = "mdi:progress-clock"
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator, "operation")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.operation_state
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return self.coordinator.operation_attributes
 
 
 class TrumaSensor(TrumaEntity, SensorEntity):

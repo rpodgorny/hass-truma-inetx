@@ -1,0 +1,159 @@
+type: vertical-stack
+cards:
+  - type: heading
+    heading: Truma Combi
+    icon: mdi:radiator
+    heading_style: title
+    badges:
+      - type: entity
+        entity: binary_sensor.truma_inetx_ffb4d1_ble_sender_verbindung
+        name: BLE-Sender
+        show_name: true
+        show_state: true
+      - type: entity
+        entity: binary_sensor.truma_inetx_ffb4d1_ble_connection
+        name: BLE-Truma
+        show_name: true
+        show_state: true
+      - type: entity
+        entity: binary_sensor.truma_inetx_ffb4d1_flame
+        show_name: false
+        show_state: true
+
+  - type: custom:truma-operation-card
+    operation_entity: sensor.truma_inetx_ffb4d1_vorgang
+
+  - type: tile
+    entity: number.truma_inetx_ffb4d1_live_modus_dauer
+    name: Live-Modus · Minuten
+    icon: mdi:timer-cog-outline
+    tap_action:
+      action: more-info
+    icon_tap_action:
+      action: more-info
+    features:
+      - type: numeric-input
+        style: buttons
+
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: custom:truma-operation-card
+        operation_entity: sensor.truma_inetx_ffb4d1_vorgang
+        action: sync
+        card:
+          type: button
+          entity: button.truma_inetx_ffb4d1_jetzt_synchronisieren_live_modus_starten
+          name: Jetzt synchronisieren
+          icon: mdi:bluetooth-connect
+          show_state: false
+          tap_action:
+            action: perform-action
+            perform_action: button.press
+            target:
+              entity_id: button.truma_inetx_ffb4d1_jetzt_synchronisieren_live_modus_starten
+          hold_action:
+            action: none
+
+      - type: button
+        entity: button.truma_inetx_ffb4d1_live_modus_beenden
+        name: Live-Modus beenden
+        icon: mdi:bluetooth-off
+        show_state: false
+        tap_action:
+          action: perform-action
+          perform_action: button.press
+          target:
+            entity_id: button.truma_inetx_ffb4d1_live_modus_beenden
+        hold_action:
+          action: none
+
+  - type: markdown
+    text_only: true
+    content: >-
+      **Heizlogik:** Energiequelle wählen → Betriebsart in der Raumheizung
+      wählen → Solltemperatur einstellen.
+
+  - type: custom:truma-operation-card
+    operation_entity: sensor.truma_inetx_ffb4d1_vorgang
+    action: [hvac_mode, temperature, fan_level]
+    card:
+      type: custom:truma-climate-dial-card
+      entity: climate.truma_inetx_ffb4d1
+      name: Raumheizung
+
+  - type: tile
+    entity: select.truma_inetx_ffb4d1_water_heating
+    name: Warmwasser
+    icon: mdi:water-boiler
+    tap_action:
+      action: more-info
+    icon_tap_action:
+      action: more-info
+    features:
+      - type: select-options
+
+  - type: custom:truma-operation-card
+    operation_entity: sensor.truma_inetx_ffb4d1_vorgang
+    action: energy_source
+    card:
+      type: tile
+      entity: select.truma_inetx_ffb4d1_energiequelle
+      name: Energiequelle
+      icon: mdi:engine
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      features:
+        - type: select-options
+
+  - type: tile
+    entity: select.truma_inetx_ffb4d1_electric_heating_output
+    name: Elektrische Heizleistung
+    icon: mdi:flash
+    tap_action:
+      action: more-info
+    icon_tap_action:
+      action: more-info
+    features:
+      - type: select-options
+
+  - type: tile
+    entity: number.truma_inetx_ffb4d1_fan_level
+    name: Lüfterstufe
+    icon: mdi:fan
+    tap_action:
+      action: more-info
+    icon_tap_action:
+      action: more-info
+    features:
+      - type: numeric-input
+        style: buttons
+    visibility:
+      - condition: state
+        entity: climate.truma_inetx_ffb4d1
+        state: fan_only
+
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: tile
+        entity: sensor.truma_inetx_ffb4d1_room_temperature
+        name: Innen
+        icon: mdi:home-thermometer-outline
+        tap_action:
+          action: more-info
+        icon_tap_action:
+          action: more-info
+
+      - type: tile
+        entity: sensor.truma_inetx_ffb4d1_water_temperature
+        name: Boiler
+        icon: mdi:thermometer-water
+        tap_action:
+          action: more-info
+        icon_tap_action:
+          action: more-info

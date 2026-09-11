@@ -1,6 +1,9 @@
 {
   "entity": {
     "binary_sensor": {
+      "proxy_connection": {
+        "default": "mdi:bluetooth-transfer"
+      },
       "flame": {
         "default": "mdi:fire"
       },
@@ -22,6 +25,14 @@
       },
       "manual_stop": {
         "default": "mdi:bluetooth-off"
+      }
+    },
+    "select": {
+      "energy_source": {
+        "default": "mdi:engine"
+      },
+      "electric_level": {
+        "default": "mdi:flash"
       }
     },
     "switch": {

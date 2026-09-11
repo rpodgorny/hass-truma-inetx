@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
-from .entity import TrumaEntity, async_add_when_reported
+from .entity import TrumaEntity
 
 # Entities are coordinator-driven and have no update() method, so Home
 # Assistant would create no semaphore anyway; stated explicitly.
@@ -24,8 +25,21 @@ WATER_OPTIONS = {WATER_OFF: None} | {
     label: value for value, label in _WATER_MODE_TO_LABEL.items()
 }
 
-_ELECTRIC_VALUE_TO_LABEL = {0: "off", 1: "900 W", 2: "1800 W"}
+_ELECTRIC_VALUE_TO_LABEL = {1: "900 W", 2: "1800 W"}
 ELECTRIC_OPTIONS = {label: value for value, label in _ELECTRIC_VALUE_TO_LABEL.items()}
+
+ENERGY_DIESEL = "diesel"
+ENERGY_ELECTRIC = "electric"
+ENERGY_HYBRID = "hybrid"
+ENERGY_OPTIONS = [ENERGY_DIESEL, ENERGY_ELECTRIC, ENERGY_HYBRID]
+_ENERGY_SOURCE_PARAMS = {
+    "EnergySrc.DieselLevel", "EnergySrc.GasLevel", "EnergySrc.ElectricLevel"
+}
+
+
+def _reported_sources(state) -> set[str]:
+    """Hardware presence is independent of whether a source is active."""
+    return _ENERGY_SOURCE_PARAMS.intersection(state.raw_params)
 
 
 def _offered(state, topic: str, param: str, labels: dict) -> list:
@@ -57,16 +71,23 @@ async def async_setup_entry(
     """Set up Truma select entities."""
     coordinator = entry.runtime_data
     async_add_entities([TrumaWaterModeSelect(coordinator)])
-    # The supplemental electric element is an option, not standard: a Combi D
-    # has none, and its panel does not describe EnergySrc.ElectricLevel at all
-    # (measured on a Combi D van, whose select was offering off / 900 W /
-    # 1800 W against hardware that cannot do any of them). The parameter
-    # arriving is the evidence the element exists.
-    async_add_when_reported(
-        coordinator,
-        async_add_entities,
-        {"EnergySrc.ElectricLevel": lambda: TrumaElectricLevelSelect(coordinator)},
-    )
+    added = False
+
+    @callback
+    def add_energy_controls() -> None:
+        nonlocal added
+        if added or not _reported_sources(coordinator.data):
+            return
+        added = True
+        async_add_entities([
+            TrumaEnergySourceSelect(coordinator), TrumaElectricLevelSelect(coordinator)
+        ])
+
+    add_energy_controls()
+    if not added:
+        coordinator.config_entry.async_on_unload(
+            coordinator.async_add_listener(add_energy_controls)
+        )
 
 
 class TrumaWaterModeSelect(TrumaEntity, SelectEntity):
@@ -105,7 +126,7 @@ class TrumaWaterModeSelect(TrumaEntity, SelectEntity):
 
 
 class TrumaElectricLevelSelect(TrumaEntity, SelectEntity):
-    """Supplemental electric heating level (off / 900 / 1800 W)."""
+    """Electric output for multiple sources, including gas/electric on/off."""
 
     _attr_translation_key = "electric_level"
 
@@ -114,25 +135,152 @@ class TrumaElectricLevelSelect(TrumaEntity, SelectEntity):
         super().__init__(coordinator, "electric_level")
 
     @property
-    def options(self) -> list[str]:
-        """The electric steps this panel offers.
+    def _has_combined_source(self) -> bool:
+        """Use the same hardware evidence as the combined source selector."""
+        return {"EnergySrc.DieselLevel", "EnergySrc.ElectricLevel"}.issubset(
+            self.data.raw_params
+        )
 
-        A heater without the electric element still has the parameter; its
-        panel is the one that says which levels mean anything on it.
-        """
+    @property
+    def options(self) -> list[str]:
+        """Offer only panel-declared steps when electric source choice exists."""
+        if not self._has_electric_choice:
+            return []
+        labels = _ELECTRIC_VALUE_TO_LABEL if self._has_combined_source else {
+            0: "off", **_ELECTRIC_VALUE_TO_LABEL
+        }
         return _offered(
-            self.data, "EnergySrc", "ElectricLevel", _ELECTRIC_VALUE_TO_LABEL
+            self.data, "EnergySrc", "ElectricLevel", labels
+        )
+
+    @property
+    def available(self) -> bool:
+        """Require multiple sources; gas/electric remains controllable at zero."""
+        return super().available and self._hardware_enabled
+
+    @property
+    def _has_electric_choice(self) -> bool:
+        sources = _reported_sources(self.data)
+        return len(sources) >= 2 and "EnergySrc.ElectricLevel" in sources
+
+    @property
+    def _hardware_enabled(self) -> bool:
+        return self._has_electric_choice and (
+            not self._has_combined_source or bool(self.data.electric_level)
         )
 
     @property
     def current_option(self) -> str | None:
         """Return the current electric heating level."""
-        if self.data.electric_level is None:
+        if not self._has_electric_choice:
             return None
+        if self.data.electric_level == 0:
+            return None if self._has_combined_source else "off"
         return _ELECTRIC_VALUE_TO_LABEL.get(self.data.electric_level)
 
     async def async_select_option(self, option: str) -> None:
         """Set the electric heating level."""
+        if not self._hardware_enabled:
+            raise HomeAssistantError("Electric heating control is disabled for the reported sources")
+        if option not in self.options:
+            raise HomeAssistantError(f"Unsupported electric heating level: {option}")
+        if option == "off":
+            await self.coordinator.async_write("EnergySrc", "ElectricLevel", 0)
+            return
         await self.coordinator.async_write(
             "EnergySrc", "ElectricLevel", ELECTRIC_OPTIONS[option]
         )
+
+
+class TrumaEnergySourceSelect(TrumaEntity, SelectEntity):
+    """Coordinate supported diesel/electric hardware; otherwise stay disabled."""
+
+    _attr_translation_key = "energy_source"
+    _attr_options = ENERGY_OPTIONS
+    _attr_icon = "mdi:engine"
+
+    def __init__(self, coordinator: TrumaCoordinator) -> None:
+        """Initialize."""
+        super().__init__(coordinator, "energy_source")
+
+    @property
+    def options(self) -> list[str]:
+        """Adapt one entity as the panel reports its installed hardware."""
+        if not self._has_combined_source:
+            return []
+        return [*ENERGY_OPTIONS, "changing"] if self._changing else ENERGY_OPTIONS
+
+    @property
+    def _has_combined_source(self) -> bool:
+        return {"EnergySrc.DieselLevel", "EnergySrc.ElectricLevel"}.issubset(
+            self.data.raw_params
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._has_combined_source
+
+    @property
+    def _changing(self) -> bool:
+        return getattr(self.coordinator, "energy_source_changing", False)
+
+    @property
+    def current_option(self) -> str | None:
+        """Derive the user-facing source from both hardware levels."""
+        if not self._has_combined_source:
+            return None
+        if self._changing:
+            return "changing"
+        diesel = self.data.diesel_level
+        electric = self.data.electric_level
+        if diesel is None or electric is None:
+            return None
+        if diesel and electric:
+            return ENERGY_HYBRID
+        if diesel:
+            return ENERGY_DIESEL
+        if electric:
+            return ENERGY_ELECTRIC
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        """Apply a source safely, always entering electric modes at 900 W."""
+        if not self._has_combined_source:
+            raise HomeAssistantError("Energy source control requires reported diesel and electric sources")
+        if option == "changing":
+            raise HomeAssistantError("Changing is a status, not an energy source")
+        if option not in self.options:
+            raise HomeAssistantError(f"Unsupported energy source: {option}")
+        if option == ENERGY_DIESEL:
+            commands = [
+                ("EnergySrc", "DieselLevel", 1),
+                ("EnergySrc", "ElectricLevel", 0),
+            ]
+        elif option == ENERGY_ELECTRIC:
+            commands = [
+                ("EnergySrc", "ElectricLevel", 1),
+                ("EnergySrc", "DieselLevel", 0),
+            ]
+        elif option == ENERGY_HYBRID:
+            commands = [
+                ("EnergySrc", "DieselLevel", 1),
+                ("EnergySrc", "ElectricLevel", 1),
+            ]
+        else:
+            raise ValueError(f"Unknown energy source: {option}")
+        await self.coordinator.async_write_many(
+            commands, confirm=True, action="energy_source", target=option
+        )
+        # Only after fresh device feedback confirmed the complete setting.
+        # Entities not yet attached to HA cannot create a device activity entry.
+        if (hass := getattr(self, "hass", None)) is not None:
+            german = hass.config.language.startswith("de")
+            label = {"diesel": "Diesel", "electric": "Elektro" if german else "Electric", "hybrid": "Hybrid"}[option]
+            message = (
+                f"Von der Truma bestätigt: Energiequelle {label}"
+                if german else f"Confirmed by Truma: energy source {label}"
+            )
+            hass.bus.async_fire("logbook_entry", {
+                "name": "Truma", "message": message,
+                "entity_id": self.entity_id, "domain": "select",
+            })

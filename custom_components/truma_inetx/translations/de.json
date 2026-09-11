@@ -43,7 +43,8 @@
   },
   "entity": {
     "binary_sensor": {
-      "connection": { "name": "BLE-Verbindung" },
+      "connection": { "name": "BLE-Truma-Verbindung" },
+      "proxy_connection": { "name": "BLE-Sender-Verbindung" },
       "flame": { "name": "Flamme" },
       "gas": { "name": "Gas" }
     },
@@ -56,10 +57,28 @@
       "manual_live_minutes": { "name": "Live-Modus-Dauer" }
     },
     "select": {
+      "energy_source": {
+        "name": "Energiequelle",
+        "state": {
+          "diesel": "Diesel",
+          "electric": "Elektro",
+          "hybrid": "Hybrid",
+          "changing": "Wird umgestellt …"
+        }
+      },
       "electric_level": { "name": "Elektrische Heizleistung" },
       "water_mode": { "name": "Warmwasser" }
     },
     "sensor": {
+      "operation": {
+        "name": "Vorgang",
+        "state": {
+          "idle": "Bereit",
+          "syncing": "Synchronisation läuft",
+          "changing": "Wird umgestellt …",
+          "error": "Fehler"
+        }
+      },
       "current_temp": { "name": "Raumtemperatur" },
       "faster_water_heating_time": { "name": "Schnellaufheizzeit" },
       "flame_status": { "name": "Flammenstatus" },
@@ -72,7 +91,6 @@
       "water_temp": { "name": "Wassertemperatur" }
     },
     "switch": {
-      "diesel": { "name": "Dieselbrenner" },
       "faster_water_heating": { "name": "Schnelles Wasseraufheizen" },
       "water_boost": { "name": "Warmwasser-Boost" },
       "water_pump": { "name": "Frischwasserpumpe" }

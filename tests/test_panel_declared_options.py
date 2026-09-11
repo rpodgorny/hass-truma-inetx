@@ -28,7 +28,8 @@ What it pins:
    Combi 6 E), so only the values cross over,
 4. a write is validated against the panel's enum where there is one, so a mode
    this heater really has stops being rejected by our own table,
-5. off is always offered, whatever the panel says,
+5. off stays part of water heating, while energy source owns switching the
+   electric element off,
 6. and the electric select is not created at all until the vehicle reports an
    electric element -- a Combi D has none, and its panel never mentions the
    parameter.
@@ -99,6 +100,10 @@ def _load():
         def __init__(self, coordinator=None) -> None:
             self.coordinator = coordinator
 
+        @property
+        def available(self):
+            return True
+
     _mod("homeassistant.helpers.update_coordinator",
          DataUpdateCoordinator=_Coordinator, CoordinatorEntity=_Coordinator)
     _mod("homeassistant.components", __path__=[])
@@ -110,7 +115,9 @@ def _load():
     _mod("truma_pkg.truma", __path__=[str(SRC / "truma")])
     _mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None)
     _mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
+         async_remote_scanner_source=lambda *a: None,
          async_resolve_proxy_device=None, async_wait_until_heard=None)
+    _mod("truma_pkg.proxy", TrumaProxyTracker=object)
 
     def _real(name: str, package: str = "truma_pkg", path: Path = SRC):
         spec = importlib.util.spec_from_file_location(
@@ -216,17 +223,23 @@ def test_a_step_the_vehicle_does_not_have_is_not_offered() -> None:
             {"n": "1800 W", "a": False, "v": 2},
         ],
     })
+    state.update("EnergySrc", "GasLevel", 0)
+    state.update("EnergySrc", "ElectricLevel", 1)
+    entity = SELECT.TrumaElectricLevelSelect(_FakeCoordinator(state))
+    assert entity.options == ["off", "900 W"], entity.options
+    state.update("EnergySrc", "DieselLevel", 1)
+    state.update("EnergySrc", "ElectricLevel", 0)
+    assert entity.options == ["900 W"]
 
-    options = SELECT.TrumaElectricLevelSelect.options.fget(_Holder(state))
-    assert options == ["off", "900 W"], options
 
-
-def test_a_silent_panel_leaves_both_selects_as_they_were() -> None:
+def test_a_silent_panel_uses_the_safe_fallback_steps() -> None:
     state = STATE.TrumaState()
     assert SELECT.TrumaWaterModeSelect.options.fget(_Holder(state)) == [
         "off", "Eco (40 °C)", "Comfort (60 °C)", "Hot (70 °C)",
     ]
-    assert SELECT.TrumaElectricLevelSelect.options.fget(_Holder(state)) == [
+    state.update("EnergySrc", "GasLevel", 0)
+    state.update("EnergySrc", "ElectricLevel", 0)
+    assert SELECT.TrumaElectricLevelSelect(_FakeCoordinator(state)).options == [
         "off", "900 W", "1800 W",
     ]
 
@@ -304,28 +317,26 @@ def _setup_selects(coordinator) -> list:
     return made
 
 
-def test_the_electric_select_waits_for_an_electric_element() -> None:
-    """Measured on a Combi D van: the panel never mentions ElectricLevel.
-
-    That select was offering off / 900 W / 1800 W against hardware that has
-    none of them, which reads as a broken integration rather than as absent
-    hardware -- the same reasoning the water entities already follow.
-    """
+def test_energy_fields_appear_once_on_any_source_and_single_source_is_disabled() -> None:
+    """Both fields remain visible but disabled for single-source hardware."""
     coordinator = _FakeCoordinator(STATE.TrumaState())
     made = _setup_selects(coordinator)
 
     assert [type(entity).__name__ for entity in made] == ["TrumaWaterModeSelect"], made
 
-    # A heater that has the element says so, and then it appears.
+    # One reported source creates both fields, without enabling either.
     coordinator.report("EnergySrc", "ElectricLevel", 0)
     assert [type(entity).__name__ for entity in made] == [
         "TrumaWaterModeSelect",
+        "TrumaEnergySourceSelect",
         "TrumaElectricLevelSelect",
     ], made
+    assert not made[1].available and not made[2].available
+    assert made[1].options == [] and made[2].options == []
 
     # ...and only once, however many frames follow.
     coordinator.report("EnergySrc", "ElectricLevel", 1)
-    assert len(made) == 2, made
+    assert len(made) == 3, made
 
 
 def test_water_heating_is_not_gated_on_anything() -> None:

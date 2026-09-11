@@ -87,8 +87,13 @@ def _load():
         def __init__(self, coordinator) -> None:
             self.coordinator = coordinator
 
+        @property
+        def available(self) -> bool:
+            return True
+
     _mod("homeassistant", __path__=[])
     _mod("homeassistant.core", HomeAssistant=object, callback=lambda f: f)
+    _mod("homeassistant.exceptions", HomeAssistantError=RuntimeError)
     _mod(
         "homeassistant.const",
         PERCENTAGE="%",
@@ -110,7 +115,7 @@ def _load():
         SensorEntity=object,
         SensorEntityDescription=_EntityDescription,
         SensorDeviceClass=types.SimpleNamespace(
-            TEMPERATURE="temperature", VOLTAGE="voltage", DURATION="duration"
+            TEMPERATURE="temperature", VOLTAGE="voltage", DURATION="duration", ENUM="enum"
         ),
         SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement"),
     )
@@ -126,6 +131,7 @@ def _load():
         SwitchEntity=object,
         SwitchDeviceClass=types.SimpleNamespace(SWITCH="switch"),
     )
+    _mod("homeassistant.components.select", SelectEntity=object)
 
     _mod("truma_pkg", __path__=[str(SRC)])
     _mod("truma_pkg.truma", __path__=[str(SRC / "truma")])
@@ -155,10 +161,11 @@ def _load():
         _real("sensor"),
         _real("switch"),
         _real("binary_sensor"),
+        _real("select"),
     )
 
 
-STATE, SENSOR, SWITCH, BINARY = _load()
+STATE, SENSOR, SWITCH, BINARY, SELECT = _load()
 
 # The electrical block, as measured on the vehicles reported so far. Named
 # here only to prove nothing in the source needs to name it.
@@ -199,6 +206,10 @@ class _FakeCoordinator:
 
     async def async_write(self, topic: str, param: str, value: int) -> None:
         self.writes.append((topic, param, value))
+
+    async def async_write_many(self, commands, *, confirm=False, action=None, target=None) -> None:
+        assert confirm
+        self.writes.extend(commands)
 
 
 def _setup(platform, coordinator) -> list:
@@ -248,7 +259,7 @@ def test_gas_is_reflected_and_never_commanded() -> None:
     # ...and no platform writes the parameter anywhere.
     for platform in ("switch", "select", "number", "climate", "binary_sensor"):
         text = (SRC / f"{platform}.py").read_text()
-        assert "GasLevel" not in text or platform == "binary_sensor", (
+        assert "GasLevel" not in text or platform in ("binary_sensor", "select"), (
             f"{platform}.py touches EnergySrc.GasLevel"
         )
     assert '"GasLevel"' not in (SRC / "binary_sensor.py").read_text(), (
@@ -259,7 +270,11 @@ def test_gas_is_reflected_and_never_commanded() -> None:
 def test_the_gas_sensor_appears_only_on_a_heater_that_burns_gas() -> None:
     coordinator = _FakeCoordinator()
     made = _setup(BINARY, coordinator)
-    assert _names(made) == ["TrumaFlameSensor", "TrumaConnectionSensor"], made
+    assert _names(made) == [
+        "TrumaFlameSensor",
+        "TrumaConnectionSensor",
+        "TrumaProxySensor",
+    ], made
 
     coordinator.report("EnergySrc", "GasLevel", 1, HEATER)
     assert _names(made)[-1] == "TrumaGasSensor", made
@@ -267,19 +282,180 @@ def test_the_gas_sensor_appears_only_on_a_heater_that_burns_gas() -> None:
 
     # ...and only once, however many frames follow.
     coordinator.report("EnergySrc", "GasLevel", 0, HEATER)
-    assert len(made) == 3, made
+    assert len(made) == 4, made
     assert made[-1].is_on is False
 
 
-def test_the_diesel_switch_waits_for_a_diesel_burner() -> None:
-    """The mirror image of #16: a gas Combi has no DieselLevel at all."""
+def test_diesel_is_controlled_only_by_the_energy_source_select() -> None:
     coordinator = _FakeCoordinator()
     made = _setup(SWITCH, coordinator)
     assert made == [], "a gas Combi was given a diesel burner switch"
 
     coordinator.report("EnergySrc", "DieselLevel", 1, HEATER)
-    assert _names(made) == ["TrumaDieselSwitch"], made
-    assert made[0].is_on is True
+    assert made == []
+
+
+def test_energy_source_appears_for_diesel_and_expands_when_electric_reports() -> None:
+    coordinator = _FakeCoordinator()
+    made = _setup(SELECT, coordinator)
+    assert _names(made) == ["TrumaWaterModeSelect"]
+
+    coordinator.report("EnergySrc", "DieselLevel", 1, HEATER)
+    assert _names(made) == ["TrumaWaterModeSelect", "TrumaEnergySourceSelect", "TrumaElectricLevelSelect"]
+
+    coordinator.report("EnergySrc", "ElectricLevel", 0, HEATER)
+    assert _names(made) == [
+        "TrumaWaterModeSelect",
+        "TrumaEnergySourceSelect",
+        "TrumaElectricLevelSelect",
+    ]
+
+
+def test_each_single_source_shows_both_disabled_fields_and_rejects_writes():
+    for param in ("DieselLevel", "GasLevel", "ElectricLevel"):
+        for value in (0, 1):
+            coordinator = _FakeCoordinator()
+            coordinator.data.connected = True
+            made = _setup(SELECT, coordinator)
+            coordinator.report("EnergySrc", param, value, HEATER)
+            assert _names(made) == ["TrumaWaterModeSelect", "TrumaEnergySourceSelect", "TrumaElectricLevelSelect"]
+            for entity, options in ((made[1], ("off", "diesel", "electric", "hybrid")), (made[2], ("off", "900 W", "1800 W"))):
+                assert not entity.available, (param, value, type(entity).__name__)
+                assert entity.options == []
+                for option in options:
+                    try:
+                        asyncio.run(entity.async_select_option(option))
+                    except RuntimeError:
+                        pass
+                    else:
+                        raise AssertionError(f"single source accepted {option}")
+            assert not coordinator.writes
+            coordinator.report("EnergySrc", param, value, HEATER)
+            assert len(made) == 3
+
+
+def test_second_source_enables_existing_entities_by_hardware_not_active_values():
+    for first, second in (("DieselLevel", "ElectricLevel"), ("ElectricLevel", "DieselLevel")):
+        coordinator = _FakeCoordinator()
+        coordinator.data.connected = True
+        made = _setup(SELECT, coordinator)
+        coordinator.report("EnergySrc", first, 0, HEATER)
+        assert len(made) == 3, "both fields must appear for the first source"
+        source, electric = made[1:]
+        assert not source.available and not electric.available
+        coordinator.report("EnergySrc", second, 0, HEATER)
+        assert len(made) == 3
+        assert source.available
+        assert source.options == ["diesel", "electric", "hybrid"]
+        assert not electric.available
+        try:
+            asyncio.run(electric.async_select_option("900 W"))
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("electric power write accepted while disabled in diesel")
+        coordinator.report("EnergySrc", "ElectricLevel", 1, HEATER)
+        assert electric.available
+        assert electric.options == ["900 W", "1800 W"]
+        assert made[1:] == [source, electric]
+
+
+def test_standalone_electric_off_is_filtered_by_panel_metadata():
+    coordinator = _FakeCoordinator()
+    coordinator.report("EnergySrc", "GasLevel", 0, HEATER)
+    coordinator.data.learn_param("EnergySrc", "ElectricLevel", {
+        "type": 2, "enum": [
+            {"n": "Off", "a": False, "v": 0},
+            {"n": "900 W", "a": True, "v": 1},
+            {"n": "1800 W", "a": True, "v": 2},
+        ],
+    })
+    coordinator.report("EnergySrc", "ElectricLevel", 1, HEATER)
+    entity = SELECT.TrumaElectricLevelSelect(coordinator)
+    assert entity.options == ["900 W", "1800 W"]
+    try:
+        asyncio.run(entity.async_select_option("off"))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("metadata-excluded off option was accepted")
+    assert not coordinator.writes
+
+
+def test_energy_source_maps_states_and_uses_safe_900_w_transitions() -> None:
+    coordinator = _FakeCoordinator()
+    coordinator.report("EnergySrc", "DieselLevel", 1, HEATER)
+    coordinator.report("EnergySrc", "ElectricLevel", 0, HEATER)
+    source = SELECT.TrumaEnergySourceSelect(coordinator)
+
+    assert source.options == ["diesel", "electric", "hybrid"]
+    assert source.current_option == "diesel"
+
+    asyncio.run(source.async_select_option("electric"))
+    assert coordinator.writes == [
+        ("EnergySrc", "ElectricLevel", 1),
+        ("EnergySrc", "DieselLevel", 0),
+    ]
+
+    coordinator.writes.clear()
+    asyncio.run(source.async_select_option("hybrid"))
+    assert coordinator.writes == [
+        ("EnergySrc", "DieselLevel", 1),
+        ("EnergySrc", "ElectricLevel", 1),
+    ]
+
+    coordinator.writes.clear()
+    asyncio.run(source.async_select_option("diesel"))
+    assert coordinator.writes == [
+        ("EnergySrc", "DieselLevel", 1),
+        ("EnergySrc", "ElectricLevel", 0),
+    ]
+
+
+def test_electric_power_is_only_available_for_electric_or_hybrid() -> None:
+    coordinator = _FakeCoordinator()
+    coordinator.data.connected = True
+    coordinator.report("EnergySrc", "DieselLevel", 1, HEATER)
+    coordinator.report("EnergySrc", "ElectricLevel", 0, HEATER)
+    level = SELECT.TrumaElectricLevelSelect(coordinator)
+
+    assert level.available is False
+    assert level.current_option is None
+    assert level.options == ["900 W", "1800 W"]
+
+    coordinator.report("EnergySrc", "ElectricLevel", 1, HEATER)
+    assert level.available is True
+    assert level.current_option == "900 W"
+
+
+def test_standalone_electric_heater_retains_off_and_can_start_from_zero():
+    coordinator = _FakeCoordinator()
+    coordinator.data.connected = True
+    coordinator.report("EnergySrc", "GasLevel", 1, HEATER)
+    coordinator.report("EnergySrc", "ElectricLevel", 0, HEATER)
+    made = _setup(SELECT, coordinator)
+    source = made[1]
+    assert not source.available
+    assert source.options == []
+    try:
+        asyncio.run(source.async_select_option("electric"))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("gas source selector accepted unsupported write")
+    level = SELECT.TrumaElectricLevelSelect(coordinator)
+    assert level.available, "gas/electric heater cannot turn on its electric element"
+    assert level.options == ["off", "900 W", "1800 W"]
+    assert level.current_option == "off"
+    asyncio.run(level.async_select_option("900 W"))
+    asyncio.run(level.async_select_option("off"))
+    assert coordinator.writes == [
+        ("EnergySrc", "ElectricLevel", 1), ("EnergySrc", "ElectricLevel", 0)
+    ]
+    coordinator.report("EnergySrc", "DieselLevel", 1, HEATER)
+    assert not level.available
+    assert level.options == ["900 W", "1800 W"]
+    assert level.current_option is None
 
 
 def test_the_batteries_appear_only_where_something_reports_them() -> None:
@@ -341,6 +517,67 @@ def test_the_flame_sensor_is_on_only_while_it_is_firing() -> None:
     assert flame.is_on is True
     coordinator.report("System", "FlameStatus", 2, HEATER)
     assert flame.is_on is False, "2 is the appliance standing by, not a flame"
+
+
+def test_energy_confirmation_log_requires_confirmed_write() -> None:
+    coordinator = _FakeCoordinator()
+    coordinator.report("EnergySrc", "DieselLevel", 1, HEATER)
+    coordinator.report("EnergySrc", "ElectricLevel", 0, HEATER)
+    entity = SELECT.TrumaEnergySourceSelect(coordinator)
+    events = []
+    entity.entity_id = "select.test_energy"
+    entity.hass = types.SimpleNamespace(
+        config=types.SimpleNamespace(language="de"),
+        bus=types.SimpleNamespace(async_fire=lambda name, data: events.append((name, data))),
+    )
+    asyncio.run(entity.async_select_option("hybrid"))
+    assert len(events) == 1, "confirmed setting is missing from activity log"
+    assert events[0][0] == "logbook_entry"
+    assert events[0][1]["entity_id"] == "select.test_energy"
+    assert "Hybrid" in events[0][1]["message"]
+    events.clear()
+    async def fail(*args, **kwargs):
+        raise RuntimeError("no panel confirmation")
+    coordinator.async_write_many = fail
+    try:
+        asyncio.run(entity.async_select_option("electric"))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("unconfirmed setting must fail")
+    assert not events, "failed command was logged as confirmed"
+
+
+def test_energy_transaction_masks_intermediate_hybrid_and_rejects_changing():
+    coordinator = _FakeCoordinator()
+    coordinator.report("EnergySrc", "DieselLevel", 1, HEATER)
+    coordinator.report("EnergySrc", "ElectricLevel", 1, HEATER)
+    coordinator.energy_source_changing = True
+    entity = SELECT.TrumaEnergySourceSelect(coordinator)
+    assert entity.current_option == "changing"
+    assert "changing" in entity.options
+    try:
+        asyncio.run(entity.async_select_option("changing"))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("status-only option accepted as command")
+    assert not coordinator.writes
+    coordinator.energy_source_changing = False
+    assert entity.current_option == "hybrid"
+    assert "changing" not in entity.options
+
+
+def test_operation_sensor_exists_before_panel_data_and_reports_offline_error():
+    coordinator = _FakeCoordinator()
+    coordinator.operation_state = "error"
+    coordinator.operation_attributes = {"action": "sync", "target": None, "error": "No connection"}
+    made = _setup(SENSOR, coordinator)
+    found = [e for e in made if e.entity_description.key == "operation"]
+    assert len(found) == 1
+    assert found[0].available
+    assert found[0].native_value == "error"
+    assert found[0].extra_state_attributes == coordinator.operation_attributes
 
 
 def _main() -> None:

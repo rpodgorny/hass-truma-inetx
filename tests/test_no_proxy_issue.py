@@ -138,7 +138,12 @@ def _load():
     )
     # Without this, is_remote_scanner() hits ImportError and calls every scanner
     # local, which would silently pass the proxy-preference checks below.
-    _mod("habluetooth", BaseHaRemoteScanner=_RemoteScanner)
+    _mod(
+        "habluetooth",
+        BaseHaRemoteScanner=_RemoteScanner,
+        HaScannerRegistration=object,
+        get_manager=lambda: types.SimpleNamespace(),
+    )
 
     _mod("truma_pkg", __path__=[str(SRC)])
     _mod("truma_pkg.truma", __path__=[])
@@ -195,6 +200,30 @@ def _set_adverts(*infos: _Info) -> None:
 def test_panel_detection() -> None:
     _set_adverts()
     assert BT.async_panel_advertising(None, PANEL) is False
+
+
+def test_coordinator_remembers_the_proxy_route_and_publishes_its_status() -> None:
+    remember = getattr(COORD.TrumaCoordinator, "_remember_proxy_for_address", None)
+    proxy_available = getattr(COORD.TrumaCoordinator, "proxy_available", None)
+    assert callable(remember), "coordinator does not capture the selected proxy route"
+    assert isinstance(proxy_available, property), "coordinator exposes no proxy status"
+
+    remembered = []
+    coord = object.__new__(COORD.TrumaCoordinator)
+    coord.hass = object()
+    coord._proxy_tracker = types.SimpleNamespace(
+        remember_source=remembered.append,
+        available=True,
+    )
+    original = COORD.async_remote_scanner_source
+    COORD.async_remote_scanner_source = lambda _hass, _address: "proxy-source"
+    try:
+        remember(coord, "62:4A:BD:AD:73:5D")
+    finally:
+        COORD.async_remote_scanner_source = original
+
+    assert remembered == ["proxy-source"]
+    assert proxy_available.fget(coord) is True
 
     _set_adverts(_Info(name=PANEL))
     assert BT.async_panel_advertising(None, PANEL) is True
@@ -462,6 +491,7 @@ def test_poll_interval_is_read_from_options() -> None:
 
 if __name__ == "__main__":
     test_panel_detection()
+    test_coordinator_remembers_the_proxy_route_and_publishes_its_status()
     test_debounced_warning()
     test_silent_when_panel_unheard()
     test_success_clears()
