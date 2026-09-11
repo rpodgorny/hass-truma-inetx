@@ -92,6 +92,7 @@ _POLL_MAX_DWELL = 40  # seconds
 # A write in poll mode has to wait for a whole connect plus startup handshake
 # (~20 s measured), so allow generously more than that before giving up.
 _WRITE_CONNECT_TIMEOUT = 75  # seconds
+_MANUAL_LIVE_MINUTES_MAX = 999
 _STORAGE_VERSION = 1
 
 # Parameter discovery is sent to each bus device separately (see DEVICE_SEED),
@@ -181,6 +182,14 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         self._wake_event = asyncio.Event()
         self._connected_event = asyncio.Event()
         self._writes_pending = 0
+        # A dashboard request can wake poll mode without faking a parameter
+        # write.  The requested hold starts only after startup has completed,
+        # so a slow BLE handshake never consumes the user's live-mode time.
+        self._manual_wake_pending = False
+        self._manual_hold_request_minutes: int | None = None
+        self._manual_hold_until = 0.0
+        self._manual_release_requested = False
+        self.manual_live_minutes = 0
 
     async def _async_update_data(self) -> TrumaState:
         """Return the current shared state (updated by BLE notifications)."""
@@ -275,6 +284,10 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         delay = _RECONNECT_DELAY_BASE
         while not self._stop:
             connected = False
+            # Consume only the wake nudge.  The requested duration remains
+            # pending until startup succeeds, but a failed dial must still
+            # respect reconnect backoff instead of spinning without delay.
+            self._manual_wake_pending = False
             try:
                 connected = await self._connect_and_run()
             except Exception as exc:  # noqa: BLE001
@@ -312,19 +325,30 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             # link that just dropped should return fast); a failed attempt grows
             # it after the wait, so a persistently unreachable panel backs off
             # the shared adapter instead of hammering it.
-            if connected and self.poll_interval:
-                # A completed poll is not a failure to back off from; the next
-                # one is simply due later.
-                delay = self.poll_interval
-            elif connected:
-                delay = _RECONNECT_DELAY_BASE
+            delay = self._reconnect_delay(connected, delay)
+            if connected:
                 # A real connection means our address set is healthy; forget any
                 # past failures so a later reconnect starts from a clean slate.
                 self._avoid.clear()
             LOGGER.debug("Truma %s reconnecting in %ss", self.unique_id, delay)
             await self._wait_before_retry(delay)
-            if not connected:
+            if not connected and not self.manual_session_active:
                 delay = min(delay * 2, _RECONNECT_DELAY_MAX)
+
+    def _reconnect_delay(self, connected: bool, current: float) -> float:
+        """Return the wait before the next session.
+
+        A live-mode deadline survives an unexpected BLE drop.  Retry quickly
+        while it is active; otherwise retain the integration's established
+        poll and exponential-backoff behaviour.
+        """
+        if self.manual_session_active:
+            return _RECONNECT_DELAY_BASE
+        if connected and self.poll_interval:
+            return self.poll_interval
+        if connected:
+            return _RECONNECT_DELAY_BASE
+        return current
 
     async def _wait_before_retry(self, delay: float) -> None:
         """Sleep ``delay`` seconds; wake early on stop, or for a pending write.
@@ -333,10 +357,10 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         nudge, so a write that lands in the gap between sessions cannot be
         missed by clearing the event at the wrong moment.
         """
-        if self._writes_pending:
+        if self._writes_pending or self._manual_wake_pending:
             return
         self._wake_event.clear()
-        if self._writes_pending:  # set while we were clearing
+        if self._writes_pending or self._manual_wake_pending:
             return
         stop = asyncio.ensure_future(self._stop_event.wait())
         wake = asyncio.ensure_future(self._wake_event.wait())
@@ -453,6 +477,74 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             self.config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
         )
 
+    @property
+    def manual_session_active(self) -> bool:
+        """Whether a requested timed live session is still active."""
+        return (
+            bool(self.poll_interval)
+            and self.hass.loop.time() < getattr(self, "_manual_hold_until", 0.0)
+        )
+
+    async def async_request_manual_session(self, minutes: int) -> None:
+        """Refresh now and optionally keep poll mode connected for minutes."""
+        if (
+            isinstance(minutes, bool)
+            or not isinstance(minutes, int)
+            or not 0 <= minutes <= _MANUAL_LIVE_MINUTES_MAX
+        ):
+            raise HomeAssistantError(
+                f"Live mode duration must be a whole number from 0 to "
+                f"{_MANUAL_LIVE_MINUTES_MAX} minutes"
+            )
+
+        client = self._client
+        if (
+            client is not None
+            and client.connected
+            and self._connected_event.is_set()
+        ):
+            self._manual_release_requested = False
+            self._manual_hold_until = (
+                self.hass.loop.time() + minutes * 60
+                if self.poll_interval and minutes
+                else 0.0
+            )
+            # Startup has just refreshed the ordinary parameters.  Ask the
+            # on-demand sensors too when the link was already available.
+            await self._request_measurements(client)
+            return
+
+        self._manual_hold_request_minutes = minutes
+        self._manual_wake_pending = True
+        self._manual_release_requested = False
+        self._connected_event.clear()
+        self._wake_event.set()
+        LOGGER.debug(
+            "Truma %s: manual session requested (%d minute live hold)",
+            self.unique_id,
+            minutes,
+        )
+        try:
+            await asyncio.wait_for(
+                self._connected_event.wait(), timeout=_WRITE_CONNECT_TIMEOUT
+            )
+        except TimeoutError:
+            self._manual_hold_request_minutes = None
+            self._manual_wake_pending = False
+            raise HomeAssistantError(
+                "Truma panel did not answer in time for the manual refresh"
+            ) from None
+
+    async def async_end_manual_session(self) -> None:
+        """Release a manual hold without interrupting an in-flight write."""
+        self._manual_hold_request_minutes = None
+        self._manual_wake_pending = False
+        self._manual_hold_until = 0.0
+        self._manual_release_requested = True
+        # The poll dwell loop checks this once a second, after checking writes,
+        # and therefore never disconnects underneath an in-flight command.
+        LOGGER.debug("Truma %s: manual live mode released", self.unique_id)
+
     async def _finish_startup(self, client: TrumaBleClient) -> bool:
         """Run startup on a connected client, then hold until the link drops.
 
@@ -460,6 +552,17 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         (the connection is up, so the caller resets the backoff).
         """
         await self._run_startup(client)
+
+        if getattr(self, "_manual_hold_request_minutes", None) is not None:
+            minutes = self._manual_hold_request_minutes
+            self._manual_hold_request_minutes = None
+            self._manual_wake_pending = False
+            self._manual_release_requested = False
+            self._manual_hold_until = (
+                self.hass.loop.time() + minutes * 60
+                if self.poll_interval and minutes
+                else 0.0
+            )
 
         # In poll mode this stays True between polls: it means "we are in
         # touch with the panel", not "a link is open this instant". The link
@@ -478,13 +581,36 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             # Poll mode: the reading is in hand, so let the link go and free the
             # connection slot. Wait only until the panel stops talking.
             started = self.hass.loop.time()
+            next_measure = self.hass.loop.time() + _MEASURE_INTERVAL
             while not self._stop and client.connected:
                 await asyncio.sleep(1)
                 if self._writes_pending:
                     # Someone is mid-write; do not hang up under them.
                     started = self.hass.loop.time()
                     continue
-                quiet = self.hass.loop.time() - self._last_frame
+                if getattr(self, "_manual_release_requested", False):
+                    self._manual_release_requested = False
+                    self._manual_hold_until = 0.0
+                    break
+                now = self.hass.loop.time()
+                manual_active = (
+                    bool(self.poll_interval)
+                    and now < getattr(self, "_manual_hold_until", 0.0)
+                )
+                if manual_active:
+                    if now >= next_measure:
+                        next_measure = now + _MEASURE_INTERVAL
+                        await self._request_measurements(client)
+                    if now - self._last_frame > _DATA_STALL_TIMEOUT:
+                        LOGGER.warning(
+                            "Truma %s: no data for %ss during manual live mode; "
+                            "reconnecting",
+                            self.unique_id,
+                            _DATA_STALL_TIMEOUT,
+                        )
+                        break
+                    continue
+                quiet = now - self._last_frame
                 if quiet >= _POLL_QUIET:
                     break
                 if self.hass.loop.time() - started >= _POLL_MAX_DWELL:

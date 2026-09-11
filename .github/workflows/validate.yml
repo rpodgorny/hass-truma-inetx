@@ -40,6 +40,8 @@ jobs:
       - run: python3 tests/test_water_entities.py
       - run: python3 tests/test_energy_entities.py
       - run: python3 tests/test_water_priority.py
+      - run: python3 tests/test_manual_live_mode.py
+      - run: python3 tests/test_manual_live_entities.py
       # The config flow builds its voluptuous schema at import time, and this
       # test drives the real flow rather than a stub of it.
       - run: pip install voluptuous

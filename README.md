@@ -9,6 +9,10 @@ Reads room/water/internal temperatures and supply voltage, and controls heating
 mode, target temperature, water heating, electric heating level, the diesel
 burner and the fan — no cloud, no Truma account, no LIN wiring.
 
+This fork adds dashboard controls for an immediate BLE refresh and a timed
+live session. It is maintained for the Holly motorhome installation and keeps
+the original project as its upstream source.
+
 Developed against an iNet X driving a **Truma Combi**. Other Truma appliances
 speak the same protocol but are untested; reports welcome.
 
@@ -83,6 +87,9 @@ and clears the issue on the next successful connect.
 | Diesel burner | `switch` | Only where the heater has a diesel burner |
 | Gas | `binary_sensor` | Whether the heater is drawing on gas. Read-only — the heater moves this itself. Only where it burns gas |
 | Fan level | `number` | 0–10 |
+| Live mode duration | `number` | 0–999 minutes; restored locally in Home Assistant |
+| Sync now / start live mode | `button` | Connect immediately, refresh all values and stay connected for the selected duration. `0` performs one refresh and disconnects normally |
+| End live mode | `button` | Ends a timed live session early without interrupting a command already being sent |
 | Flame | `binary_sensor` | Burner currently firing |
 | BLE connection | `binary_sensor` | Diagnostic — is the panel connected |
 | Fresh water | `sensor` | % — only where the vehicle has a tank sensor |
@@ -157,6 +164,14 @@ would otherwise keep reporting its old level indefinitely. The integration
 asks for a fresh measurement once per connect and every 60 s while the link is
 held, addressed to whichever device reported the tank.
 
+With a non-zero poll interval, the manual controls can temporarily override
+the wait without changing the configured interval. Set **Live mode duration**
+to a whole number from 0 through 999 and press **Sync now / start live mode**.
+The timer starts only after the BLE startup handshake has completed. If the
+link drops during that period, the integration retries with its short backoff.
+Press **End live mode** to release the link early. Permanent-connect mode
+(`poll_interval_seconds: 0`) keeps its existing behaviour.
+
 The panel drives its own fan while heating and has no setpoint at all while
 venting, so exactly one of the two controls is meaningful at any time. The
 climate entity reflects that: `supported_features` follows the mode rather than
@@ -203,12 +218,12 @@ an explicit error naming the missing component).
 
 ### HACS (custom repository)
 
-[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rpodgorny&repository=hass-truma-inetx&category=integration)
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=tomac01&repository=hass-truma-inetx&category=integration)
 
 Or manually:
 
 1. HACS → ⋮ → **Custom repositories**
-2. Add `https://github.com/rpodgorny/hass-truma-inetx`, category **Integration**
+2. Add `https://github.com/tomac01/hass-truma-inetx`, category **Integration**
 3. Install **Truma iNet X (BLE)**, then restart Home Assistant
 4. Settings → Devices & Services → the panel should be discovered; see
    [Pairing](#pairing)
@@ -366,4 +381,3 @@ It is excluded from the GPL-3.0 licence above.
 "Truma" and the Truma iNet X mark are trademarks of Truma Gerätetechnik GmbH &
 Co. KG. This project is not affiliated with, endorsed, sponsored by or
 supported by Truma.
-

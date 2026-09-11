@@ -56,6 +56,17 @@
     "number": {
       "fan_level": {
         "name": "Fan level"
+      },
+      "manual_live_minutes": {
+        "name": "Live mode duration"
+      }
+    },
+    "button": {
+      "manual_sync": {
+        "name": "Sync now / start live mode"
+      },
+      "manual_stop": {
+        "name": "End live mode"
       }
     },
     "select": {

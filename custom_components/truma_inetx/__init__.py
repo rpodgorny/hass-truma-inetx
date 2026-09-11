@@ -21,6 +21,7 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
     Platform.NUMBER,
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
 ]
 
 CARD_FILENAME = "truma-climate-dial-card.js"

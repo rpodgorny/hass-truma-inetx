@@ -11,6 +11,17 @@
     "number": {
       "fan_level": {
         "default": "mdi:fan"
+      },
+      "manual_live_minutes": {
+        "default": "mdi:timer-cog-outline"
+      }
+    },
+    "button": {
+      "manual_sync": {
+        "default": "mdi:bluetooth-connect"
+      },
+      "manual_stop": {
+        "default": "mdi:bluetooth-off"
       }
     },
     "switch": {
