@@ -9,10 +9,6 @@ Reads room/water/internal temperatures and supply voltage, and controls heating
 mode, target temperature, water heating, electric heating level, the diesel
 burner and the fan — no cloud, no Truma account, no LIN wiring.
 
-This fork adds dashboard controls for an immediate BLE refresh and a timed
-live session. It is maintained for the Holly motorhome installation and keeps
-the original project as its upstream source.
-
 Developed against an iNet X driving a **Truma Combi**. Other Truma appliances
 speak the same protocol but are untested; reports welcome.
 
@@ -218,12 +214,12 @@ an explicit error naming the missing component).
 
 ### HACS (custom repository)
 
-[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=tomac01&repository=hass-truma-inetx&category=integration)
+[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rpodgorny&repository=hass-truma-inetx&category=integration)
 
 Or manually:
 
 1. HACS → ⋮ → **Custom repositories**
-2. Add `https://github.com/tomac01/hass-truma-inetx`, category **Integration**
+2. Add `https://github.com/rpodgorny/hass-truma-inetx`, category **Integration**
 3. Install **Truma iNet X (BLE)**, then restart Home Assistant
 4. Settings → Devices & Services → the panel should be discovered; see
    [Pairing](#pairing)
