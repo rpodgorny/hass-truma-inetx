@@ -434,6 +434,93 @@ class TrumaClimateDialCard extends HTMLElement {
   }
 }
 
+// Wrap any existing control without replacing its DOM on state updates. The
+// coordinator, not a UI timer or a service-call promise, owns the busy state.
+class TrumaOperationCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._generation = 0;
+  }
+
+  setConfig(config) {
+    if (!config?.operation_entity?.startsWith("sensor.")) {
+      throw new Error("operation_entity must be the Truma operation sensor");
+    }
+    this._config = config;
+    this._child = null;
+    const generation = ++this._generation;
+    this.shadowRoot.innerHTML = `<style>
+      :host { display: block; }
+      .control { border-radius: var(--ha-card-border-radius, 12px); }
+      .control.busy { outline: 2px solid var(--primary-color); outline-offset: -2px;
+        animation: truma-pulse 1.6s ease-in-out infinite; }
+      .status { font-size: .85rem; line-height: 1.5; color: var(--secondary-text-color);
+        padding: 6px 10px; overflow-wrap: anywhere; }
+      .status.error { color: var(--error-color, #db4437); }
+      [hidden] { display: none !important; }
+      @keyframes truma-pulse { 0%, 100% { box-shadow: 0 0 0 0 transparent; }
+        50% { box-shadow: 0 0 0 3px var(--primary-color); } }
+      @media (prefers-reduced-motion: reduce) { .control.busy { animation: none; } }
+    </style><div class="control"></div><div class="status" role="status" aria-live="polite" aria-atomic="true"></div>`;
+    this._control = this.shadowRoot.querySelector(".control");
+    this._status = this.shadowRoot.querySelector(".status");
+    if (config.card) {
+      window.loadCardHelpers().then(helpers => {
+        if (generation !== this._generation) return;
+        this._child = helpers.createCardElement(config.card);
+        if (this._hass) this._child.hass = this._hass;
+        this._control.append(this._child);
+      }).catch(error => {
+        if (generation !== this._generation) return;
+        this._buildError = String(error.message || error);
+        this._renderFeedback();
+      });
+    }
+    this._buildError = null;
+    this._renderFeedback();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._child) this._child.hass = hass;
+    this._renderFeedback();
+  }
+
+  async getCardSize() { return (await this._child?.getCardSize?.() || 1) + 1; }
+
+  _feedback() {
+    const de = (this._hass?.language || "en").startsWith("de");
+    const state = this._hass?.states[this._config.operation_entity];
+    if (!state || ["unknown", "unavailable"].includes(state.state)) {
+      return { busy: false, error: false, text: de ? "Vorgangsstatus nicht verfügbar" : "Operation status unavailable" };
+    }
+    const filter = this._config.action;
+    const matches = !filter || (Array.isArray(filter)
+      ? filter.includes(state.attributes.action) : state.attributes.action === filter);
+    const busy = matches && ["syncing", "changing"].includes(state.state);
+    const error = matches && state.state === "error";
+    let text = "";
+    if (busy) text = state.state === "syncing"
+      ? (de ? "Synchronisation läuft …" : "Synchronizing …")
+      : (de ? "Wird umgestellt …" : "Changing …");
+    else if (error) text = `${de ? "Fehler" : "Error"}: ${state.attributes.error || (de ? "Vorgang fehlgeschlagen" : "Operation failed")}`;
+    else if (!this._config.action) text = de ? "Bereit" : "Ready";
+    return { busy, error, text };
+  }
+
+  _renderFeedback() {
+    if (!this._config || !this._status) return;
+    const feedback = this._feedback();
+    this._control.classList.toggle("busy", Boolean(this._config.card) && feedback.busy && !this._buildError);
+    this._control.setAttribute("aria-busy", String(feedback.busy && !this._buildError));
+    // Error messages are untrusted device/service text; never use innerHTML.
+    this._status.textContent = this._buildError || feedback.text;
+    this._status.classList.toggle("error", Boolean(this._buildError || feedback.error));
+    this._status.hidden = !this._status.textContent;
+  }
+}
+
 // Register only once the frontend is up. Do not "simplify" this to a plain
 // customElements.define() at module scope -- that is the bug it fixes.
 //
@@ -465,12 +552,17 @@ class TrumaClimateDialCard extends HTMLElement {
 // the frontend loads those itself, after boot. Only the add_extra_js_url path
 // has this problem.
 customElements.whenDefined("home-assistant").then(() => {
+  if (!customElements.get("truma-operation-card")) {
+    customElements.define("truma-operation-card", TrumaOperationCard);
+  }
   if (!customElements.get("truma-climate-dial-card")) {
     customElements.define("truma-climate-dial-card", TrumaClimateDialCard);
   }
 });
 
 window.customCards = window.customCards || [];
+window.customCards.push({ type: "truma-operation-card", name: "Truma operation feedback",
+  description: "Live operation status and accessible busy feedback around a control." });
 window.customCards.push({
   type: "truma-climate-dial-card",
   name: "Truma climate dial",

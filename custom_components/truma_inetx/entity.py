@@ -89,3 +89,27 @@ def async_add_when_reported(
     if pending:
         unsub = coordinator.async_add_listener(_check)
         coordinator.config_entry.async_on_unload(unsub)
+
+
+@callback
+def async_add_when_all_reported(
+    coordinator: TrumaCoordinator,
+    async_add_entities: Callable[[list[Entity]], None],
+    required: set[str],
+    factory: Callable[[], Entity],
+) -> None:
+    """Create one entity once every required hardware parameter was seen."""
+    added = False
+
+    @callback
+    def _check() -> None:
+        nonlocal added
+        if added or not required.issubset(coordinator.data.raw_params):
+            return
+        added = True
+        async_add_entities([factory()])
+
+    _check()
+    if not added:
+        unsub = coordinator.async_add_listener(_check)
+        coordinator.config_entry.async_on_unload(unsub)

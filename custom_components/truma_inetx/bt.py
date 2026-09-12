@@ -86,6 +86,22 @@ def is_remote_scanner(scanner: object) -> bool:
     return isinstance(scanner, BaseHaRemoteScanner)
 
 
+def async_remote_scanner_source(hass: HomeAssistant, address: str) -> str | None:
+    """Return the remote scanner source that can reach ``address``.
+
+    The source identifies the concrete ESPHome Bluetooth proxy in
+    ``habluetooth``.  Keeping this separate from the panel link lets the
+    integration report a healthy proxy while the panel is deliberately
+    disconnected between polls.
+    """
+    for scanner_device in bluetooth.async_scanner_devices_by_address(
+        hass, address, connectable=True
+    ):
+        if is_remote_scanner(scanner_device.scanner):
+            return scanner_device.scanner.source
+    return None
+
+
 def _panel_infos(hass: HomeAssistant, name: str) -> list:
     """Every advert that looks like this panel, seen by any scanner.
 

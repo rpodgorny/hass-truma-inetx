@@ -36,10 +36,16 @@ jobs:
       - run: python3 tests/test_pairing_rotation.py
       - run: python3 tests/test_pairing_transport_dispatch.py
       - run: python3 tests/test_device_from_bluez.py
+      - run: python3 tests/test_transport_ack_order.py
       - run: python3 tests/test_no_proxy_issue.py
+      - run: python3 tests/test_proxy_status.py
       - run: python3 tests/test_water_entities.py
       - run: python3 tests/test_energy_entities.py
       - run: python3 tests/test_water_priority.py
+      - run: python3 tests/test_manual_live_mode.py
+      - run: python3 tests/test_manual_live_entities.py
+      - run: python3 tests/test_operation_feedback.py
+      - run: node tests/test_operation_card.cjs
       # The config flow builds its voluptuous schema at import time, and this
       # test drives the real flow rather than a stub of it.
       - run: pip install voluptuous
@@ -50,4 +56,5 @@ jobs:
       - run: python3 tests/test_param_discovery.py
       - run: python3 tests/test_measure_request.py
       - run: python3 tests/test_param_meta.py
+      - run: python3 tests/test_device_params.py
       - run: python3 tests/test_panel_declared_options.py

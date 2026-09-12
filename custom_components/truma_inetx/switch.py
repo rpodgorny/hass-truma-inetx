@@ -1,4 +1,4 @@
-"""Switch platform for the Truma iNet X diesel burner, water pump and water boost."""
+"""Switch platform for the Truma iNet X water pump and water boost."""
 
 from __future__ import annotations
 
@@ -23,25 +23,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Truma switches."""
     coordinator = entry.runtime_data
-    # Neither switch is universal.
-    #
-    # A gas/electric Combi has no diesel burner, and its panel never mentions
-    # EnergySrc.DieselLevel (#16) -- so the diesel switch was a control over
-    # nothing there, exactly as the electric select was on a Combi D before it
-    # started waiting for its own parameter. And only vehicles with a water
-    # system have a pump to switch. In both cases the parameter arriving is
-    # the evidence the hardware exists.
-    #
-    # The same holds, and matters more, for the two water-priority switches
-    # below: neither has been seen on a vehicle yet -- they come from the
-    # reverse-engineered schema, not from a measurement -- so gating them is
-    # what keeps a heater that never mentions them from being given a control
-    # that writes into nothing.
+    # Create water controls only when the corresponding hardware parameter
+    # has been reported. Diesel is managed by the energy-source select.
     async_add_when_reported(
         coordinator,
         async_add_entities,
         {
-            "EnergySrc.DieselLevel": lambda: TrumaDieselSwitch(coordinator),
             "Switches.FreshWaterPump": lambda: TrumaWaterPumpSwitch(coordinator),
             "WaterHeating.BoostMode": lambda: TrumaWaterBoostSwitch(coordinator),
             "WaterHeating.FasterHeatingMode": (
@@ -49,32 +36,6 @@ async def async_setup_entry(
             ),
         },
     )
-
-
-class TrumaDieselSwitch(TrumaEntity, SwitchEntity):
-    """Diesel burner on/off."""
-
-    _attr_translation_key = "diesel"
-    _attr_device_class = SwitchDeviceClass.SWITCH
-
-    def __init__(self, coordinator: TrumaCoordinator) -> None:
-        """Initialize."""
-        super().__init__(coordinator, "diesel")
-
-    @property
-    def is_on(self) -> bool | None:
-        """Whether the diesel burner is enabled."""
-        if self.data.diesel_level is None:
-            return None
-        return bool(self.data.diesel_level)
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Enable the diesel burner."""
-        await self.coordinator.async_write("EnergySrc", "DieselLevel", 1)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Disable the diesel burner."""
-        await self.coordinator.async_write("EnergySrc", "DieselLevel", 0)
 
 
 class TrumaWaterPumpSwitch(TrumaEntity, SwitchEntity):

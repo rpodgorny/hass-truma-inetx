@@ -1,6 +1,9 @@
 {
   "entity": {
     "binary_sensor": {
+      "proxy_connection": {
+        "default": "mdi:bluetooth-transfer"
+      },
       "flame": {
         "default": "mdi:fire"
       },
@@ -11,6 +14,25 @@
     "number": {
       "fan_level": {
         "default": "mdi:fan"
+      },
+      "manual_live_minutes": {
+        "default": "mdi:timer-cog-outline"
+      }
+    },
+    "button": {
+      "manual_sync": {
+        "default": "mdi:bluetooth-connect"
+      },
+      "manual_stop": {
+        "default": "mdi:bluetooth-off"
+      }
+    },
+    "select": {
+      "energy_source": {
+        "default": "mdi:engine"
+      },
+      "electric_level": {
+        "default": "mdi:flash"
       }
     },
     "switch": {

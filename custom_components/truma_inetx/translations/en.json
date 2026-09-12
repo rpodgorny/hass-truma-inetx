@@ -44,7 +44,10 @@
   "entity": {
     "binary_sensor": {
       "connection": {
-        "name": "BLE connection"
+        "name": "BLE Truma connection"
+      },
+      "proxy_connection": {
+        "name": "BLE transmitter connection"
       },
       "flame": {
         "name": "Flame"
@@ -56,17 +59,46 @@
     "number": {
       "fan_level": {
         "name": "Fan level"
+      },
+      "manual_live_minutes": {
+        "name": "Live mode duration"
+      }
+    },
+    "button": {
+      "manual_sync": {
+        "name": "Sync now / start live mode"
+      },
+      "manual_stop": {
+        "name": "End live mode"
       }
     },
     "select": {
+      "energy_source": {
+        "name": "Energy source",
+        "state": {
+          "diesel": "Diesel",
+          "electric": "Electric",
+          "hybrid": "Hybrid",
+          "changing": "Changing …"
+        }
+      },
       "electric_level": {
-        "name": "Electric heating"
+        "name": "Electric heating output"
       },
       "water_mode": {
         "name": "Water heating"
       }
     },
     "sensor": {
+      "operation": {
+        "name": "Operation",
+        "state": {
+          "idle": "Ready",
+          "syncing": "Synchronizing",
+          "changing": "Changing …",
+          "error": "Error"
+        }
+      },
       "current_temp": {
         "name": "Room temperature"
       },
@@ -99,9 +131,6 @@
       }
     },
     "switch": {
-      "diesel": {
-        "name": "Diesel burner"
-      },
       "faster_water_heating": {
         "name": "Faster water heating"
       },

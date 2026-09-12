@@ -77,7 +77,9 @@ def _load():
     _mod("truma_pkg.truma", __path__=[str(SRC / "truma")])
     _mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None)
     _mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
+         async_remote_scanner_source=lambda *a: None,
          async_resolve_proxy_device=None, async_wait_until_heard=None)
+    _mod("truma_pkg.proxy", TrumaProxyTracker=object)
 
     def _real(name: str, package: str = "truma_pkg", path: Path = SRC):
         spec = importlib.util.spec_from_file_location(

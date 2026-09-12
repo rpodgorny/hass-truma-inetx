@@ -1,0 +1,112 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Truma iNet X hinzufügen",
+        "description": "Wähle das Truma-Bedienteil aus.",
+        "data": {
+          "address": "Gerät"
+        },
+        "data_description": {
+          "address": "Es werden nur Truma-Bedienteile angezeigt, die aktuell in Bluetooth-Reichweite von Home Assistant oder einem ESP32-Proxy senden."
+        }
+      },
+      "confirm": {
+        "description": "Möchtest du das Truma-Bedienteil {name} hinzufügen?"
+      },
+      "pair": {
+        "title": "Mit dem Truma-Bedienteil koppeln",
+        "description": "Versetze das Bedienteil {name} in den Modus zum Hinzufügen eines Geräts und wähle anschließend einmal **Absenden**."
+      }
+    },
+    "error": {
+      "pairing_failed": "Die Kopplung mit dem Bedienteil ist fehlgeschlagen. Versetze es erneut in den Kopplungsmodus und versuche es noch einmal."
+    },
+    "abort": {
+      "no_devices_found": "Kein Truma iNet X Bedienteil gefunden. Prüfe Stromversorgung und Bluetooth-Reichweite.",
+      "already_configured": "Dieses Truma-Bedienteil ist bereits eingerichtet.",
+      "awaiting_name": "Es wird darauf gewartet, dass das Truma-Bedienteil seinen Namen sendet.",
+      "reconfigure_successful": "Das Truma-Bedienteil wurde erfolgreich neu gekoppelt."
+    }
+  },
+  "exceptions": {
+    "control_not_ready": {
+      "message": "Die Truma-BLE-Steuerung ist noch nicht verfügbar."
+    }
+  },
+  "issues": {
+    "no_proxy_route": {
+      "title": "Das Truma-Bedienteil ist nicht erreichbar",
+      "description": "Home Assistant empfängt Bluetooth-Werbung des Bedienteils, kann aber keine Verbindung aufbauen. Verwende einen ESPHome-Bluetooth-Proxy in Reichweite des Bedienteils."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connection": { "name": "BLE-Truma-Verbindung" },
+      "proxy_connection": { "name": "BLE-Sender-Verbindung" },
+      "flame": { "name": "Flamme" },
+      "gas": { "name": "Gas" }
+    },
+    "button": {
+      "manual_sync": { "name": "Jetzt synchronisieren / Live-Modus starten" },
+      "manual_stop": { "name": "Live-Modus beenden" }
+    },
+    "number": {
+      "fan_level": { "name": "Lüfterstufe" },
+      "manual_live_minutes": { "name": "Live-Modus-Dauer" }
+    },
+    "select": {
+      "energy_source": {
+        "name": "Energiequelle",
+        "state": {
+          "diesel": "Diesel",
+          "electric": "Elektro",
+          "hybrid": "Hybrid",
+          "changing": "Wird umgestellt …"
+        }
+      },
+      "electric_level": { "name": "Elektrische Heizleistung" },
+      "water_mode": { "name": "Warmwasser" }
+    },
+    "sensor": {
+      "operation": {
+        "name": "Vorgang",
+        "state": {
+          "idle": "Bereit",
+          "syncing": "Synchronisation läuft",
+          "changing": "Wird umgestellt …",
+          "error": "Fehler"
+        }
+      },
+      "current_temp": { "name": "Raumtemperatur" },
+      "faster_water_heating_time": { "name": "Schnellaufheizzeit" },
+      "flame_status": { "name": "Flammenstatus" },
+      "fresh_water_level": { "name": "Frischwasser" },
+      "grey_water_level": { "name": "Grauwasser" },
+      "internal_temp": { "name": "Innentemperatur" },
+      "leisure_battery_voltage": { "name": "Aufbaubatterie" },
+      "starter_battery_voltage": { "name": "Starterbatterie" },
+      "voltage": { "name": "Versorgungsspannung" },
+      "water_temp": { "name": "Wassertemperatur" }
+    },
+    "switch": {
+      "faster_water_heating": { "name": "Schnelles Wasseraufheizen" },
+      "water_boost": { "name": "Warmwasser-Boost" },
+      "water_pump": { "name": "Frischwasserpumpe" }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Truma iNet X Optionen",
+        "data": {
+          "poll_interval_seconds": "Abfrageintervall (Sekunden, 0 = verbunden bleiben)"
+        },
+        "data_description": {
+          "poll_interval_seconds": "0 hält die Verbindung dauerhaft offen. Ein Wert größer 0 verbindet sich regelmäßig, liest die Werte und gibt den Bluetooth-Verbindungsplatz anschließend wieder frei."
+        }
+      }
+    }
+  }
+}
