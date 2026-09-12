@@ -40,6 +40,17 @@ Aktivitätsprotokoll. Bei einem Fehler kann ein Teil der Änderung bereits
 übernommen sein; den zurückgelesenen Istzustand prüfen, nicht von einem
 automatischen Zurücksetzen ausgehen.
 
+## Warmwasser und Bestätigung
+
+**Eco 40 °C**, **Comfort 60 °C** und **Hot 70 °C** schalten Warmwasser ein;
+**Aus** schaltet es aus. Eingeschaltet bedeutet nicht, dass gerade geheizt wird:
+Ist das Wasser bereits warm genug, kann die Heizung sofort **Idle** melden.
+Eine frische Warmwasser-Rückmeldung **Active=1** (heizt) oder **Active=2**
+(eingeschaltet, ohne aktuellen Heizbedarf) bestätigt deshalb das Einschalten.
+Die gewählte Temperaturstufe muss separat exakt zurückgemeldet werden.
+Beim Ausschalten gilt ausschließlich **Active=0** als Bestätigung.
+Zwischengespeicherte Werte oder eine reine BLE-Transportbestätigung reichen nicht.
+
 ## Vorgangsfeedback im Dashboard
 
 Der **Vorgang**-Sensor ist getrennt von den beiden Verbindungssensoren.
@@ -105,6 +116,14 @@ Hybrid readings from the two writes are not presented as a completed selection.
 An externally selected actual Hybrid mode is still reported. Confirmed changes
 also appear in device activity. On failure a partial change may have reached the
 panel: inspect the read-back state rather than assuming an automatic rollback.
+
+**Water heating:** Eco 40 °C, Comfort 60 °C and Hot 70 °C enable water heating;
+Off disables it. Enabled does not necessarily mean currently heating: water
+already at its target can immediately report Idle. Fresh **Active=1** (heating)
+or **Active=2** (enabled, no current demand) feedback therefore confirms enable.
+The selected temperature mode still needs its exact reported value. Only fresh
+**Active=0** confirms disable. Cached readings and BLE transport ACKs alone do
+not confirm a command.
 
 The **Operation** sensor is separate from connection and burner status. The
 last command error remains visible across background refreshes until a new

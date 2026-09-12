@@ -2,6 +2,8 @@
 """Offline operation lifecycle tests: real coordinator, controlled BLE boundary."""
 import asyncio
 import types
+from contextlib import contextmanager
+from unittest.mock import patch
 
 from test_manual_live_mode import COORD, _Coord, _Client
 
@@ -447,6 +449,258 @@ def test_older_refresh_failure_cannot_clear_newer_successful_hold():
         gate.set()
         await asyncio.gather(old, return_exceptions=True)
         assert c._manual_hold_until == 120
+    asyncio.run(case())
+
+
+@contextmanager
+def water_panel(responses, *, initial_active=0, source=0x0201, delay=0,
+                after_reply=None, discovery=False):
+    """Real select, coordinator and notification handling; no BLE/HA connection.
+
+    Literal responses model the appliance boundary. None means transport ACK
+    only, not parameter feedback. A virtual clock keeps missing-ACK tests fast.
+    """
+    from test_energy_entities import STATE, SELECT
+
+    c = _Coord()
+    c._state = STATE.TrumaState()
+    c.data = c._state
+    c._state.update("WaterHeating", "Active", initial_active, 0x0201)
+    c._state.update("WaterHeating", "Mode", 0, 0x0201)
+    c._state.update("WaterHeating", "Temp", 451, 0x0201)
+    entity = SELECT.TrumaWaterModeSelect(c)
+    writes = []
+    pending = []
+
+    def notify(topic, param, value):
+        cbor = {"tn": topic, "pn": param, "v": value}
+        if discovery:
+            cbor = {"topics": [{"tn": topic, "parameters": [{"pn": param, "v": value}]}]}
+        c._on_frame({
+            "src": source, "control_raw": 0x03,
+            "sub_type": 0x84 if discovery else 0x00, "cbor": cbor,
+        })
+
+    class Client(_Client):
+        async def send(self, frame):
+            if isinstance(frame, tuple):
+                dest, topic, param, value = frame
+                writes.append((dest, topic, param, value))
+                response = responses.get((topic, param), value)
+                if response is not None:
+                    if delay:
+                        pending.append([delay, topic, param, response])
+                    else:
+                        notify(topic, param, response)
+                if after_reply is not None:
+                    after_reply(topic, param, value, notify)
+            return True
+
+    class FastAsyncio:
+        def __getattr__(self, name):
+            return getattr(asyncio, name)
+
+        async def sleep(self, seconds):
+            c.clock.now += seconds
+            for item in list(pending):
+                item[0] -= 1
+                if item[0] == 0:
+                    pending.remove(item)
+                    notify(*item[1:])
+            await asyncio.sleep(0)
+
+    c._client = Client()
+    c._write_ready_event.set()
+    with patch.object(COORD, "asyncio", FastAsyncio()), patch.object(
+        COORD, "build_write_frame",
+        lambda src, dest, topic, param, value: (dest, topic, param, value),
+    ):
+        yield c, entity, writes
+
+
+async def operation_error(operation):
+    """Capture only the HA error (RuntimeError in this offline HA harness)."""
+    try:
+        await operation
+    except RuntimeError as exc:
+        return str(exc)
+    return None
+
+
+def test_water_enable_accepts_fresh_idle_when_target_already_reached():
+    # Break caught: requiring Active==1 rejects a fresh enabled-but-idle value
+    # and never reaches the user's requested water-temperature mode.
+    async def case():
+        with water_panel({("WaterHeating", "Active"): 2}) as (c, entity, writes):
+            error = await operation_error(entity.async_select_option("Eco (40 °C)"))
+            assert error is None, f"Idle water setting falsely failed: {error}"
+            assert writes == [(0x0201, "WaterHeating", "Active", 1),
+                              (0x0201, "WaterHeating", "Mode", 0)]
+            assert c._state.water_active == 2
+            assert entity.current_option == "Eco (40 °C)"
+            assert c.operation_state == "idle"
+            assert c._write_feedback is None
+            assert c._writes_pending == 0
+    asyncio.run(case())
+
+
+def test_water_delayed_idle_confirmation_finishes_before_timeout():
+    # Break caught: fixing only the post-wait check still waits the full
+    # timeout when a valid Idle notification arrives during the wait loop.
+    async def case():
+        with water_panel({("WaterHeating", "Active"): 2}, delay=2) as (c, _, writes):
+            error = await operation_error(c.async_write("WaterHeating", "Active", 1))
+            assert error is None, error
+            assert c.clock.now < 1, "valid Idle feedback waited until timeout"
+            assert writes == [(0x0201, "WaterHeating", "Active", 1)]
+            assert c.operation_state == "idle"
+    asyncio.run(case())
+
+
+def test_water_modes_still_require_the_selected_temperature():
+    async def case():
+        for active in (1, 2):
+            for option, mode in [("Eco (40 °C)", 0), ("Comfort (60 °C)", 1),
+                                 ("Hot (70 °C)", 2)]:
+                with water_panel({("WaterHeating", "Active"): active}) as (c, entity, writes):
+                    error = await operation_error(entity.async_select_option(option))
+                    assert error is None, (option, active, error)
+                    assert writes == [(0x0201, "WaterHeating", "Active", 1),
+                                      (0x0201, "WaterHeating", "Mode", mode)]
+                    assert entity.current_option == option
+                    assert c.operation_state == "idle"
+    asyncio.run(case())
+
+
+def test_water_off_accepts_only_fresh_off_not_enabled_idle():
+    async def case():
+        for feedback in (0, 1, 2):
+            with water_panel({("WaterHeating", "Active"): feedback}, initial_active=2) as (c, entity, writes):
+                error = await operation_error(entity.async_select_option("off"))
+                if feedback == 0:
+                    assert error is None, error
+                    assert entity.current_option == "off"
+                    assert c.operation_state == "idle"
+                    assert writes == [(0x0201, "WaterHeating", "Active", 0)]
+                else:
+                    assert error and "did not confirm WaterHeating.Active=0" in error
+                    assert c.operation_state == "error"
+                    assert writes == [(0x0201, "WaterHeating", "Active", 0)] * 3
+    asyncio.run(case())
+
+
+def test_water_enable_rejects_off_unknown_and_missing_feedback():
+    async def case():
+        for feedback in (0, 3, None):
+            with water_panel({("WaterHeating", "Active"): feedback}) as (c, entity, writes):
+                error = await operation_error(entity.async_select_option("Comfort (60 °C)"))
+                assert error and "did not confirm WaterHeating.Active=1" in error
+                assert c.operation_state == "error"
+                assert writes == [(0x0201, "WaterHeating", "Active", 1)] * 3
+                assert c._write_feedback is None
+                assert c._writes_pending == 0
+                assert c._command_hold_until == c.clock.now + 60
+    asyncio.run(case())
+
+
+def test_water_cached_idle_is_not_a_new_confirmation():
+    async def case():
+        with water_panel({("WaterHeating", "Active"): None}, initial_active=2) as (c, entity, writes):
+            error = await operation_error(entity.async_select_option("Eco (40 °C)"))
+            assert error and "did not confirm" in error
+            assert entity.current_option == "Eco (40 °C)"
+            assert c.operation_state == "error", "cached option hid the failed new command"
+            assert len(writes) == 3
+    asyncio.run(case())
+
+
+def test_water_idle_from_wrong_device_is_not_confirmation():
+    async def case():
+        with water_panel({("WaterHeating", "Active"): 2}, source=0x0101) as (c, entity, writes):
+            error = await operation_error(entity.async_select_option("Eco (40 °C)"))
+            assert error and "did not confirm" in error
+            assert c.operation_state == "error"
+            assert len(writes) == 3
+    asyncio.run(case())
+
+
+def test_water_idle_can_be_confirmed_by_fresh_discovery():
+    async def case():
+        with water_panel({("WaterHeating", "Active"): 2}, discovery=True) as (c, entity, writes):
+            error = await operation_error(entity.async_select_option("Eco (40 °C)"))
+            assert error is None, error
+            assert c.operation_state == "idle"
+            assert entity.current_option == "Eco (40 °C)"
+            assert c._state.water_active == 2
+            assert writes == [(0x0201, "WaterHeating", "Active", 1),
+                              (0x0201, "WaterHeating", "Mode", 0)]
+    asyncio.run(case())
+
+
+def test_water_discovery_from_wrong_device_is_not_confirmation():
+    async def case():
+        with water_panel({("WaterHeating", "Active"): 2}, source=0x0101,
+                         discovery=True) as (c, entity, writes):
+            error = await operation_error(entity.async_select_option("Eco (40 °C)"))
+            assert error and "did not confirm" in error
+            assert c.operation_state == "error"
+            assert len(writes) == 3
+    asyncio.run(case())
+
+
+def test_water_idle_does_not_confirm_the_wrong_temperature_mode():
+    async def case():
+        with water_panel({("WaterHeating", "Active"): 2,
+                          ("WaterHeating", "Mode"): 2}) as (c, entity, writes):
+            error = await operation_error(entity.async_select_option("Comfort (60 °C)"))
+            assert error and "did not confirm WaterHeating.Mode=1" in error
+            assert c.operation_state == "error"
+            assert writes == [(0x0201, "WaterHeating", "Active", 1)] + [
+                (0x0201, "WaterHeating", "Mode", 1)] * 3
+    asyncio.run(case())
+
+
+def test_idle_exception_does_not_relax_other_parameters():
+    async def case():
+        for topic, param in [("EnergySrc", "ElectricLevel"), ("AirHeating", "Mode"),
+                             ("AirCirculation", "Active"), ("WaterHeating", "Mode")]:
+            with water_panel({(topic, param): 2}) as (c, _, writes):
+                error = await operation_error(c.async_write(topic, param, 1))
+                assert error and f"did not confirm {topic}.{param}=1" in error
+                assert c.operation_state == "error"
+                assert len(writes) == 3
+    asyncio.run(case())
+
+
+def test_water_transaction_can_settle_from_active_to_idle():
+    # Break caught: final multi-parameter validation must use the same meaning
+    # of enabled as the per-write wait, even if the heater stops needing heat.
+    async def case():
+        def idle_after_mode(topic, param, value, notify):
+            if (topic, param) == ("WaterHeating", "Mode"):
+                notify("WaterHeating", "Active", 2)
+        with water_panel({}, after_reply=idle_after_mode) as (c, _, writes):
+            error = await operation_error(c.async_write_many([
+                ("WaterHeating", "Active", 1), ("WaterHeating", "Mode", 0)]))
+            assert error is None, error
+            assert c._state.water_active == 2
+            assert c.operation_state == "idle"
+            assert len(writes) == 2
+    asyncio.run(case())
+
+
+def test_water_transaction_cannot_succeed_if_switched_off_again():
+    async def case():
+        def off_after_mode(topic, param, value, notify):
+            if (topic, param) == ("WaterHeating", "Mode"):
+                notify("WaterHeating", "Active", 0)
+        with water_panel({}, after_reply=off_after_mode) as (c, _, writes):
+            error = await operation_error(c.async_write_many([
+                ("WaterHeating", "Active", 1), ("WaterHeating", "Mode", 0)]))
+            assert error and "did not retain" in error
+            assert c.operation_state == "error"
+            assert c._state.water_active == 0
+            assert len(writes) == 2
     asyncio.run(case())
 
 

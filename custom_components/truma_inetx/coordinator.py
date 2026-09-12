@@ -1182,6 +1182,18 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             # can never complete a user operation successfully.
             await self._write_many(commands)
 
+    def _write_confirmed(self, dest: int, topic: str, param: str, value: int) -> bool:
+        """Match fresh device feedback to the meaning of this exact command."""
+        reported = (self._write_feedback or {}).get((dest, topic, param))
+        if (topic, param, value) == ("WaterHeating", "Active", 1):
+            # WaterHeating.Active reports 0=off, 1=heating, 2=enabled but idle.
+            # Water already at its target can immediately report 2 after an
+            # enable request. It still confirms enabled, never switched off.
+            # Do not apply this equivalence to modes, power levels or cached
+            # state: those still require the exact fresh value and source.
+            return reported in (1, 2)
+        return reported == value
+
     async def _write_many(
         self, commands: list[tuple[str, str, int]]
     ) -> None:
@@ -1214,7 +1226,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                             await client.send(frame)
                             # Heater wake-up can outlast panel registration.
                             # Retry these absolute parameter setpoints only
-                            # after checking fresh feedback for the same value.
+                            # after checking fresh feedback for the requested state.
                             await client.send(build_v3_frame(
                                 dest, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
                             ))
@@ -1222,10 +1234,10 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                             while (
                                 client.connected
                                 and self.hass.loop.time() < deadline
-                                and self._write_feedback.get((dest, topic, param)) != value
+                                and not self._write_confirmed(dest, topic, param, value)
                             ):
                                 await asyncio.sleep(0.1)
-                            if self._write_feedback.get((dest, topic, param)) == value:
+                            if self._write_confirmed(dest, topic, param, value):
                                 break
                             if not client.connected or attempt == 2:
                                 raise HomeAssistantError(
@@ -1240,7 +1252,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                         await asyncio.sleep(1)
                     for topic, param, value in commands:
                         dest = self._state.get_command_dest(topic)
-                        if self._write_feedback.get((dest, topic, param)) != value:
+                        if not self._write_confirmed(dest, topic, param, value):
                             raise HomeAssistantError("Truma did not retain the requested setting")
                 finally:
                     self._write_feedback = None
