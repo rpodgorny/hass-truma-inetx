@@ -660,6 +660,17 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             await asyncio.sleep(1)
             if client.assigned_addr != DEV_APP_DEFAULT:
                 break
+            if not client.connected:
+                # The transport gave up on this session under us (see
+                # TrumaBleClient.send). No address can arrive over a link that
+                # is already gone, so hand it back now rather than sitting out
+                # the rest of the timeout holding the adapter's slot.
+                message = (
+                    f"Truma {self.unique_id}: the link ended during "
+                    "registration; the session is being dropped and retried"
+                )
+                LOGGER.warning(message)
+                raise HomeAssistantError(message)
         else:
             # Every frame from here on would be sent from the default app
             # address, which the message broker does not route, so carrying on
@@ -732,7 +743,8 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         await client.send(
             build_v3_frame(
                 DEV_BROADCAST, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
-            )
+            ),
+            probe=True,
         )
         await asyncio.sleep(_PARAM_DISC_GAP)
 
@@ -755,7 +767,8 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                 if await client.send(
                     build_v3_frame(
                         dev_addr, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
-                    )
+                    ),
+                    probe=True,
                 ):
                     acked.add(dev_addr)
                 asked.add(dev_addr)

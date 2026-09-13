@@ -146,11 +146,14 @@ class _Client:
 
     def __init__(self, coord, answers: dict[int, int] | None = None) -> None:
         self.assigned_addr = APP_ADDR
+        # A link that carries nothing is still connected as far as the stack
+        # is concerned; only the transport giving up clears this.
+        self.connected = True
         self.sent: list[bytes] = []
         self._coord = coord
         self._answers = answers or {}
 
-    async def send(self, frame: bytes) -> bool:
+    async def send(self, frame: bytes, *, probe: bool = False) -> bool:
         self.sent.append(frame)
         parsed = PROTO.parse_v3_frame(frame)
         speaker = self._answers.get(parsed["dest"])
@@ -379,6 +382,30 @@ def test_a_link_that_carries_nothing_is_dropped_at_once() -> None:
     # exists to avoid, and the link needs handing back so the adapter's
     # connection slot is freed for the next attempt.
     assert _discovery_dests(client) == [], "discovery ran on a dead link"
+
+
+def test_registration_gives_up_when_the_transport_ends_the_session() -> None:
+    """An invalidated transport must not be waited out for the full timeout.
+
+    ``TrumaBleClient.send`` ends the session when a transfer goes unanswered,
+    because Ready and DataAck carry no transfer identity and a late one would
+    otherwise be handed to the packet behind it. Once that has happened the
+    panel cannot assign us an address over the link, so sitting out the rest
+    of the registration timeout only holds the adapter's connection slot.
+    """
+    coord = _Coord()
+    client = _Client(coord)
+    client.assigned_addr = TC.DEV_APP_DEFAULT
+    client.connected = False
+
+    raised = None
+    try:
+        _run(coord._run_startup(client))
+    except Exception as exc:  # noqa: BLE001 - the type is HA's, stubbed here
+        raised = exc
+    assert raised is not None, "startup carried on over a link the transport dropped"
+    assert "link ended during registration" in str(raised)
+    assert _discovery_dests(client) == [], "discovery ran on a dropped link"
 
 
 def test_a_registered_link_still_runs_startup() -> None:

@@ -168,7 +168,7 @@ class _Client:
             self._disconnect_at is None or self._clock.now < self._disconnect_at
         )
 
-    async def send(self, frame: bytes) -> bool:
+    async def send(self, frame: bytes, *, probe: bool = False) -> bool:
         parsed = PROTO.parse_v3_frame(frame)
         self.sent.append((self._clock.now, parsed))
         cbor = parsed.get("cbor") or {}

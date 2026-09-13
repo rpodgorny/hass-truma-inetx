@@ -36,6 +36,7 @@ jobs:
       - run: python3 tests/test_pairing_rotation.py
       - run: python3 tests/test_pairing_transport_dispatch.py
       - run: python3 tests/test_device_from_bluez.py
+      - run: python3 tests/test_transport_ack_order.py
       - run: python3 tests/test_no_route_issue.py
       - run: python3 tests/test_water_entities.py
       - run: python3 tests/test_energy_entities.py

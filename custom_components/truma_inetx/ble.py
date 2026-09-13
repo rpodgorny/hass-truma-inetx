@@ -10,9 +10,11 @@ Transport FSM (per ``send``):
   3. Write the packet to DATA_W (without response).
   4. Wait for a DataAck notification (0xF0) on CMD.
 
-Incoming DATA_R notifications are auto-ACKed (0xF001) and parsed into V3 frames
-dispatched to registered callbacks. A short (<=4 byte) MsgAck (0x83) is
-auto-confirmed with 0x0300.
+Incoming messages go the other way: the panel announces one with
+``[0x83, len_lo, len_hi]`` on CMD (answered with 0x0300), then pushes it on
+DATA_R in ATT-sized fragments. The fragments are accumulated to the announced
+length, ACKed once (0xF001), parsed into a V3 frame and dispatched to the
+registered callbacks.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from .truma.const import (
     TRANSPORT_CONFIRM,
     TRANSPORT_MSG_ACK,
     TRANSPORT_INIT,
+    TRANSPORT_READY,
 )
 from .truma.protocol import parse_v3_frame
 
@@ -130,6 +133,13 @@ class TrumaBleClient:
         self._send_lock = asyncio.Lock()
         self._transport_event: asyncio.Event | None = None
         self._transport_ack: bytes | None = None
+        # The opcodes the transfer in flight is waiting for, if any. Nothing
+        # else on CMD may satisfy that wait -- see :meth:`_handle_cmd`.
+        self._transport_expected: tuple[int, ...] = ()
+        self._transport_invalidated = False
+        # Reassembly of the incoming message the panel announced, if any.
+        self._receive_size: int | None = None
+        self._receive_buffer = bytearray()
         self.assigned_addr = DEV_APP_DEFAULT
 
     def on_data(self, callback: Callable[[dict], None]) -> None:
@@ -138,8 +148,17 @@ class TrumaBleClient:
 
     @property
     def connected(self) -> bool:
-        """Whether the BLE link is up."""
-        return self._client is not None and self._client.is_connected
+        """Whether the BLE link is up *and* still usable.
+
+        An invalidated transport reports disconnected even in the moment
+        before the link actually goes away, so that nothing queues another
+        packet onto a stream whose acks can no longer be attributed.
+        """
+        return (
+            not self._transport_invalidated
+            and self._client is not None
+            and self._client.is_connected
+        )
 
     async def connect(
         self,
@@ -171,6 +190,8 @@ class TrumaBleClient:
             use_services_cache=True,
         )
         await self._subscribe()
+        self._transport_invalidated = False
+
     async def adopt(self, client: BleakClientWithServiceCache) -> None:
         """Take over an already-connected client (handed off from pairing).
 
@@ -182,6 +203,7 @@ class TrumaBleClient:
         self._loop = asyncio.get_running_loop()
         self._client = client
         await self._subscribe()
+        self._transport_invalidated = False
 
     async def _subscribe(self) -> None:
         """Establish encryption, then enable notifications.
@@ -239,6 +261,10 @@ class TrumaBleClient:
 
     async def disconnect(self) -> None:
         """Disconnect the BLE link."""
+        # A half-received message belongs to the session that is ending; the
+        # next one must not be assembled onto its tail.
+        self._receive_size = None
+        self._receive_buffer.clear()
         client = self._client
         self._client = None
         if client is not None:
@@ -256,21 +282,100 @@ class TrumaBleClient:
         self._handle_notification(CHAR_DATA_R, bytes(data))
 
     def _handle_notification(self, char_uuid: str, data: bytes) -> None:
-        if len(data) <= 4:
-            # MsgAck (0x83) must be auto-confirmed with 0x0300.
-            if data and data[0] == TRANSPORT_MSG_ACK:
-                self._fire_write(CHAR_CMD, bytes([TRANSPORT_CONFIRM, 0x00]))
+        # The whole transport is inferred from these two channels, and a bug
+        # report has nothing else to go on. Seven bytes is the frame header.
+        _LOGGER.debug(
+            "Truma RX %s, %d bytes: %s",
+            "CMD" if char_uuid == CHAR_CMD else "DATA",
+            len(data),
+            data[:7].hex(),
+        )
+        if char_uuid == CHAR_CMD:
+            self._handle_cmd(data)
+        else:
+            self._handle_data(data)
+
+    def _handle_cmd(self, data: bytes) -> None:
+        """Handle a transport-control notification.
+
+        0x83 is *not* an acknowledgement of anything we sent. It announces an
+        INCOMING message and its little-endian size, and is answered with
+        0x0300. Counting it as an ack is how ``send`` reported success on a
+        frame the panel never took: an announcement that happened to land
+        mid-transfer was accepted in place of the DataAck.
+
+        Everything else is only interesting while a transfer is waiting for
+        one specific opcode. Ready (0x81) and DataAck (0xF0) carry no transfer
+        identity, so an unexpected one has to be dropped rather than used to
+        satisfy whatever wait happens to be open -- a second Ready arriving
+        after the payload write used to be taken for the DataAck, failing a
+        write that had in fact succeeded.
+
+        Measured on the van 2026-09-14 01:33:38, a heater-routed write::
+
+            Truma write AirCirculation.FanLevel = 2 -> 0x0201
+            RX CMD, 2 bytes: 8100      Ready
+            RX CMD, 2 bytes: f001      DataAck -- this is the acknowledgement
+            RX CMD, 3 bytes: 834c00    announce, 0x004c = 76 bytes
+            RX DATA, 76 bytes: ...     the heater's reply, exactly 76
+
+        which is where the old "heater-routed writes reply MsgAck, panel
+        writes DataAck" came from: the reply's announcement lands ~15 ms after
+        the real ack and was being counted as one. The same session also
+        carried a bare ``f004`` and a one-byte ``79`` outside any transfer --
+        neither is an ack, and both used to satisfy whatever wait was open.
+        """
+        if len(data) >= 3 and data[0] == TRANSPORT_MSG_ACK:
+            self._receive_size = int.from_bytes(data[1:3], "little")
+            self._receive_buffer.clear()
+            self._fire_write(CHAR_CMD, bytes([TRANSPORT_CONFIRM, 0x00]))
+            return
+        if len(data) > 4:
+            return
+        if data and data[0] in self._transport_expected:
             self._transport_ack = data
             if self._transport_event is not None:
                 self._transport_event.set()
-            return
 
-        if char_uuid == CHAR_CMD:
-            if self._transport_event is not None:
-                self._transport_event.set()
-            return
+    def _handle_data(self, data: bytes) -> None:
+        """Reassemble an incoming message, then ACK it once and dispatch it.
 
-        # DATA_R: incoming V3 data frame — auto-ACK, parse, dispatch.
+        DATA_R is fragmented at the negotiated ATT payload size, and a
+        fragment is not a frame: ``parse_v3_frame`` rejects only the first 16
+        bytes being absent, so a truncated head parsed happily into a frame
+        with no CBOR while the rest of the message was dropped on the floor.
+        The 0x83 announcement carries the full length, so accumulate to it and
+        acknowledge once, at the end.
+
+        Without a preceding announcement there is nothing to accumulate to;
+        take the notification for a whole frame, which is what it was before
+        any of this.
+
+        Measured on the van 2026-09-14: a 256-byte message (``830001``)
+        arrived as 248 + 8 bytes, so 248 is the usable ATT payload on that
+        link and anything above it fragments. Of 116 announcements in one
+        session the length matched the payload exactly every time. An
+        announcement is also sometimes repeated before its data arrives,
+        which is why each one resets the buffer rather than appending.
+        """
+        if self._receive_size is not None:
+            self._receive_buffer.extend(data)
+            if len(self._receive_buffer) < self._receive_size:
+                return
+            if len(self._receive_buffer) > self._receive_size:
+                # The stream is out of step with the announcement; assembling
+                # further would only produce garbage frames.
+                _LOGGER.warning(
+                    "Truma: incoming message overran its announced %d bytes",
+                    self._receive_size,
+                )
+                self._receive_size = None
+                self._receive_buffer.clear()
+                return
+            data = bytes(self._receive_buffer)
+            self._receive_size = None
+            self._receive_buffer.clear()
+
         self._fire_write(CHAR_CMD, bytes([TRANSPORT_ACK, 0x01]))
         frame = parse_v3_frame(data)
         if frame is not None:
@@ -294,16 +399,29 @@ class TrumaBleClient:
         response = char_uuid == CHAR_CMD
         await self._client.write_gatt_char(char_uuid, data, response=response)
 
-    async def send(self, packet: bytes) -> bool:
-        """Send a V3 packet through the transport FSM. Returns True on DataAck."""
-        async with self._send_lock:
-            return await self._send_locked(packet)
+    async def send(self, packet: bytes, *, probe: bool = False) -> bool:
+        """Send a V3 packet through the transport FSM. Returns True on DataAck.
 
-    async def _send_locked(self, packet: bytes) -> bool:
+        An unanswered send normally ends the session -- see ``_send_locked``.
+        ``probe`` says the caller is addressing something that may not be
+        there and that silence is one of the answers it expects, so the
+        session is left alone. Only parameter discovery has that shape: it
+        sweeps a seed of bus addresses, most of which are empty on any given
+        vehicle. It is also the one caller whose return value decides nothing
+        beyond a debug counter, and it leaves a 3 s settle at the end of the
+        sweep for any late reply to be discarded in.
+        """
+        async with self._send_lock:
+            return await self._send_locked(packet, probe=probe)
+
+    async def _send_locked(self, packet: bytes, *, probe: bool = False) -> bool:
+        if self._transport_invalidated:
+            return False
         success = False
         try:
             self._transport_event = asyncio.Event()
             self._transport_ack = None
+            self._transport_expected = (TRANSPORT_READY,)
 
             # 1. InitDataTransfer announce.
             announce = bytes(
@@ -311,34 +429,54 @@ class TrumaBleClient:
             )
             await self._write(CHAR_CMD, announce)
 
-            # 2. Wait for Ready.
+            # 2. Wait for Ready. Without it the panel is not listening on
+            #    DATA_W, and writing the payload anyway only desynchronises the
+            #    stream: the reply to *that* would arrive against the next
+            #    transfer.
             try:
                 await asyncio.wait_for(self._transport_event.wait(), _READY_TIMEOUT)
             except TimeoutError:
                 _LOGGER.debug("Truma transport: timeout waiting for Ready")
+                return False
             self._transport_event.clear()
+            self._transport_ack = None
+            self._transport_expected = (TRANSPORT_ACK,)
 
             # 3. Send payload on DATA_W.
             await self._write(CHAR_DATA_W, packet)
 
-            # 4. Wait for DataAck.
+            # 4. Wait for DataAck. Only a positive 0xF001 is success: 0xF000
+            #    is the panel refusing the frame, and 0x83 is not an answer to
+            #    this transfer at all (see :meth:`_handle_cmd`).
             try:
                 await asyncio.wait_for(self._transport_event.wait(), _ACK_TIMEOUT)
-                # DataAck (0xF0) or MsgAck (0x83) both mean the panel took the
-                # frame — heater-routed writes reply MsgAck, panel writes DataAck.
-                if self._transport_ack and self._transport_ack[0] in (
-                    TRANSPORT_ACK,
-                    TRANSPORT_MSG_ACK,
-                ):
+                if self._transport_ack == bytes([TRANSPORT_ACK, 0x01]):
                     success = True
             except TimeoutError:
                 _LOGGER.debug("Truma transport: timeout waiting for DataAck")
 
-            # 5. Let any async MsgAck settle.
+            # 5. Let any async follow-up settle.
             await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            success = False
+            raise
         except Exception as exc:  # noqa: BLE001
+            success = False
             _LOGGER.debug("Truma transport error: %s", exc)
         finally:
             self._transport_event = None
             self._transport_ack = None
+            self._transport_expected = ()
+            if not success and not probe:
+                # Ready and DataAck carry no transfer identity, so a late reply
+                # to *this* transfer cannot be told apart from the reply to the
+                # next one. Any unsuccessful send therefore leaves the stream
+                # ambiguous, and the only safe answer is to end the session
+                # before the send lock is released -- otherwise the packet
+                # behind us is acknowledged by an ack that was never its own.
+                # The coordinator reconnects; a dropped write is cheaper than a
+                # write that reports success into thin air.
+                self._transport_invalidated = True
+                self.assigned_addr = DEV_APP_DEFAULT
+                await self.disconnect()
         return success
