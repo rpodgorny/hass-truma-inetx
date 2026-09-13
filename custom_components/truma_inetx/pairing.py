@@ -5,20 +5,26 @@ client is *actively* attempting to pair AND the panel is in add-device mode. It
 also silently rejects new bonds when its stored device list is full, so the user
 must clear that list first if pairing fails repeatedly.
 
-``ensure_bonded()`` hides that behind one call and dispatches by transport:
+``ensure_bonded()`` hides that behind one call. It connects first and then
+bonds the way the link it was given requires — the transport is Home
+Assistant's choice, so asking the connected client beats guessing from what
+can hear the panel:
 
-* **Bluetooth proxy** (``_ensure_bonded_proxy``) — connect through an ESP32
-  ESPHome ``bluetooth_proxy`` with bleak and ``pair()``, then verify the bond
-  by accessing a protected characteristic. This is the reliable path for this
-  fast-rotating-RPA panel (BlueZ can pair it but cannot GATT-reconnect it), and
-  the one validated end-to-end against the real panel. Re-pairing needs no
-  clean-up on the proxy and so works on stock proxy firmware — see the
-  ``avoid`` rotation in ``_ensure_bonded_proxy``.
-* **Local BlueZ** (``_ensure_bonded_bluez``) — a faithful port of
-  ``scripts/ha_pair.py``: register a NoInputNoOutput auto-accept agent, then
-  busy-loop ``Device1.Pair()`` until the device reports ``Paired``. Kept for a
-  future ESP-less (direct local-adapter) setup; not yet validated end-to-end
-  from inside HA against a capable adapter.
+* **Over a proxy link** (``_bond_over_link``) — ``pair()`` with bleak, then
+  verify the bond by accessing a protected characteristic. Validated
+  end-to-end against the real panel. Re-pairing needs no clean-up on the
+  proxy and so works on stock proxy firmware — see the ``avoid`` rotation in
+  ``ensure_bonded``.
+* **Over a local adapter** (``_ensure_bonded_bluez``) — bleak cannot do this
+  one: BlueZ needs an agent registered to answer the Just Works confirmation.
+  A faithful port of ``scripts/ha_pair.py``: register a NoInputNoOutput
+  auto-accept agent, then busy-loop ``Device1.Pair()`` until the device
+  reports ``Paired``. Not yet validated end-to-end from inside HA against a
+  capable adapter.
+
+Bonding where HA will *connect* is the whole point of the order: a bond that
+lives on a path HA does not use fails every later connect at encryption, which
+looks exactly like broken hardware.
 """
 
 from __future__ import annotations
@@ -32,7 +38,8 @@ from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, method
 from homeassistant.core import HomeAssistant
 
-from .bt import async_resolve_proxy_device
+from .ble import client_is_proxy
+from .bt import async_resolve_device
 from .const import LOGGER
 from .truma.const import CHAR_CMD
 
@@ -42,7 +49,7 @@ _PAIR_CALL_TIMEOUT = 8.0
 _POLL_INTERVAL = 1.0
 
 
-# --- transport dispatch ----------------------------------------------------
+# --- bonding -----------------------------------------------------------------
 
 
 async def ensure_bonded(
@@ -53,136 +60,142 @@ async def ensure_bonded(
     adapter_path: str | None = None,
     timeout: float = 60.0,
 ) -> tuple[bool, BleakClientWithServiceCache | None]:
-    """Ensure the Truma panel is BLE-bonded, over whichever transport reaches it.
+    """Ensure the Truma panel is BLE-bonded, over whatever transport HA gives us.
 
-    Prefers a Bluetooth proxy (the reliable path for this fast-rotating-RPA
-    panel that local BlueZ cannot GATT-reconnect); falls back to direct local
-    BlueZ when no proxy route is available (e.g. an ESP-less setup). The caller
-    must have prompted the user to put the panel into add-device mode (and to
-    clear its device list if it is full).
+    Connect first, then bond the way the link in hand requires. The transport
+    is not ours to choose -- Home Assistant scores every connectable path and
+    re-picks at each connect -- and it is not ours to *guess* either: this used
+    to probe for a proxy and take the proxy path whenever one could hear the
+    panel, which bonded the panel to the proxy on hosts whose sessions then ran
+    over the local adapter, where no bond exists. A bond that is not on the path
+    HA connects through is worse than no bond: every later connect establishes
+    and then fails to encrypt.
 
-    Returns ``(bonded, client)``. On the proxy path ``client`` is the LIVE,
+    The caller must have prompted the user to put the panel into add-device
+    mode (and to clear its device list if it is full).
+
+    Returns ``(bonded, client)``. Over a proxy link ``client`` is the LIVE,
     encrypted connection left open for the coordinator to adopt (handing it off
     avoids the disconnect/reconnect that wedges the just-bonded RPA); the caller
-    owns it and must disconnect it if it does not hand it off. On the local
-    BlueZ path (and on failure) ``client`` is ``None``. Safe to call when
-    already bonded.
+    owns it and must disconnect it if it does not hand it off. Over local BlueZ
+    (and on failure) ``client`` is ``None``. Safe to call when already bonded.
     """
-    # A proxy setup surfaces the panel through a remote scanner within a couple
-    # of seconds of it advertising in add-device mode; probe briefly for that.
-    probe_deadline = time.monotonic() + min(8.0, timeout / 2)
-    while time.monotonic() < probe_deadline:
-        # remote_only: this resolver falls back to a local adapter when no proxy
-        # can hear the panel, so without it every ESP-less setup took the proxy
-        # path -- which registers no BlueZ agent, so pairing died on
-        # "No agent available" / AuthenticationFailed and the local path below
-        # was unreachable.
-        if async_resolve_proxy_device(hass, name, remote_only=True) is not None:
-            client = await _ensure_bonded_proxy(hass, name, timeout=timeout)
-            return client is not None, client
-        await asyncio.sleep(1.0)
-    LOGGER.debug("Truma %s: no Bluetooth proxy route; using local BlueZ pairing", name)
-    bonded = await _ensure_bonded_bluez(
-        name, address, adapter_path=adapter_path, timeout=timeout, hass=hass
-    )
-    return bonded, None
+    deadline = time.monotonic() + timeout
+    last_exc: Exception | None = None
+    # The panel advertises a post-pairing PHANTOM RPA alongside the live one:
+    # same name, both reachable, near-identical timestamps, but the phantom
+    # never completes a bond (0x3e on connect, or error 97 / "insufficient
+    # authentication" on the protected write). The resolver returns the freshest
+    # first, so without feedback we'd re-pick and hammer the phantom until
+    # timeout. Track addresses that failed so the resolver demotes them and we
+    # rotate to the live RPA -- the same avoid-rotation the coordinator uses for
+    # reconnect. Demotion, not exclusion: when the failed address is all the
+    # panel is advertising it comes back and we retry it, which is right,
+    # because a bond can also fail for reasons that heal.
+    avoid: set[str] = set()
+    while time.monotonic() < deadline:
+        device = async_resolve_device(hass, name, avoid=avoid)
+        if device is None:
+            # Nothing is on air yet. Any address we failed on is one the panel
+            # has since rotated away from, so forget them rather than carrying
+            # grudges into the next advert. (A candidate that is still on air
+            # is never withheld -- avoid only demotes, see
+            # bt.async_resolve_device -- so this cannot mean "all banished".)
+            avoid.clear()
+            await asyncio.sleep(1.5)
+            continue
+        try:
+            client = await establish_connection(
+                BleakClientWithServiceCache, device, device.address, max_attempts=1
+            )
+        except Exception as exc:  # noqa: BLE001 - transient connect failures
+            last_exc = exc
+            LOGGER.debug("Truma %s pairing connect: %s", name, exc)
+            avoid.add(device.address.upper())
+            await asyncio.sleep(2.0)
+            continue
+
+        if not client_is_proxy(client):
+            # HA put us on the host's own adapter. Bonding there is BlueZ's job
+            # and cannot be done through bleak: it needs an agent registered to
+            # answer the Just Works confirmation, and Device1.Pair() on the
+            # BlueZ object. Drop the link and hand the rest over.
+            LOGGER.debug(
+                "Truma %s: Home Assistant connected over a local adapter; "
+                "bonding through BlueZ",
+                name,
+            )
+            await _drop(client, name)
+            bonded = await _ensure_bonded_bluez(
+                name,
+                address,
+                adapter_path=adapter_path,
+                timeout=max(deadline - time.monotonic(), 0.0),
+                hass=hass,
+            )
+            return bonded, None
+
+        if await _bond_over_link(name, client):
+            # Hand the live, encrypted connection back to the caller -- do NOT
+            # disconnect. Reusing it for the session avoids the reconnect that
+            # wedges the just-bonded RPA.
+            return True, client
+        # This address didn't bond -- drop the client, demote the address, and
+        # let the resolver hand us the panel's other RPA if it has one.
+        await _drop(client, name)
+        avoid.add(device.address.upper())
+        await asyncio.sleep(2.0)
+    LOGGER.warning("Truma %s: pairing timed out (%s)", name, last_exc)
+    return False, None
 
 
-# --- Bluetooth-proxy pairing (bleak) ---------------------------------------
+async def _drop(client: BleakClientWithServiceCache, name: str) -> None:
+    """Close a link we are not going to hand off (best effort)."""
+    try:
+        await client.disconnect()
+    except Exception as exc:  # noqa: BLE001 - best effort
+        LOGGER.debug("Truma %s pairing disconnect: %s", name, exc)
 
 
 def _noop_notify(_sender: object, _data: bytearray) -> None:
     """Discard notifications during the pairing bond test."""
 
 
-async def _ensure_bonded_proxy(
-    hass: HomeAssistant, name: str, *, timeout: float = 60.0
-) -> BleakClientWithServiceCache | None:
-    """Bond via a Bluetooth proxy: connect with bleak, ``pair()``, then verify.
+async def _bond_over_link(name: str, client: BleakClientWithServiceCache) -> bool:
+    """Bond on a live proxy-carried link: ``pair()``, then prove it took.
 
-    The proxy encrypts lazily, so pair()/encrypt first, then confirm the bond
-    took by subscribing to a protected characteristic (a CCCD write only
-    succeeds on an encrypted link). Retries while the panel is in add-device
-    mode until ``timeout``.
-
-    On success returns the LIVE client, still connected and encrypted, for the
-    caller to hand off to the coordinator (see ``ensure_bonded``); it is NOT
-    disconnected here. Returns ``None`` if no bond took before ``timeout``.
+    An ESPHome proxy encrypts lazily, so pair()/encrypt first, then confirm the
+    bond by subscribing to a protected characteristic -- a CCCD write only
+    succeeds on an encrypted link. Retries briefly to absorb the
+    encryption-setup delay.
     """
-    deadline = time.monotonic() + timeout
-    last_exc: Exception | None = None
-    # The panel advertises a post-pairing PHANTOM RPA alongside the live one:
-    # same name, both proxy-reachable, near-identical timestamps, but the phantom
-    # never completes a bond (0x3e on connect, or error 97 / "insufficient
-    # authentication" on the protected write). The resolver returns the freshest
-    # first, so without feedback we'd re-pick and hammer the phantom until
-    # timeout. Track addresses that failed so the resolver demotes them and we
-    # rotate to the live RPA — the same avoid-rotation the coordinator uses for
-    # reconnect. Demotion, not exclusion: when the failed address is all the
-    # panel is advertising it comes back and we retry it, which is right,
-    # because a bond can also fail for reasons that heal.
-    avoid: set[str] = set()
-    while time.monotonic() < deadline:
-        device = async_resolve_proxy_device(hass, name, avoid=avoid)
-        if device is None:
-            # Nothing is on air yet. Any address we failed on is one the panel
-            # has since rotated away from, so forget them rather than carrying
-            # grudges into the next advert. (A candidate that is still on air
-            # is never withheld — avoid only demotes, see
-            # bt.async_resolve_proxy_device — so this cannot mean "all
-            # banished".)
-            avoid.clear()
-            await asyncio.sleep(1.5)
-            continue
-        client: BleakClientWithServiceCache | None = None
+    for _ in range(3):
         try:
-            client = await establish_connection(
-                BleakClientWithServiceCache, device, device.address, max_attempts=1
-            )
-            for _ in range(3):
-                try:
-                    await client.pair()
-                except Exception as exc:  # noqa: BLE001 - not all paths need it
-                    # "error: 97" here means the panel has forgotten a bond the
-                    # proxy still holds (its device list was cleared, or rolled
-                    # our entry out of its ~4 slots). Nothing to do about it on
-                    # this address — the panel drops the link the instant it
-                    # rejects the bond. The avoid-rotation below is the cure:
-                    # the panel's next RPA is one the proxy holds no bond for,
-                    # so pairing there is clean. Measured twice on the van
-                    # (2026-07-26): rejected, rotated, bonded, ~9s total.
-                    LOGGER.debug("Truma %s proxy pair(): %s", name, exc)
-                try:
-                    # A protected CCCD write only lands on an encrypted (bonded)
-                    # link — success here means the bond took.
-                    await client.start_notify(CHAR_CMD, _noop_notify)
-                    await client.stop_notify(CHAR_CMD)
-                    LOGGER.info("Truma %s bonded via proxy", name)
-                    # Hand the live, encrypted connection back to the caller —
-                    # do NOT disconnect. Reusing it for the session avoids the
-                    # reconnect that wedges the just-bonded RPA.
-                    return client
-                except Exception as exc:  # noqa: BLE001 - retry through encrypt race
-                    last_exc = exc
-                    await asyncio.sleep(1.5)
-        except Exception as exc:  # noqa: BLE001 - transient connect failures
-            last_exc = exc
-            LOGGER.debug("Truma %s proxy connect: %s", name, exc)
-        # This address didn't bond (connect failed, or the encrypt/verify tries
-        # failed) — drop the client, demote the address, and let the resolver
-        # hand us the panel's other RPA if it has one.
-        if client is not None:
-            try:
-                await client.disconnect()
-            except Exception as exc:  # noqa: BLE001 - best effort
-                LOGGER.debug("Truma %s proxy disconnect: %s", name, exc)
-        avoid.add(device.address.upper())
-        await asyncio.sleep(2.0)
-    LOGGER.warning("Truma %s: proxy pairing timed out (%s)", name, last_exc)
-    return None
+            await client.pair()
+        except Exception as exc:  # noqa: BLE001 - not all paths need it
+            # "error: 97" here means the panel has forgotten a bond the proxy
+            # still holds (its device list was cleared, or rolled our entry out
+            # of its ~4 slots). Nothing to do about it on this address -- the
+            # panel drops the link the instant it rejects the bond. The
+            # avoid-rotation in ensure_bonded is the cure: the panel's next RPA
+            # is one the proxy holds no bond for, so pairing there is clean.
+            # Measured twice on the van (2026-07-26): rejected, rotated,
+            # bonded, ~9s total.
+            LOGGER.debug("Truma %s pair(): %s", name, exc)
+        try:
+            # A protected CCCD write only lands on an encrypted (bonded) link --
+            # success here means the bond took.
+            await client.start_notify(CHAR_CMD, _noop_notify)
+            await client.stop_notify(CHAR_CMD)
+            LOGGER.info("Truma %s bonded", name)
+            return True
+        except Exception as exc:  # noqa: BLE001 - retry through encrypt race
+            LOGGER.debug("Truma %s bond check: %s", name, exc)
+            await asyncio.sleep(1.5)
+    return False
 
 
-# --- local BlueZ pairing (D-Bus) — kept for a future ESP-less setup ---------
+# --- local BlueZ pairing (D-Bus) — when HA connects over a host adapter -----
 
 
 class _JustWorksAgent(ServiceInterface):
@@ -305,10 +318,15 @@ def _live_device_path(
 
     Ask the resolver instead, every iteration, so a rotation mid-pairing moves us
     to the new address rather than stranding us on a dead one.
+
+    ``local_only``: only a local adapter's device carries the BlueZ object path
+    this returns. Without it the resolver may hand back the proxy's view of the
+    same address, which has no path, and the caller then behaves as if BlueZ
+    had never heard of a panel it can plainly see.
     """
     if hass is None:
         return None
-    device = async_resolve_proxy_device(hass, name)
+    device = async_resolve_device(hass, name, local_only=True)
     details = getattr(device, "details", None)
     if not isinstance(details, dict):
         return None

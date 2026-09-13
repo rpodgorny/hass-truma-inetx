@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline check for the RPA rotation in ``_ensure_bonded_proxy``.
+"""Offline check for the RPA rotation in ``ensure_bonded``.
 
 No hardware, no Home Assistant install: the HA/bleak/dbus imports are stubbed
 so the pairing loop can be driven against fake clients.
@@ -66,7 +66,10 @@ def _load_pairing():
     # A stand-in package so pairing.py's relative imports resolve without
     # executing the integration's real __init__ (which needs Home Assistant).
     _mod("truma_pkg", __path__=[str(SRC)])
-    _mod("truma_pkg.bt", async_resolve_proxy_device=lambda *a, **k: None)
+    _mod("truma_pkg.bt", async_resolve_device=lambda *a, **k: None)
+    # pairing asks the connected client which transport it got. The real check
+    # imports bleak; the tests override this per run anyway.
+    _mod("truma_pkg.ble", client_is_proxy=lambda _client: True)
     _mod("truma_pkg.const", LOGGER=_Logger())
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", CHAR_CMD="cmd-char")
@@ -120,7 +123,7 @@ class _Client:
 
 
 def _run(pairing, *, bondable: set[str], addresses: list[str], stop_after: int):
-    """Drive ``_ensure_bonded_proxy`` against a panel advertising ``addresses``.
+    """Drive ``ensure_bonded`` against a panel advertising ``addresses``.
 
     The fake resolver mimics the real one: freshest first, but anything in the
     avoid set sinks below everything else rather than being withheld, so the
@@ -140,14 +143,20 @@ def _run(pairing, *, bondable: set[str], addresses: list[str], stop_after: int):
         log["tried"].append(device.address)
         return _Client(log, bonds=device.address in bondable)
 
-    pairing.async_resolve_proxy_device = resolve
+    pairing.async_resolve_device = resolve
     pairing.establish_connection = connect
+    # Every link here is a proxy link: this file is about the address
+    # rotation, and the transport branch has its own test file.
+    pairing.client_is_proxy = lambda _client: True
     # Skip the real back-off waits; the loop's deadline is wall-clock.
     pairing.asyncio = types.SimpleNamespace(sleep=lambda _s: asyncio.sleep(0))
 
     async def main():
         try:
-            return await pairing._ensure_bonded_proxy(None, "Truma iNetX-FFB4D1")
+            _bonded, client = await pairing.ensure_bonded(
+                None, "Truma iNetX-FFB4D1", "50:98:B8:FF:B4:D1"
+            )
+            return client
         except _StopTest:
             return None
 

@@ -26,7 +26,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
-from .bt import advert_name, async_resolve_proxy_device, is_panel_advert
+from .bt import advert_name, async_resolve_device, is_panel_advert
 from .const import DOMAIN, LOGGER
 from .coordinator import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
 from .pairing import ensure_bonded
@@ -116,7 +116,7 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         # availability instead of ~99 %. The address is still stored: the
         # update is applied before `reload_on_update` is tested. Nothing needs
         # the reload, because the coordinator resolves the panel's live RPA on
-        # every connection via bt.async_resolve_proxy_device(), matching on the
+        # every connection via bt.async_resolve_device(), matching on the
         # stable name; entry.data[CONF_ADDRESS] is only a bootstrap hint.
         self._abort_if_unique_id_configured(
             updates={CONF_ADDRESS: discovery_info.address},
@@ -245,7 +245,11 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         if self._name is None:
             return None
-        device = async_resolve_proxy_device(self.hass, self._name)
+        # local_only: an adapter path is a BlueZ notion, and only a local
+        # adapter's device carries one. Asking for any device would hand back
+        # the proxy's view of the same address on a host that has both, and
+        # this would answer "no adapter" for a panel BlueZ can plainly see.
+        device = async_resolve_device(self.hass, self._name, local_only=True)
         details = getattr(device, "details", None)
         if isinstance(details, dict):
             path = details.get("path")

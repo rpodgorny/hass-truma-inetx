@@ -83,7 +83,9 @@ def _load():
     _mod("truma_pkg.truma", __path__=[str(SRC / "truma")])
     _mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None)
     _mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
-         async_resolve_proxy_device=None, async_wait_until_heard=None)
+         async_resolve_device=None, async_wait_until_heard=None,
+         ADDR_IDENTITY="identity", ADDR_RPA="rpa",
+         address_kind=lambda _name, _address: "rpa")
 
     def _real(name: str, package: str = "truma_pkg", path: Path = SRC):
         spec = importlib.util.spec_from_file_location(
@@ -212,6 +214,10 @@ class _Coord:
         self._state = STATE.TrumaState()
         self._last_frame = 0.0
         self._stop = False
+        # A session that reaches startup records which address kind carried it;
+        # these fixtures dial nothing, so there is nothing to record.
+        self._last_kind = None
+        self._session_ok = False
         self._writes_pending = 0
         self._connected_event = asyncio.Event()
         self._identity = {

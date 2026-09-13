@@ -100,7 +100,9 @@ def _load():
     _mod("truma_pkg.truma", __path__=[str(SRC / "truma")])
     _mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None)
     _mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
-         async_resolve_proxy_device=None, async_wait_until_heard=None)
+         async_resolve_device=None, async_wait_until_heard=None,
+         ADDR_IDENTITY="identity", ADDR_RPA="rpa",
+         address_kind=lambda _name, _address: "rpa")
 
     def _real(name: str, package: str = "truma_pkg", path: Path = SRC):
         spec = importlib.util.spec_from_file_location(
@@ -132,6 +134,9 @@ class _Coord:
     hass = types.SimpleNamespace(loop=types.SimpleNamespace(time=lambda: 0.0))
     unique_id = "Truma iNetX-FFB4D1"
     last_update_success = True
+    # Which kind of address this host connects on; the download reports it, so
+    # a coordinator that never ran a session has to answer "not known yet".
+    address_kind = None
 
     def __init__(self) -> None:
         self._state = STATE.TrumaState()

@@ -2,9 +2,25 @@
 
 The panel uses a rotating Resolvable Private Address, so a stored MAC goes
 stale. Both the live session (coordinator) and the onboarding bond (config
-flow) must find and connect the panel THE SAME way — through a remote/proxy
-scanner — so the bond lands where the integration will actually connect. This
-module is the single source of that resolution.
+flow) have to find the panel the same way, and this module is the single
+source of that resolution.
+
+What it resolves is an **address**, not a route. Which adapter carries the
+connection is Home Assistant's decision: habluetooth swaps
+``bleak_retry_connector.BleakClientWithServiceCache`` for its own wrapper, and
+that wrapper throws away the scanner the BLEDevice came from, keeps only the
+address, and re-picks the best connectable path at connect time -- scoring
+every candidate by RSSI, by how many connects to *that address* have already
+failed on that scanner, by connects in flight, and by free connection slots.
+Nothing in HA pins a device to a scanner, so a transport preference expressed
+here is overruled a moment later anyway. This module used to hold one; it only
+made the wrong address get tried first (issue #13).
+
+Nothing here asks which transport it got, either. The one caller that needs
+to know -- ``pairing``, where bonding *is* the transport -- reads it off the
+connected client instead (``ble.client_is_proxy``). ``local_only`` below is
+the single remaining exception, and it is a data requirement rather than a
+preference.
 """
 
 from __future__ import annotations
@@ -78,7 +94,12 @@ def advert_name(info: BluetoothServiceInfoBleak) -> str | None:
 
 
 def is_remote_scanner(scanner: object) -> bool:
-    """Return True for a remote (e.g. ESP32 proxy) scanner, not a local adapter."""
+    """Return True for a remote (e.g. ESP32 proxy) scanner, not a local adapter.
+
+    Only ``local_only`` below has any business calling this. Nothing else may
+    branch on the kind of scanner an advert came from: the scanner that heard
+    the panel is not the adapter that will carry the connection.
+    """
     try:
         from habluetooth import BaseHaRemoteScanner
     except ImportError:  # pragma: no cover - habluetooth always present in HA
@@ -102,46 +123,72 @@ def _panel_infos(hass: HomeAssistant, name: str) -> list:
 def async_panel_advertising(hass: HomeAssistant, name: str) -> bool:
     """Return True when the panel is being heard at all, by any scanner.
 
-    Separates the two reasons :func:`async_resolve_proxy_device` returns
-    ``None``: we hear the panel but nothing connectable can reach it (needs a
-    proxy), versus we hear nothing at all (panel off, out of range, or asleep).
-    They are indistinguishable to the resolver and need opposite advice, so
-    only the first should ever tell a user to go buy hardware.
+    Separates the two reasons :func:`async_resolve_device` returns ``None``:
+    we hear the panel but nothing connectable can reach it, versus we hear
+    nothing at all (panel off, out of range, or asleep). They are
+    indistinguishable to the resolver and need opposite advice, so only the
+    first should ever tell a user to go buy hardware.
     """
     return bool(_panel_infos(hass, name))
 
 
-def async_resolve_proxy_device(
+# The panel puts two kinds of address on air. The identity address never
+# rotates -- its last three bytes are the suffix in the panel's name, e.g.
+# ``...FFB4D1`` for "Truma iNetX-FFB4D1" -- while everything else is a
+# Resolvable Private Address that changes every few minutes. Which of the two
+# a given host can actually connect on is a property of that host's kernel and
+# controller -- the README's proxy section has which kernel does what, and why
+# 6.19 changed it -- so it is worth remembering rather than guessing: see
+# ``prefer_identity``.
+ADDR_IDENTITY = "identity"
+ADDR_RPA = "rpa"
+
+
+def address_kind(name: str, address: str) -> str:
+    """Return whether ``address`` is the panel's identity address or an RPA.
+
+    Falls back to ``ADDR_RPA`` when the name carries no usable suffix: the
+    identity address is only recognisable *through* that suffix, so without one
+    there is nothing to claim.
+    """
+    suffix = name.rsplit("-", 1)[-1].upper()
+    if len(suffix) != 6 or any(c not in "0123456789ABCDEF" for c in suffix):
+        return ADDR_RPA
+    if address.replace(":", "").upper().endswith(suffix):
+        return ADDR_IDENTITY
+    return ADDR_RPA
+
+
+def async_resolve_device(
     hass: HomeAssistant,
     name: str,
     *,
     avoid: Iterable[str] = (),
-    remote_only: bool = False,
+    local_only: bool = False,
+    prefer_identity: bool = False,
 ) -> BLEDevice | None:
-    """Find the panel's current connectable device via a remote/proxy scanner.
+    """Find the address the panel can be dialled on right now.
 
     Matches the panel by its stable advertised ``name`` OR primary service UUID
-    (the local name is absent from add-device/pairing adverts), picks the
-    freshest advertised RPA, and prefers a device reachable through a remote
-    (proxy) scanner: a proxy's controller resolves private addresses itself, so
-    it reconnects on any host, and using it also keeps a local adapter from
-    stealing the connection. A local adapter is returned only when no proxy can
-    hear the panel — on a stock host that link will pair but never reconnect,
-    which is what the ``no_proxy_route`` repair issue is about. Returns ``None``
-    when nothing can reach it right now (the caller should retry).
+    (the local name is absent from add-device/pairing adverts) and returns a
+    connectable device for the best-ranked address, or ``None`` when nothing
+    connectable can reach it (the caller should retry).
 
-    Because of that local fallback, a non-``None`` result does **not** mean a
-    proxy can reach the panel. Pass ``remote_only=True`` to ask that narrower
-    question -- callers that must know which transport they got, rather than
-    just wanting the best route, have to. ``pairing.ensure_bonded()`` does: the
-    proxy and local BlueZ bonding paths are not interchangeable, because only
-    the local one registers a BlueZ pairing agent.
+    Which **adapter** ends up carrying that connection is not decided here and
+    cannot be -- Home Assistant re-picks the path at connect time; see the
+    module docstring. So the device handed back is really an address with a
+    scanner attached, and the ranking below is entirely about addresses.
 
-    The "resolved identity" pseudo-address (whose last bytes match the name
-    suffix, e.g. ``...FFB4D1``) is ranked below the RPAs — via a proxy it
-    usually dials a stale cached bonded RPA rather than the live one, but it is
-    the panel's real on-air address while in add-device mode, so it is worth a
-    try once the RPAs are exhausted.
+    Fresh beats stale, and the identity address is ranked below the RPAs by
+    default: through a proxy it usually dials a stale cached bonded RPA rather
+    than the live one. It is still worth a try once the RPAs are exhausted,
+    because it is the panel's real on-air address in add-device mode -- and on
+    a host whose kernel puts the peer's identity on air, it is the *only*
+    address that ever connects. ``prefer_identity`` flips that one comparison
+    for a host that has proved this, which is what issue #13 costs otherwise:
+    every session walking the RPAs, timing out on each, before reaching the
+    address that works. It reorders, it never excludes -- a wrong memory costs
+    one attempt, not the connection.
 
     ``avoid`` is a set of addresses that failed to establish. This exists
     because of a specific, observed failure mode after pairing:
@@ -149,13 +196,13 @@ def async_resolve_proxy_device(
     Right after the bond, the panel keeps *advertising* the RPA it paired on
     but stops *accepting connections* on it (a panel-side phantom from the
     pairing hand-off), while it simultaneously advertises a fresh, live RPA.
-    Both addresses look equally valid here — same name, both connectable via the
-    proxy, near-identical timestamps — but connecting the dead one fails
-    forever with ESP_GATT_CONN_FAIL_ESTABLISH (0x3e). Without ``avoid`` we
-    always return the same first candidate and the coordinator hammers the dead
-    address indefinitely, leaving the device "unavailable" until someone
-    power-cycles the panel. The coordinator feeds back each address that failed
-    to establish so we rotate to the panel's other advertised RPA instead.
+    Both addresses look equally valid here — same name, near-identical
+    timestamps — but connecting the dead one fails forever with
+    ESP_GATT_CONN_FAIL_ESTABLISH (0x3e). Without ``avoid`` we always return the
+    same first candidate and the coordinator hammers the dead address
+    indefinitely, leaving the device "unavailable" until someone power-cycles
+    the panel. The coordinator feeds back each address that failed to establish
+    so we rotate to the panel's other advertised RPA instead.
 
     ``avoid`` **demotes**, it does not exclude. A failed address ranks below
     every address that has not failed, which is enough to rotate off a phantom
@@ -166,75 +213,59 @@ def async_resolve_proxy_device(
     so one failure against it — the panel still holding the slot of a
     just-closed session, say — banished the only route a host connecting over
     the identity has.
+
+    ``local_only`` restricts the answer to what a local adapter can see. It is
+    not a preference and not a speed choice, and it has exactly one legitimate
+    caller: ``pairing._bluez_path()`` needs the BlueZ object path to call
+    ``Device1.Pair()`` on, and only a local adapter's device carries one. There
+    is deliberately no mirror of it -- wanting a proxy is what this module used
+    to do, and HA overrules it anyway.
     """
     infos = _panel_infos(hass, name)
-    suffix = name.rsplit("-", 1)[-1].upper()
-    if len(suffix) != 6 or any(c not in "0123456789ABCDEF" for c in suffix):
-        suffix = ""
-
-    def _is_identity(address: str) -> bool:
-        return bool(suffix) and address.replace(":", "").upper().endswith(suffix)
-
     avoid_norm = {a.upper() for a in avoid}
+    wanted = ADDR_IDENTITY if prefer_identity else ADDR_RPA
     # Rank, never remove. Freshest first, but an avoided address sinks below
-    # every other candidate and the identity address sinks below the RPAs:
+    # every other candidate and the unwanted kind of address sinks below the
+    # wanted one:
     #
-    #   fresh→stale RPAs | identity | avoided RPAs | avoided identity
-    #
-    # The panel also advertises its identity address at times (measured: both at
-    # once after bonding, identity only while in add-device mode). When it does,
-    # the identity IS its on-air address and connecting to it is correct -- so
-    # keep it as a last resort rather than refusing to connect at all.
+    #   fresh→stale wanted | other kind | avoided wanted | avoided other
     candidates = sorted(
         infos,
         key=lambda i: (
             i.address.upper() in avoid_norm,
-            _is_identity(i.address),
+            address_kind(name, i.address) != wanted,
             -i.time,
         ),
     )
     LOGGER.debug(
-        "Truma %s candidates (best→worst): %s | avoid: %s | identity present: %s",
+        "Truma %s candidates (best→worst): %s | avoid: %s | first choice: %s",
         name,
-        [(i.address, round(i.time, 1), i.rssi, i.connectable) for i in candidates],
+        [
+            (i.address, address_kind(name, i.address), round(i.time, 1), i.rssi)
+            for i in candidates
+        ],
         sorted(avoid_norm),
-        any(_is_identity(i.address) for i in infos),
+        wanted,
     )
-    # A proxy is still preferred: its controller resolves private addresses, so
-    # it works on any host. A local adapter only works where the kernel puts the
-    # peer's current RPA on air rather than its identity address. Kernels below
-    # 6.19 do exactly that in hci_connect_le(), so they need no proxy at all;
-    # 14b06c3a88f7 took it away in 6.19, leaving the identity address on air
-    # unless the controller has LL Privacy and BlueZ programmed the peer's IRK
-    # into the resolving list (bluez#2356 says it does not, for dual-mode
-    # bonds). A kernel fix is posted upstream and not yet merged. Fall back to a
-    # local adapter either way -- on an older or patched host it is all that is
-    # needed.
-    local: object | None = None
     for info in candidates:
         for sd in bluetooth.async_scanner_devices_by_address(
             hass, info.address, connectable=True
         ):
-            if is_remote_scanner(sd.scanner):
-                LOGGER.debug(
-                    "Truma %s -> %s via remote/proxy scanner (rssi=%s)",
-                    name,
-                    info.address,
-                    getattr(sd.advertisement, "rssi", None),
-                )
-                return sd.ble_device
-            if local is None:
-                local = (info, sd)
-    if local is not None and not remote_only:
-        info, sd = local
-        LOGGER.debug(
-            "Truma %s -> %s via LOCAL adapter (rssi=%s); no proxy route available",
-            name,
-            info.address,
-            getattr(sd.advertisement, "rssi", None),
-        )
-        return sd.ble_device
-    LOGGER.debug("Truma %s: no route to the panel right now", name)
+            if local_only and is_remote_scanner(sd.scanner):
+                continue
+            LOGGER.debug(
+                # The scanner named here is only the one that heard this
+                # advert; HA scores the paths again when the connect starts,
+                # and may well use another.
+                "Truma %s -> %s (%s), heard by %s (rssi=%s)",
+                name,
+                info.address,
+                address_kind(name, info.address),
+                getattr(sd.scanner, "name", type(sd.scanner).__name__),
+                getattr(sd.advertisement, "rssi", None),
+            )
+            return sd.ble_device
+    LOGGER.debug("Truma %s: no connectable route to the panel right now", name)
     return None
 
 

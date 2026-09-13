@@ -12,18 +12,18 @@ burner and the fan — no cloud, no Truma account, no LIN wiring.
 Developed against an iNet X driving a **Truma Combi**. Other Truma appliances
 speak the same protocol but are untested; reports welcome.
 
-## An ESP32 Bluetooth proxy is the reliable route
-
-A proxy works everywhere. A local adapter works on some kernels and not
-others, and which one you are on decides it.
+## Reaching the panel
 
 The panel advertises a **fast-rotating Resolvable Private Address** and only
 accepts an encrypted reconnect from a client that puts that current address on
-air. Phones resolve it in the Bluetooth controller, and ESP-IDF does the same,
-so an [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html)
-always works.
+air. Two kinds of hardware manage that, and either is enough: a local Bluetooth
+adapter on a host whose kernel or controller resolves the address, or an
+[ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html),
+whose ESP-IDF controller resolves it itself and therefore works on any host.
 
-On Linux it depends on the kernel version:
+A local adapter is not a fallback and a proxy is not a requirement — which one
+you have decided for you, and on Linux the kernel version decides whether the
+first one is available at all:
 
 - **Below 6.19** a local adapter reconnects fine. `hci_connect_le()`
   substitutes the peer's cached RPA for the identity address before it puts a
@@ -41,13 +41,29 @@ On Linux it depends on the kernel version:
 
 A kernel fix is
 [posted to linux-bluetooth](https://lore.kernel.org/linux-bluetooth/20260908012048.3681904-2-radek@podgorny.cz/)
-and is working its way upstream. Until it lands, a proxy is the answer on 6.19
+and is working its way upstream. Until it lands, a proxy is what works on 6.19
 and later.
 
 Older reports in this repo claim BlueZ can never do this. That was wrong: the
 adapters tested happened to be on kernels carrying the regression.
 
-**Stock proxy firmware is enough** — nothing custom is needed. A plain
+**The integration does not choose between a proxy and a local adapter** — Home
+Assistant does, and it re-picks at every connect, scoring each path by signal,
+by how often connects to that address have already failed on that adapter, by
+connects in flight and by free connection slots. Turn it on with
+`logger: logs: habluetooth: debug` to see the paths it found and the order it
+ranked them in.
+
+What the integration does decide is which *address* to dial, and it learns
+that per host: the first session that works records whether this panel answers
+on a rotating address or on its identity address here, and later connects
+start there. A host whose answer changes — a kernel upgrade, a proxy that
+moved — falls back to the other kind by itself, costing one attempt rather
+than the connection. The learned answer is in the diagnostics download as
+`address_kind`.
+
+**If you do run a proxy, stock firmware is enough** — nothing custom is
+needed. A plain
 `bluetooth_proxy: active: true` on an `esp-idf` build is all this integration
 expects:
 
@@ -270,6 +286,10 @@ still holds a bond the panel has forgotten, the panel rejects it on that one
 address only (`error: 97`), and the integration rotates to the panel's next
 address, which pairs normally.
 
+Pairing bonds the panel on whichever adapter or proxy Home Assistant connects
+through at that moment, and the bond lives *there* — a BLE bond is per-adapter.
+If that hardware later goes away, the panel has to be paired again.
+
 To re-pair later, use **Reconfigure** on the device.
 
 ## Diagnostics
@@ -314,7 +334,7 @@ script — run one directly, or all of them:
 python3 tests/test_pairing_rotation.py            # pairing address rotation
 python3 tests/test_pairing_transport_dispatch.py  # bonding uses the transport it has
 python3 tests/test_device_from_bluez.py           # BLEDevice built from BlueZ's object
-python3 tests/test_no_proxy_issue.py              # the "nothing can reach it" repair
+python3 tests/test_no_route_issue.py              # the "nothing can connect" repair
 python3 tests/test_water_entities.py              # water entities and write addressing
 python3 tests/test_energy_entities.py             # energy sources, batteries, raw flame value
 ```

@@ -93,7 +93,9 @@ def _load():
     # for it -- but bt.py drags in HA's bluetooth component, so stub it whole.
     _mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None)
     _mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
-         async_resolve_proxy_device=None, async_wait_until_heard=None)
+         async_resolve_device=None, async_wait_until_heard=None,
+         ADDR_IDENTITY="identity", ADDR_RPA="rpa",
+         address_kind=lambda _name, _address: "rpa")
 
     def _real(name: str, package: str = "truma_pkg", path: Path = SRC):
         spec = importlib.util.spec_from_file_location(

@@ -63,13 +63,16 @@ _LOGGER = logging.getLogger(__name__)
 
 
 
-def _client_is_proxy(client: object) -> bool:
+def client_is_proxy(client: object) -> bool:
     """Whether this client talks through an ESPHome proxy rather than BlueZ.
 
     Proxy clients come from ``bleak_esphome``; a local adapter gives BlueZ's
-    ``bleak.backends.bluezdbus`` client. The two need opposite handling for
-    pairing (see :meth:`TrumaBle._subscribe`), and the backend module is the
-    only reliable way to tell them apart from here.
+    ``bleak.backends.bluezdbus`` client. The two need opposite handling where
+    encryption is concerned -- see :meth:`TrumaBle._subscribe` and
+    ``pairing.ensure_bonded`` -- and this is the honest way to ask: it reads
+    the backend Home Assistant actually chose for this link, after the fact.
+    Which scanner heard the panel, or which transports could reach it, predicts
+    nothing, because HA re-scores the paths at every connect.
     """
     backend = getattr(client, "_backend", client)
     return "esphome" in type(backend).__module__
@@ -200,10 +203,15 @@ class TrumaBleClient:
         """
         assert self._client is not None
         last_exc: Exception | None = None
-        pair_first = _client_is_proxy(self._client)
+        pair_first = client_is_proxy(self._client)
         _LOGGER.debug(
-            "Truma subscribe: transport=%s, pair() %s",
+            # The backend class names the path Home Assistant actually chose,
+            # which is not the one the resolver's device came from -- HA scores
+            # the paths again at connect time. It is the only record of which
+            # adapter carried a session, and the first thing a bug report needs.
+            "Truma subscribe: transport=%s (%s), pair() %s",
             "proxy" if pair_first else "local",
+            type(getattr(self._client, "_backend", self._client)).__name__,
             "first" if pair_first else "skipped",
         )
         for attempt in range(3):

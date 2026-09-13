@@ -21,15 +21,18 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .ble import TrumaBleClient, device_from_bluez
 from .bt import (
+    ADDR_IDENTITY,
+    address_kind,
     async_panel_advertising,
-    async_resolve_proxy_device,
+    async_resolve_device,
     async_wait_until_heard,
 )
 from .const import (
     DOMAIN,
-    ISSUE_NO_PROXY_ROUTE,
+    ISSUE_NO_PROXY_ROUTE_LEGACY,
+    ISSUE_NO_ROUTE,
     LOGGER,
-    NO_PROXY_MISSES_BEFORE_WARNING,
+    NO_ROUTE_MISSES_BEFORE_WARNING,
 )
 from .truma.const import (
     CTRL_MBP,
@@ -161,17 +164,38 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         self._last_frame: float = 0.0
         # RPA addresses that failed to establish a connection, so the resolver
         # rotates to another advertised address instead of hammering a dead one
-        # (see the phantom-RPA explanation in bt.async_resolve_proxy_device).
+        # (see the phantom-RPA explanation in bt.async_resolve_device).
         # Cleared on a successful connection and when it would block every
         # candidate, so a transiently-bad address gets retried later.
         self._avoid: set[str] = set()
         # Address of the most recent connection attempt, so _run knows which
         # one to blame if the attempt fails.
         self._last_addr: str | None = None
-        # Consecutive resolves that found the panel advertising but no proxy
-        # able to reach it. Debounces the repair issue (see _async_note_...).
-        self._no_proxy_misses = 0
+        # Which kind of address (identity vs rotating RPA) the panel last
+        # answered on, persisted with the identity. Hosts differ in which one
+        # works -- it depends on their kernel and controller, not on anything
+        # we can see -- so let the host prove its own answer once instead of
+        # walking the addresses that never work on every single connect
+        # (issue #13). ``None`` until a session has proved something.
+        self._address_kind: str | None = None
+        # The kind the current attempt is dialling, and whether the memory
+        # above just failed us (in which case the next attempt tries the other
+        # kind -- see _prefer_identity).
+        self._last_kind: str | None = None
+        self._kind_stale = False
+        # Whether the current attempt ever reached "connected and subscribed".
+        # A link that dropped after hours of good service says nothing about
+        # which address kind is right, so only failures before that flip the
+        # memory.
+        self._session_ok = False
+        # Consecutive resolves that found the panel advertising with nothing
+        # able to connect to it. Debounces the repair issue (see
+        # _async_note_no_route).
+        self._no_route_misses = 0
         self._store: Store = Store(hass, _STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}")
+        # Everything the store holds: the app identity plus our own
+        # bookkeeping. Kept whole so a save never drops a key it did not know.
+        self._stored: dict = {}
         self._stop = False
         # Set on stop to interrupt the reconnect wait immediately (so unload is
         # not blocked for up to the full backoff delay).
@@ -186,52 +210,62 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         """Return the current shared state (updated by BLE notifications)."""
         return self._state
 
-    def _async_note_no_proxy_route(self) -> None:
-        """Warn the user when the panel is audible but unreachable.
+    def _async_note_no_route(self) -> None:
+        """Warn the user when the panel is audible but nothing can connect.
 
-        The panel uses a rotating private address, so reconnecting needs the
-        peer's current address to be put on air. A Bluetooth proxy's controller
-        resolves that itself; a local adapter can only do it if its controller
-        supports LL Privacy (most USB dongles and the Raspberry Pi's built-in
-        adapter do not -- check with `btmon` for "Resolving List" support) or
-        the host kernel compensates. Such a setup pairs once and then never
-        reconnects, which looks like a broken integration rather than missing
-        hardware. Say so instead of failing silently.
+        The panel uses a rotating private address, and it only answers a
+        connect that puts its current address on air. Whether a given adapter
+        does that is a property of the host: a controller with LL Privacy and
+        the panel's key in its resolving list does it, a kernel below 6.19 does
+        it in software, an ESPHome proxy's controller does it. A host where
+        none of them applies pairs once and then never reconnects, which looks
+        like a broken integration rather than a Bluetooth setup that cannot
+        serve this panel. Say so instead of failing silently.
+
+        What to *do* about it is deliberately not prescribed here beyond the
+        facts: this integration does not choose the adapter -- Home Assistant
+        scores every path it has and picks -- so it is in no position to say
+        which piece of the user's setup is the wrong one.
         """
         if not async_panel_advertising(self.hass, self.unique_id):
             # We cannot hear the panel at all -- off, asleep or out of range.
-            # Telling this user to buy a proxy would be wrong, so stay quiet
+            # That is a different fault with different advice, so stay quiet
             # and do not let it count towards the warning either.
             return
-        self._no_proxy_misses += 1
-        if self._no_proxy_misses != NO_PROXY_MISSES_BEFORE_WARNING:
+        self._no_route_misses += 1
+        if self._no_route_misses != NO_ROUTE_MISSES_BEFORE_WARNING:
             # Fires exactly once on the way up, so repeated failures do not
             # re-create the issue and re-notify every reconnect attempt.
             return
         LOGGER.warning(
-            "Truma %s is advertising but no route can reach it; a Bluetooth "
-            "proxy resolves the panel's rotating address for you, whereas a "
-            "local adapter needs controller or kernel support for it",
+            "Truma %s is advertising but nothing Home Assistant can reach it "
+            "with is able to connect",
             self.unique_id,
         )
         ir.async_create_issue(
             self.hass,
             DOMAIN,
-            ISSUE_NO_PROXY_ROUTE,
+            ISSUE_NO_ROUTE,
             is_fixable=False,
             severity=ir.IssueSeverity.WARNING,
-            translation_key=ISSUE_NO_PROXY_ROUTE,
-            learn_more_url="https://esphome.io/components/bluetooth_proxy.html",
+            translation_key=ISSUE_NO_ROUTE,
+            learn_more_url=(
+                "https://github.com/rpodgorny/hass-truma-inetx"
+                "#reaching-the-panel"
+            ),
         )
 
-    def _async_clear_no_proxy_route(self) -> None:
+    def _async_clear_no_route(self) -> None:
         """Reset the miss counter and drop the issue if it was raised."""
-        self._no_proxy_misses = 0
-        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_PROXY_ROUTE)
+        self._no_route_misses = 0
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_ROUTE)
+        # An issue this integration raised under the old id would otherwise
+        # outlive the rename, showing the user a card with no text behind it.
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_PROXY_ROUTE_LEGACY)
 
     async def async_start(self) -> None:
         """Load identity and launch the background BLE session."""
-        self._identity = await self._load_identity()
+        await self._load_stored_state()
         self.config_entry.async_create_background_task(
             self.hass, self._run(), name=f"{DOMAIN} session {self.address}"
         )
@@ -245,7 +279,8 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
     async def _disconnect_client(self) -> None:
         """Disconnect and drop the current BLE client, best effort.
 
-        Frees the proxy connection slot so the next attempt starts clean.
+        Frees the connection slot on whichever adapter or proxy carried it,
+        so the next attempt starts clean.
         """
         client = self._client
         self._client = None
@@ -258,8 +293,13 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         except Exception as exc:  # noqa: BLE001 - teardown must not raise
             LOGGER.debug("Truma %s disconnect: %s", self.unique_id, exc)
 
-    async def _load_identity(self) -> dict:
-        """Load the persisted app identity, or create and store a new one."""
+    async def _load_stored_state(self) -> None:
+        """Load the persisted app identity and address-kind memory.
+
+        The identity is created and stored on first run; the memory is written
+        only once a session has proved one (see _remember_address_kind), so it
+        is absent on a fresh install and the resolver keeps its default order.
+        """
         data = await self._store.async_load()
         if not data:
             data = {
@@ -268,7 +308,48 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                 "username": "Home Assistant",
             }
             await self._store.async_save(data)
-        return data
+        self._stored = data
+        # Hand the protocol only what it writes to the panel: the stored blob
+        # also carries our own bookkeeping, which is none of its business.
+        self._identity = {
+            key: data[key] for key in ("muid", "uuid", "username") if key in data
+        }
+        self._address_kind = data.get("address_kind")
+
+    def _prefer_identity(self) -> bool:
+        """Whether to dial the identity address before the RPAs.
+
+        With no memory, keep the old order (RPAs first). With one, follow it --
+        unless it just failed, in which case try the other kind next. That
+        alternation is what makes a wrong memory cost one attempt rather than
+        the connection: a host that loses the route it learned (a kernel
+        upgrade taking the local adapter away, a proxy that moved) finds the
+        other one by itself instead of looking like broken hardware.
+        """
+        if self._address_kind is None:
+            return False
+        prefer = self._address_kind == ADDR_IDENTITY
+        return not prefer if self._kind_stale else prefer
+
+    async def _remember_address_kind(self, kind: str) -> None:
+        """Persist the kind of address that just carried a session.
+
+        Persisted rather than kept in memory because the cost this avoids is
+        paid at startup: the reporter in issue #13 measured 11.5 minutes from
+        HA start to a live session, against 1.2 minutes when the working
+        address was dialled first.
+        """
+        self._kind_stale = False
+        if kind == self._address_kind:
+            return
+        LOGGER.debug(
+            "Truma %s: connects on the %s address; remembering it",
+            self.unique_id,
+            kind,
+        )
+        self._address_kind = kind
+        self._stored["address_kind"] = kind
+        await self._store.async_save(self._stored)
 
     async def _run(self) -> None:
         """Maintain the BLE session, reconnecting with exponential backoff."""
@@ -279,20 +360,11 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                 connected = await self._connect_and_run()
             except Exception as exc:  # noqa: BLE001
                 LOGGER.debug("Truma session ended: %s", exc)
-                # If the attempt never got a link up, demote that address so
-                # the resolver rotates to another advertised RPA next round
-                # instead of hammering a post-pairing phantom (see bt.py). It
-                # is a demotion, not a ban: when it is the only route left the
-                # resolver still hands it back, which is what a transient
-                # failure (the panel holding the slot of a just-closed session)
-                # needs. Only a failed *connect* leaves _last_addr set; a later
-                # failure clears it.
-                if self._last_addr:
-                    self._avoid.add(self._last_addr)
+                self._note_attempt_failed()
             finally:
                 # Always tear the client down before the next attempt so a
-                # half-open link never lingers holding the proxy's connection
-                # slot (the ghost that otherwise needs a manual power-cycle).
+                # half-open link never lingers holding a connection slot (the
+                # ghost that otherwise needs a manual power-cycle).
                 await self._disconnect_client()
                 self._connected_event.clear()
             if connected and self.poll_interval and not self._stop:
@@ -326,6 +398,29 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             if not connected:
                 delay = min(delay * 2, _RECONNECT_DELAY_MAX)
 
+    def _note_attempt_failed(self) -> None:
+        """Learn from an attempt that ended badly, at both levels.
+
+        The address: if the attempt never got a link up, demote it so the
+        resolver rotates to another advertised RPA next round instead of
+        hammering a post-pairing phantom (see bt.py). It is a demotion, not a
+        ban -- when it is the only route left the resolver still hands it back,
+        which is what a transient failure (the panel holding the slot of a
+        just-closed session) needs. Only a failed *connect* leaves
+        ``_last_addr`` set; a later failure clears it.
+
+        The address KIND: if the kind we remember just failed to carry a
+        session, ignore the memory next time and try the other one; if it was
+        the other kind that failed, go back to the memory. Alternating is what
+        keeps a stale memory from wedging a host whose working route changed --
+        a kernel upgrade taking the local adapter away, say. A session that ran
+        and then dropped teaches nothing here, so ``_session_ok`` gates it.
+        """
+        if self._last_addr:
+            self._avoid.add(self._last_addr)
+        if not self._session_ok and self._last_kind is not None:
+            self._kind_stale = self._last_kind == self._address_kind
+
     async def _wait_before_retry(self, delay: float) -> None:
         """Sleep ``delay`` seconds; wake early on stop, or for a pending write.
 
@@ -355,10 +450,16 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         resets the backoff). Raises if the connection could not be established.
         """
         assert self._identity is not None
+        # Nothing has been dialled or proved yet this round. Clearing the kind
+        # matters: an attempt that ends before it picks an address (the panel
+        # silent, nothing connectable) is not evidence about address kinds, and
+        # last round's kind left lying here would flip the memory on it.
+        self._session_ok = False
+        self._last_kind = None
         client = TrumaBleClient(self._identity)
         client.on_data(self._on_frame)
         # Track the client before connecting so a failed/partial connect is
-        # still torn down by _run's finally (freeing the proxy slot).
+        # still torn down by _run's finally (freeing the connection slot).
         self._client = client
 
         # First attempt after a fresh pairing: adopt the live connection the
@@ -374,6 +475,10 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                     initial.address,
                 )
                 self._last_addr = None
+                # An adopted link was dialled by the config flow, not by us,
+                # so it says nothing about which address kind this host
+                # connects on.
+                self._last_kind = None
                 await client.adopt(initial)
                 return await self._finish_startup(client)
             # Handed-off link dropped in the setup gap — discard and connect
@@ -388,15 +493,18 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             except Exception as exc:  # noqa: BLE001 - best effort
                 LOGGER.debug("Truma %s stale handoff disconnect: %s", self.unique_id, exc)
 
-        ble_device = async_resolve_proxy_device(
-            self.hass, self.unique_id, avoid=self._avoid
+        ble_device = async_resolve_device(
+            self.hass,
+            self.unique_id,
+            avoid=self._avoid,
+            prefer_identity=self._prefer_identity(),
         )
         if ble_device is None and self._avoid:
             # Nothing is on air at all, so the grudges are about addresses the
             # panel no longer uses. Drop them: a set that only ever grew would
             # keep demoting whatever the panel comes back on. (It cannot be
             # "everything was avoided" — avoid only demotes, so a reachable
-            # address is always returned; see bt.async_resolve_proxy_device.)
+            # address is always returned; see bt.async_resolve_device.)
             LOGGER.debug(
                 "Truma %s: nothing advertising; forgetting past failures",
                 self.unique_id,
@@ -414,16 +522,17 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
                     self.unique_id,
                 )
         if ble_device is None:
-            self._async_note_no_proxy_route()
+            self._async_note_no_route()
             raise HomeAssistantError(
                 f"Truma {self.unique_id} not currently advertising"
             )
         # A resolve that succeeded disproves the issue outright: something
         # connectable reached the panel. (The adopted-handoff path above needs
         # no equivalent -- it only happens straight after pairing, which itself
-        # required a proxy route, so the issue cannot already be raised.)
-        self._async_clear_no_proxy_route()
+        # required a working route, so the issue cannot already be raised.)
+        self._async_clear_no_route()
         self._last_addr = ble_device.address
+        self._last_kind = address_kind(self.unique_id, ble_device.address)
         # Dial while the panel is still audible: the resolved address is only
         # good for as long as the host's cache of it is (see
         # bt.async_wait_until_heard). A stale dial costs a ~20 s timeout during
@@ -447,6 +556,16 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         return await self._finish_startup(client)
 
     @property
+    def address_kind(self) -> str | None:
+        """Which kind of address the panel last answered on, if known.
+
+        Exposed for diagnostics: it is the one piece of per-host state this
+        integration learns, and a download that does not say which address kind
+        a host settled on cannot explain its connect times.
+        """
+        return self._address_kind
+
+    @property
     def poll_interval(self) -> int:
         """Seconds between polls, or 0 to hold the connection open."""
         return int(
@@ -460,6 +579,12 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         (the connection is up, so the caller resets the backoff).
         """
         await self._run_startup(client)
+        self._session_ok = True
+        if self._last_kind is not None:
+            # The panel answered, encrypted and subscribed on this address, so
+            # this is the kind that works here. Connecting alone would not have
+            # been proof: a path can establish a link and then fail to encrypt.
+            await self._remember_address_kind(self._last_kind)
 
         # In poll mode this stays True between polls: it means "we are in
         # touch with the panel", not "a link is open this instant". The link

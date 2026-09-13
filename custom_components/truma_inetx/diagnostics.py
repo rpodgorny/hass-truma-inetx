@@ -62,5 +62,10 @@ async def async_get_config_entry_diagnostics(
     return {
         "entry": async_redact_data(entry.as_dict(), TO_REDACT),
         "last_update_success": coordinator.last_update_success,
+        # Which kind of address this host connects on ("identity" or "rpa"),
+        # learned from the first session that worked. Not identifying -- it
+        # names a kind, not an address -- and it is what explains a host's
+        # connect times (issue #13).
+        "address_kind": coordinator.address_kind,
         "state": state_dict,
     }

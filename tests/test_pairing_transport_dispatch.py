@@ -2,7 +2,7 @@
 """Offline check that bonding dispatches to the transport it actually has.
 
 No hardware, no Home Assistant install: the HA/bleak/dbus imports are stubbed so
-the real ``bt.async_resolve_proxy_device`` and the real
+the real ``bt.async_resolve_device`` and the real
 ``pairing.ensure_bonded`` dispatch run.
 
 Why this exists (observed on the van, 2026-08-23): with the USB dongle disabled
@@ -10,22 +10,25 @@ and only the Pi's built-in adapter enabled, pairing failed every time with
 
     proxy pair(): [org.bluez.Error.AuthenticationFailed] Authentication Failed
 
-and bluetoothd said ``No agent available for request type 2``. The resolver is
-named ``async_resolve_proxy_device`` but deliberately falls back to a *local*
-adapter when no proxy can hear the panel, so using it as a proxy-presence test
-made the proxy branch win on every ESP-less host. That branch registers no BlueZ
-pairing agent -- only ``_ensure_bonded_bluez`` does -- so the local path was
-unreachable and Just Works confirmation could never be answered.
+and bluetoothd said ``No agent available for request type 2``. Pairing chose
+its procedure by asking which kind of scanner could *hear* the panel, and the
+resolver of the day fell back to a local adapter, so the proxy branch won on
+every ESP-less host. That branch registers no BlueZ pairing agent -- only
+``_ensure_bonded_bluez`` does -- so Just Works confirmation could never be
+answered.
+
+The fix went further than adding a filter: which scanner heard an advert never
+predicted the transport, because Home Assistant scores the connection paths
+itself at every connect. ``ensure_bonded`` now connects first and dispatches on
+the client it actually got.
 
 What it pins:
 
-1. ``remote_only=True`` returns ``None`` when only a local adapter hears the
-   panel, while the default still returns that local device (the coordinator
-   depends on the fallback, so it must not change),
-2. ``remote_only=True`` still returns the proxy device when one can hear it,
-3. ``ensure_bonded`` takes the local BlueZ path -- the one with the agent -- when
-   there is no proxy route,
-4. and still takes the proxy path when there is one.
+1. the bonding path follows the connected client, not the scanner that heard
+   the panel -- both ways round,
+2. the bleak link is dropped before BlueZ is asked to pair on the same panel,
+3. ``local_only`` -- the one transport filter left -- answers only with a local
+   adapter's device, because only that carries a BlueZ object path.
 
 Then the failure that fix uncovered: with the local path finally reached, pairing
 reported success in 18 ms and the panel never saw it. The bond search was
@@ -84,11 +87,26 @@ class _LocalScanner:
     """Stands in for a scanner backed by a host adapter (hci0/hci1)."""
 
 
+class _BLEDevice(str):
+    """A BLEDevice stand-in that still compares as ``"proxy:<mac>"``.
+
+    The resolver checks in this file assert on that string; ``ensure_bonded``
+    dials ``device.address``. Being both keeps one fixture serving both.
+    """
+
+    address: str
+
+    def __new__(cls, source: str, address: str):
+        device = super().__new__(cls, f"{source}:{address}")
+        device.address = address
+        return device
+
+
 class _ScannerDevice:
     def __init__(self, address: str, remote: bool) -> None:
         self.scanner = _RemoteScanner() if remote else _LocalScanner()
         self.advertisement = _Info(address=address)
-        self.ble_device = f"{'proxy' if remote else 'local'}:{address}"
+        self.ble_device = _BLEDevice("proxy" if remote else "local", address)
 
 
 # Whatever owned sys.modules['habluetooth'] before this file loaded, if anything.
@@ -131,6 +149,10 @@ def _load():
     _mod("habluetooth", BaseHaRemoteScanner=_RemoteScanner)
 
     _mod("truma_pkg", __path__=[str(SRC)])
+    # pairing asks the connected client which transport HA gave it. The real
+    # check reads the client's backend module and needs bleak; every test here
+    # overrides it to say what HA is pretending to have chosen.
+    _mod("truma_pkg.ble", client_is_proxy=lambda _client: True)
     _mod("truma_pkg.const", LOGGER=_Logger(), LOCAL_NAME_PREFIX="Truma iNetX")
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", SERVICE_UUID=SERVICE_UUID, CHAR_CMD="cmd-char")
@@ -155,7 +177,7 @@ BT, PAIRING = _load()
 # bt.is_remote_scanner() resolves habluetooth at CALL time, not import time, so
 # whichever test module registered the stub last decides whose _RemoteScanner
 # class isinstance() is checked against. Leaving ours in sys.modules made
-# test_no_proxy_issue.py's proxy device look local and fail. Take ours back out
+# test_no_route_issue.py's proxy device look local and fail. Take ours back out
 # after loading, and put it in only while our own tests run.
 _HABLUETOOTH_STUB = sys.modules["habluetooth"]
 _restore_before = _HABLUETOOTH_BEFORE
@@ -202,47 +224,82 @@ def _only(*, remote: bool) -> None:
     SCANNERS[RPA] = [_ScannerDevice(RPA, remote=remote)]
 
 
-def test_remote_only_ignores_a_local_adapter() -> None:
-    _only(remote=False)
-    # The default keeps the fallback: the coordinator relies on it to reach the
-    # panel at all on an ESP-less host.
-    assert BT.async_resolve_proxy_device(None, PANEL) == f"local:{RPA}"
-    # The narrow question answers honestly.
-    assert BT.async_resolve_proxy_device(None, PANEL, remote_only=True) is None
+def test_local_only_ignores_a_proxy() -> None:
+    """The one transport filter left, and the one ``_bluez_path()`` asks.
 
-
-def test_remote_only_still_finds_a_proxy() -> None:
+    Only a local adapter's device carries the BlueZ object path that
+    ``Device1.Pair()`` is called on. A proxy's view of the same address has
+    none, so answering with it would leave the local pairing loop believing
+    BlueZ has never heard of a panel it can plainly see -- sixty seconds of an
+    agent registered and nothing to pair with.
+    """
     _only(remote=True)
-    assert BT.async_resolve_proxy_device(None, PANEL, remote_only=True) == f"proxy:{RPA}"
+    assert BT.async_resolve_device(None, PANEL) == f"proxy:{RPA}"
+    assert BT.async_resolve_device(None, PANEL, local_only=True) is None
+
+    _only(remote=False)
+    assert BT.async_resolve_device(None, PANEL, local_only=True) == f"local:{RPA}"
 
 
-def _dispatch(*, remote: bool) -> str:
-    """Run ensure_bonded() far enough to see which bonding path it chose."""
-    _only(remote=remote)
+class _Client:
+    """A connected client that records whether it was dropped."""
+
+    def __init__(self) -> None:
+        self.dropped = False
+
+    async def disconnect(self) -> None:
+        self.dropped = True
+
+
+def _dispatch(*, heard_by_proxy: bool, connected_via_proxy: bool) -> str:
+    """Run ensure_bonded() far enough to see which bonding path it took."""
+    _only(remote=heard_by_proxy)
     chosen: list[str] = []
+    clients: list[_Client] = []
 
-    async def _proxy(_hass, _name, *, timeout=60.0):
-        chosen.append("proxy")
-        return None
+    async def _connect(_cls, _device, _address, **_kw):
+        client = _Client()
+        clients.append(client)
+        return client
 
     async def _bluez(_name, _address, *, adapter_path=None, timeout=60.0, hass=None):
         chosen.append("bluez")
         return True
 
-    PAIRING._ensure_bonded_proxy = _proxy
+    async def _link(_name, _client):
+        chosen.append("link")
+        return True
+
+    PAIRING.establish_connection = _connect
+    PAIRING.client_is_proxy = lambda _client: connected_via_proxy
     PAIRING._ensure_bonded_bluez = _bluez
+    PAIRING._bond_over_link = _link
     asyncio.run(PAIRING.ensure_bonded(None, PANEL, RPA, timeout=2.0))
+    if chosen == ["bluez"]:
+        assert clients and clients[0].dropped, (
+            "the bleak link must be dropped before BlueZ is asked to pair"
+        )
     return chosen[0] if chosen else "none"
 
 
-def test_local_only_uses_the_bluez_path_that_registers_an_agent() -> None:
-    # The regression: this returned "proxy", so no agent was ever registered and
-    # BlueZ answered AuthenticationFailed.
-    assert _dispatch(remote=False) == "bluez"
+def test_dispatch_follows_the_client_not_the_scanner() -> None:
+    """Bond the way the link in hand needs, not the way the adverts suggest.
 
-
-def test_proxy_present_still_uses_the_proxy_path() -> None:
-    assert _dispatch(remote=True) == "proxy"
+    Home Assistant scores the connection paths itself and re-picks at every
+    connect, so "a proxy can hear the panel" does not mean the connection will
+    go through it. This used to probe exactly that and take the proxy path
+    whenever a proxy was in earshot, which on an ESP-less host registered no
+    BlueZ agent (``No agent available for request type 2``, seen on the van
+    2026-08-23) and, worse, on a host with both could bond the panel to the
+    proxy while every session ran over the local adapter -- a bond on a path
+    nothing uses, failing at encryption forever after.
+    """
+    # A proxy can hear it, but HA connected us over the host's own adapter:
+    # bonding is BlueZ's job, agent and all.
+    assert _dispatch(heard_by_proxy=True, connected_via_proxy=False) == "bluez"
+    # Nothing but a local adapter heard it, yet the link we got is a proxy
+    # link: bleak pair() is then the right procedure.
+    assert _dispatch(heard_by_proxy=False, connected_via_proxy=True) == "link"
 
 
 # --- the stale-bond false success -----------------------------------------
@@ -323,14 +380,14 @@ def _with_resolved(path: str | None):
     Restoring matters: ensure_bonded() calls the same resolver, so a leaked stub
     silently sends the dispatch tests down the proxy branch.
     """
-    original = PAIRING.async_resolve_proxy_device
-    PAIRING.async_resolve_proxy_device = lambda *a, **k: (
+    original = PAIRING.async_resolve_device
+    PAIRING.async_resolve_device = lambda *a, **k: (
         _BleDevice(path) if path else None
     )
     try:
         return PAIRING._live_device_path(object(), PANEL, HCI1)
     finally:
-        PAIRING.async_resolve_proxy_device = original
+        PAIRING.async_resolve_device = original
 
 
 def test_live_path_finds_the_rpa_under_the_pairing_adapter() -> None:

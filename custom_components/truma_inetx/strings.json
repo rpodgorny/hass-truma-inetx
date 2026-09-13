@@ -36,9 +36,9 @@
     }
   },
   "issues": {
-    "no_proxy_route": {
-      "title": "Nothing can reach the Truma panel",
-      "description": "Home Assistant can hear the Truma panel advertising, but nothing is able to connect to it.\n\nThe panel uses a rotating Bluetooth private address. Reconnecting to it requires the panel's current address to be put on air. An ESPHome Bluetooth proxy's controller does that for you, and so does a Linux kernel below 6.19. From 6.19 onwards the kernel puts the panel's identity address on air instead, and the panel does not answer it; a local adapter then only works if its controller supports LL Privacy and BlueZ has programmed the panel's key into the resolving list, which it currently does not do. A kernel fix for this is posted upstream and not yet merged.\n\n**On kernel 6.19 or later, add an ESPHome Bluetooth proxy within range of the panel.**\n\nIf you already have one, check that it is online and that the panel is in range of it."
+    "no_route": {
+      "title": "Nothing can connect to the Truma panel",
+      "description": "Home Assistant can hear the Truma panel advertising, but none of the Bluetooth adapters or proxies it has can connect to it.\n\nThe panel uses a rotating Bluetooth private address, and it only answers a connect that puts its *current* address on air. Whether that happens depends on the host:\n\n- A Linux kernel below 6.19 does it in software, so a plain local adapter works.\n- From 6.19 onwards the kernel sends the panel's identity address instead, which the panel does not answer. A local adapter then only works if its controller supports LL Privacy and BlueZ has programmed the panel's key into the resolving list, which it currently does not do for this kind of bond. A kernel fix is posted upstream and not yet merged.\n- An ESPHome Bluetooth proxy's controller does it itself, on any host.\n\nCheck that the panel is in range of whichever of these you have, and that nothing else is holding a connection to it. Note that a bond lives on the adapter it was made with: if the adapter or proxy that paired the panel is no longer there, the panel has to be paired again.\n\nHome Assistant chooses which adapter or proxy to connect through by itself; this integration does not pin the panel to one."
     }
   },
   "entity": {
