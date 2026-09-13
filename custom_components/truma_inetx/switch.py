@@ -33,10 +33,13 @@ async def async_setup_entry(
     # the evidence the hardware exists.
     #
     # The same holds, and matters more, for the two water-priority switches
-    # below: neither has been seen on a vehicle yet -- they come from the
-    # reverse-engineered schema, not from a measurement -- so gating them is
-    # what keeps a heater that never mentions them from being given a control
-    # that writes into nothing.
+    # below: they come from the reverse-engineered schema rather than from a
+    # measurement, and both vehicles whose parameter dumps have been read --
+    # the gas Combi in #22 and this author's diesel van -- have
+    # FasterHeatingMode and no BoostMode at all. So they are not even a pair
+    # that arrives together. Gating them separately is what keeps a heater
+    # that never mentions one from being given a control that writes into
+    # nothing.
     async_add_when_reported(
         coordinator,
         async_add_entities,
@@ -119,9 +122,13 @@ class TrumaWaterBoostSwitch(TrumaEntity, SwitchEntity):
     the heater does to the air heating meanwhile is the panel's business, and
     is not reported here.
 
-    Untested against hardware -- no dump showing the parameter exists yet.
-    Which is exactly why it waits to be reported before it is created: on a
-    heater that never mentions it, this switch never appears.
+    Untested against hardware, and still unseen on any: neither of the two
+    vehicles read so far -- the gas Combi in #22, a diesel van -- has
+    BoostMode in its parameter dump, and on both of them the panel's boost is
+    the FasterHeatingMode below. Kept because the schema lists it and a
+    vehicle that has it may still turn up, and exactly why it waits to be
+    reported before it is created: on a heater that never mentions it, this
+    switch never appears.
     """
 
     _attr_translation_key = "water_boost"
@@ -157,6 +164,14 @@ class TrumaFasterWaterHeatingSwitch(TrumaEntity, SwitchEntity):
     this one or ``BoostMode`` is unmeasured; both are offered so that the
     vehicle can answer it, and each appears only where its parameter is
     reported.
+
+    This is the half that has been seen, on both vehicles read so far: the
+    gas Combi in #22 reports it as 0 with the duration at 0 beside it, and a
+    diesel van the same, neither of them reporting ``BoostMode`` at all. And
+    the panel on one of those vehicles does offer a boost -- so on a vehicle
+    shaped like these two, this parameter *is* the panel's boost, whatever the
+    schema's naming suggests. The write itself is still unwatched: no dump has
+    been taken with the button on.
     """
 
     _attr_translation_key = "faster_water_heating"

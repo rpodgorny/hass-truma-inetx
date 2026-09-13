@@ -96,6 +96,7 @@ and clears the issue on the next successful connect.
 | Supply voltage | `sensor` | V |
 | Water heating | `select` | Off / Eco (40 °C) / Comfort (60 °C) / Hot (70 °C) — the steps the panel offers |
 | Electric heating | `select` | Supplemental electric element: off / 900 W / 1800 W — the steps the panel offers. Only where the vehicle has the element |
+| Heating mode | `select` | `AirHeating.Mode`: Fast / Comfort — how hard the heater works on the air, the panel's own "fast" setting. Only where the heater reports it |
 | Diesel burner | `switch` | Only where the heater has a diesel burner |
 | Gas | `binary_sensor` | Whether the heater is drawing on gas. Read-only — the heater moves this itself. Only where it burns gas |
 | Fan level | `number` | 0–10 |
@@ -111,7 +112,7 @@ and clears the issue on the next successful connect.
 | Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
 | Flame status | `sensor` | Diagnostic, disabled by default — the raw `System.FlameStatus` value |
 
-The climate entity's mode list and the two selects' options are not fixed. The
+The climate entity's mode list and the three selects' options are not fixed. The
 panel enumerates each parameter for the vehicle it is installed in — a van with no air conditioner
 does not list a cooling mode, and a heater without the electric element does
 not list 1800 W — so the entities offer what the panel offers, falling back to
@@ -135,14 +136,27 @@ would fight it and flap, so the reading reflects the heater's choice rather
 than pretending to make it.
 
 The two water-priority switches are the panel's way of putting the burner's
-whole output into the boiler. Which of them the panel's own button writes is
-not known: the reverse-engineered schema behind this integration lists
-`WaterHeating.BoostMode` and `WaterHeating.FasterHeatingMode` as separate
-parameters, both 0/1, the second with a duration in seconds beside it, and no
-dump from a vehicle has shown either yet. Both are therefore offered and each
-waits for its own parameter, so a heater that reports neither is given neither.
-If yours shows one of them, a diagnostics download naming it would settle the
-question — see issue #7.
+whole output into the boiler. The reverse-engineered schema behind this
+integration lists `WaterHeating.BoostMode` and `WaterHeating.FasterHeatingMode`
+as separate parameters, both 0/1, the second with a duration in seconds beside
+it. Which of them the panel's own button writes was the open question in #7,
+and on the two vehicles read so far it cannot be `BoostMode`: a gas Combi (#22)
+and a diesel van both carry `FasterHeatingMode` and `FasterHeatingModeTime`,
+neither has a `BoostMode` at all, and the panel that offers a boost is sitting
+on one of them. So the switch labelled "Faster water heating" is the panel's
+boost. `BoostMode` stays in the code because the schema lists it and some other
+vehicle may yet have it; both are offered and each waits for its own parameter,
+so a heater that reports neither is given neither. What is still unpinned is the
+*write*: no download has been taken with the button on, so nothing here has
+watched the value move.
+
+The "Heating mode" select is the same kind of finding, gone the other way. The
+schema listed `AirHeating.Mode` as `Fast=0, Comfort=1` with no vehicle behind
+it; the two dumps in #22 toggle the panel's "fast" setting and move that
+parameter, and nothing else — water heating was off in both, so this is the air
+heating's own mode rather than the water taking priority. A second panel offers
+the same two choices under the same two names, and reads back `Comfort` on a
+running van.
 
 The flame status sensor exists because nothing published says what
 `System.FlameStatus` means. It takes 0, 1 and 2; the binary sensor above has to

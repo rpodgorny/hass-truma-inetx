@@ -1,4 +1,4 @@
-"""Select platform for Truma iNet X water and electric heating modes."""
+"""Select platform for Truma iNet X water, electric and air heating modes."""
 
 from __future__ import annotations
 
@@ -26,6 +26,23 @@ WATER_OPTIONS = {WATER_OFF: None} | {
 
 _ELECTRIC_VALUE_TO_LABEL = {0: "off", 1: "900 W", 2: "1800 W"}
 ELECTRIC_OPTIONS = {label: value for value, label in _ELECTRIC_VALUE_TO_LABEL.items()}
+
+# AirHeating.Mode: how hard the heater works on the air, not whether it does.
+# Fast puts the burner's output into the room and accepts the fan noise;
+# Comfort is the quiet one. Whether the room is heated at all stays with the
+# climate entity (RoomClimate.Mode), which is why there is no "off" here.
+#
+# Measured on a gas Combi in #22: the panel's own "fast" button writes 0 and
+# normal heating writes 1, with nothing else in the whole parameter dump
+# moving -- water heating was off in both captures, so this is the air
+# heating's own mode and not the water taking priority. A second panel offers
+# the same two choices under the same two names. That confirms against
+# hardware what the reverse-engineered schema in daaaaan/truma-inetx-ble
+# already listed as ``Fast=0, Comfort=1``, and what ``FanMode`` in
+# ``truma/state.py`` has named since the initial import without a vehicle
+# behind it.
+_AIR_MODE_TO_LABEL = {0: "Fast", 1: "Comfort"}
+AIR_MODE_OPTIONS = {label: value for value, label in _AIR_MODE_TO_LABEL.items()}
 
 
 def _offered(state, topic: str, param: str, labels: dict) -> list:
@@ -62,10 +79,22 @@ async def async_setup_entry(
     # (measured on a Combi D van, whose select was offering off / 900 W /
     # 1800 W against hardware that cannot do any of them). The parameter
     # arriving is the evidence the element exists.
+    #
+    # The air-heating mode is gated for a weaker reason than the electric
+    # element: two panels are known to offer the Fast / Comfort choice, so it
+    # may well be on every Combi. But only one of them has been read in a
+    # parameter dump (#22), and a select that is permanently unknown on a
+    # heater which does not offer the choice reads exactly like a broken
+    # integration. Waiting for the parameter costs nothing on a vehicle that
+    # does report it -- it arrives within seconds of connecting, along with
+    # everything else discovery asks for.
     async_add_when_reported(
         coordinator,
         async_add_entities,
-        {"EnergySrc.ElectricLevel": lambda: TrumaElectricLevelSelect(coordinator)},
+        {
+            "EnergySrc.ElectricLevel": lambda: TrumaElectricLevelSelect(coordinator),
+            "AirHeating.Mode": lambda: TrumaAirHeatingModeSelect(coordinator),
+        },
     )
 
 
@@ -135,4 +164,43 @@ class TrumaElectricLevelSelect(TrumaEntity, SelectEntity):
         """Set the electric heating level."""
         await self.coordinator.async_write(
             "EnergySrc", "ElectricLevel", ELECTRIC_OPTIONS[option]
+        )
+
+
+class TrumaAirHeatingModeSelect(TrumaEntity, SelectEntity):
+    """Air heating mode (Fast / Comfort).
+
+    The panel's "fast" setting, which the user of #22 uses on every trip and
+    which nothing here exposed: the value was decoded, named and validated,
+    and then only ever printed in a diagnostics download.
+
+    No "off" option, unlike the water select above. Water heating is a thing
+    the panel switches on and off in its own right; air heating is switched by
+    the room climate mode, which is the climate entity's business. Folding an
+    off into here would give two controls over one thing, and they would
+    disagree.
+    """
+
+    _attr_translation_key = "air_mode"
+
+    def __init__(self, coordinator: TrumaCoordinator) -> None:
+        """Initialize."""
+        super().__init__(coordinator, "air_mode")
+
+    @property
+    def options(self) -> list[str]:
+        """The modes this panel offers, in value order."""
+        return _offered(self.data, "AirHeating", "Mode", _AIR_MODE_TO_LABEL)
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the current air heating mode."""
+        if self.data.air_mode is None:
+            return None
+        return _AIR_MODE_TO_LABEL.get(self.data.air_mode)
+
+    async def async_select_option(self, option: str) -> None:
+        """Set the air heating mode."""
+        await self.coordinator.async_write(
+            "AirHeating", "Mode", AIR_MODE_OPTIONS[option]
         )

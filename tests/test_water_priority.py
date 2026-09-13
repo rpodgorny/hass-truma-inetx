@@ -10,7 +10,10 @@ into the boiler, and the reverse-engineered schema in
 `daaaaan/truma-inetx-ble` shows two parameters that could be it --
 ``WaterHeating.BoostMode`` and ``WaterHeating.FasterHeatingMode``, both
 documented as 0/1 and nothing else, with ``FasterHeatingModeTime`` (seconds)
-beside the second. Neither has been seen in a dump from a vehicle yet.
+beside the second. The two vehicles read so far -- the gas Combi in #22 and a
+diesel van -- both have ``FasterHeatingMode`` and ``FasterHeatingModeTime`` and
+no ``BoostMode`` at all, so they are not even a pair that arrives together, and
+on a vehicle shaped like those the panel's boost can only be the timed one.
 
 That is the whole reason for these checks. Both are offered so the vehicle can
 say which one it has, and neither may be created before its own parameter has
@@ -205,7 +208,7 @@ def test_the_three_parameters_reach_the_fields_their_entities_read() -> None:
 
 
 def test_neither_switch_exists_until_its_own_parameter_arrives() -> None:
-    """Both are unmeasured, so a heater that never mentions one gets nothing."""
+    """A heater that never mentions one gets nothing for it."""
     coordinator = _FakeCoordinator()
     made = _setup(SWITCH, coordinator)
     assert made == [], "a control was created for an unmeasured parameter"
@@ -229,6 +232,25 @@ def test_neither_switch_exists_until_its_own_parameter_arrives() -> None:
     coordinator.report("WaterHeating", "BoostMode", 1)
     assert len(made) == 2, made
     assert made[0].is_on is True
+
+
+def test_the_combi_in_22_gets_the_faster_switch_and_no_boost_switch() -> None:
+    """Both vehicles read so far, as their dumps have it.
+
+    ``WaterHeating.FasterHeatingMode`` at 0 with ``FasterHeatingModeTime`` at
+    0 beside it, and no ``BoostMode`` anywhere in the parameter dump. This is
+    the case the per-parameter gate exists for: pairing them, or creating both
+    once one arrives, would put a boost switch on a heater whose panel has
+    never mentioned the parameter it writes.
+    """
+    coordinator = _FakeCoordinator()
+    made = _setup(SWITCH, coordinator)
+
+    coordinator.report("WaterHeating", "FasterHeatingMode", 0)
+    coordinator.report("WaterHeating", "FasterHeatingModeTime", 0)
+
+    assert _names(made) == ["TrumaFasterWaterHeatingSwitch"], made
+    assert made[0].is_on is False
 
 
 def test_each_switch_writes_its_own_parameter_to_the_heater() -> None:

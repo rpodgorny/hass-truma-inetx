@@ -29,9 +29,11 @@ What it pins:
 4. a write is validated against the panel's enum where there is one, so a mode
    this heater really has stops being rejected by our own table,
 5. off is always offered, whatever the panel says,
-6. and the electric select is not created at all until the vehicle reports an
+6. the electric select is not created at all until the vehicle reports an
    electric element -- a Combi D has none, and its panel never mentions the
-   parameter.
+   parameter,
+7. and the same for the air-heating mode select (#22): Fast / Comfort, from
+   ``AirHeating.Mode``, on the vehicles that report it.
 
 Run: ``python3 tests/test_panel_declared_options.py``
 """
@@ -334,6 +336,70 @@ def test_water_heating_is_not_gated_on_anything() -> None:
     """Every vehicle this runs on has water heating; it is the heater itself."""
     made = _setup_selects(_FakeCoordinator(STATE.TrumaState()))
     assert len(made) == 1
+
+
+def test_the_air_heating_mode_select_waits_for_the_parameter() -> None:
+    """#22: the panel's "fast" setting, which two panels are known to offer.
+
+    Probably every Combi has it, but only one has been read in a parameter
+    dump, so the select waits for ``AirHeating.Mode`` the way the electric one
+    waits for its element -- rather than sitting permanently unknown on a
+    heater that never offers the choice.
+    """
+    coordinator = _FakeCoordinator(STATE.TrumaState())
+    made = _setup_selects(coordinator)
+
+    assert [type(entity).__name__ for entity in made] == ["TrumaWaterModeSelect"], made
+
+    coordinator.report("AirHeating", "Mode", 1)
+    assert [type(entity).__name__ for entity in made] == [
+        "TrumaWaterModeSelect",
+        "TrumaAirHeatingModeSelect",
+    ], made
+
+    # ...and only once, however many frames follow.
+    coordinator.report("AirHeating", "Mode", 0)
+    assert len(made) == 2, made
+
+
+def test_the_air_mode_reads_back_what_the_heater_reports() -> None:
+    """Measured in #22: fast writes 0, normal heating writes 1."""
+    state = STATE.TrumaState()
+    holder = _Holder(state)
+
+    assert SELECT.TrumaAirHeatingModeSelect.current_option.fget(holder) is None
+
+    state.update("AirHeating", "Mode", 0)
+    assert SELECT.TrumaAirHeatingModeSelect.current_option.fget(holder) == "Fast"
+    state.update("AirHeating", "Mode", 1)
+    assert SELECT.TrumaAirHeatingModeSelect.current_option.fget(holder) == "Comfort"
+
+
+def test_the_air_mode_options_come_from_the_panel_but_the_words_do_not() -> None:
+    """Same rule as the water steps: values from the panel, labels from here.
+
+    The names in the enum below are the panel's, in the panel's language; the
+    strings an automation matches on have to be ours.
+    """
+    state = STATE.TrumaState()
+    options = SELECT.TrumaAirHeatingModeSelect.options.fget(_Holder(state))
+    assert options == ["Fast", "Comfort"], options
+
+    _described(state, "AirHeating", "Mode", {0: "Schnell", 1: "Komfort"})
+    options = SELECT.TrumaAirHeatingModeSelect.options.fget(_Holder(state))
+    assert options == ["Fast", "Comfort"], options
+
+    # A heater whose panel offers only the one mode is offered only the one.
+    state = STATE.TrumaState()
+    state.learn_param("AirHeating", "Mode", {
+        "type": 2,
+        "enum": [
+            {"n": "Fast", "a": False, "v": 0},
+            {"n": "Comfort", "a": True, "v": 1},
+        ],
+    })
+    options = SELECT.TrumaAirHeatingModeSelect.options.fget(_Holder(state))
+    assert options == ["Comfort"], options
 
 
 def _main() -> None:

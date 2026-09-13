@@ -139,9 +139,15 @@ class TrumaState:
     # The panel's two ways of putting the water first, from the
     # reverse-engineered schema in daaaaan/truma-inetx-ble: both documented as
     # 0/1 and nothing more, with the timed one carrying a duration in seconds
-    # beside it. Which of the two the panel's "boost" writes is unmeasured, so
-    # both are carried and each entity waits for its own parameter -- a vehicle
-    # that reports neither is given neither.
+    # beside it. Both are carried and each entity waits for its own parameter,
+    # so a vehicle that reports neither is given neither.
+    #
+    # They are not both present, either: the gas Combi in #22 and a diesel van
+    # both report FasterHeatingMode and FasterHeatingModeTime, and neither has
+    # a BoostMode in its parameter dump at all. Which is the only sighting of
+    # either on real hardware so far, the reason the gate is per-parameter
+    # rather than one flag for the pair, and the answer to which of the two
+    # the panel's boost is on a vehicle shaped like those: the timed one.
     water_boost: Optional[int] = None
     water_faster_heating: Optional[int] = None
     water_faster_heating_time: Optional[int] = None  # seconds

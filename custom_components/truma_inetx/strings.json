@@ -59,6 +59,9 @@
       }
     },
     "select": {
+      "air_mode": {
+        "name": "Heating mode"
+      },
       "electric_level": {
         "name": "Electric heating"
       },
