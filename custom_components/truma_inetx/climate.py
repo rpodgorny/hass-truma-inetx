@@ -14,9 +14,9 @@ from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .coordinator import TrumaConfigEntry
-from .entity import TrumaEntity
-from .truma.state import TrumaState
+from .bus import Bus
+from .coordinator import TrumaConfigEntry, TrumaCoordinator
+from .entity import TrumaEntity, async_add_per_device
 
 # Entities are coordinator-driven and have no update() method, so Home
 # Assistant would create no semaphore anyway; stated explicitly.
@@ -52,12 +52,13 @@ _HVAC_TO_MODE = {
 # before the panel was asked.
 _DEFAULT_HVAC_MODES = [HVACMode.OFF, HVACMode.HEAT, HVACMode.FAN_ONLY]
 
-# AirCirculation.FanLevel is 0-10. Exposing it as the climate entity's fan mode
-# puts it in the same card as the mode and setpoint, which is where you want it
-# in FAN_ONLY. The dedicated "Fan level" number entity still exists for
-# automations. Both lists are derived from one dict so they cannot drift.
-_LEVEL_TO_FAN_MODE = {0: FAN_OFF} | {level: str(level) for level in range(1, 11)}
-_FAN_MODE_TO_LEVEL = {v: k for k, v in _LEVEL_TO_FAN_MODE.items()}
+# The fan level exposed as the climate entity's fan mode, which puts it in the
+# same card as the mode and setpoint -- where you want it in FAN_ONLY. The
+# dedicated "Fan level" number entity still exists for automations. The range
+# comes from the appliance itself (see fan_modes); 0-10 is only the fallback
+# for one that describes none, and used to be handed to every device that
+# published the parameter, roof air conditioners included.
+_FALLBACK_FAN_LEVELS = (0, 10)
 
 
 async def async_setup_entry(
@@ -65,23 +66,44 @@ async def async_setup_entry(
     entry: TrumaConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the Truma climate entity."""
-    async_add_entities([TrumaClimate(entry.runtime_data)])
+    """Set up a climate entity per appliance that heats the air.
+
+    ``AirHeating.Temp`` is the defining parameter: an appliance that reports
+    the air temperature it is working against is the one this entity controls.
+    On every vehicle seen so far that is the Combi, but naming the heater's
+    address here would be the same mistake that sent cooling commands to it
+    (#10) -- addresses are renumbered when a device is re-paired.
+    """
+    coordinator = entry.runtime_data
+    async_add_per_device(
+        coordinator,
+        async_add_entities,
+        "AirHeating",
+        "Temp",
+        lambda addr: TrumaClimate(coordinator, addr),
+    )
 
 
 class TrumaClimate(TrumaEntity, ClimateEntity):
-    """Room heating as an HA climate entity."""
+    """Room heating as an HA climate entity.
+
+    The only entity here that is not one bus parameter: a mode, a setpoint, a
+    reading and a fan speed at once, and they do not all come from the same
+    device. The setpoint, the reading and the fan are this appliance's own.
+    The mode is ``RoomClimate``, which belongs to the panel -- it is the panel
+    relaying the room's mode to whichever appliance serves the room, so the
+    heater does not publish it and a write to it goes back to the panel.
+    """
 
     _attr_name = None  # primary feature → uses the device name
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
-    _attr_fan_modes = list(_LEVEL_TO_FAN_MODE.values())
     _attr_min_temp = 5
     _attr_max_temp = 30
     _attr_target_temperature_step = 1
 
-    def __init__(self, coordinator) -> None:
-        """Initialize the climate entity."""
-        super().__init__(coordinator, "room_climate")
+    def __init__(self, coordinator: TrumaCoordinator, addr: int) -> None:
+        """Initialize the climate entity for one appliance."""
+        super().__init__(coordinator, addr, "room_climate")
 
     @property
     def supported_features(self) -> ClimateEntityFeature:
@@ -119,7 +141,8 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
         control that cannot be switched off is worse than one that shows a mode
         the panel did not mention.
         """
-        values = self.data.allowed_values("RoomClimate", "Mode")
+        panel = self.bus.sole_publisher("RoomClimate", "Mode")
+        values = None if panel is None else panel.allowed_values("RoomClimate", "Mode")
         if values is None:
             return _DEFAULT_HVAC_MODES
         modes: list[HVACMode] = []
@@ -134,43 +157,67 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
         return modes
 
     @property
+    def fan_modes(self) -> list[str]:
+        """The circulation levels this appliance describes, as fan modes."""
+        low, high = (
+            self.device.bounds("AirCirculation", "FanLevel") or _FALLBACK_FAN_LEVELS
+        )
+        return [self._fan_label(level) for level in range(int(low), int(high) + 1)]
+
+    @staticmethod
+    def _fan_label(level: int) -> str:
+        """The fan mode string for a circulation level."""
+        return FAN_OFF if level == 0 else str(level)
+
+    @property
     def current_temperature(self) -> float | None:
-        """Current room temperature (from the air-heating sensor)."""
-        return TrumaState.wire_to_celsius(self.data.air_current_temp)
+        """Current room temperature, as this appliance measures it."""
+        return Bus.wire_to_celsius(self.device.get("AirHeating", "Temp"))
 
     @property
     def target_temperature(self) -> float | None:
         """Target room temperature."""
-        # Live setpoint lives on the heater (AirHeating), not the panel mirror
-        # (RoomClimate.TgtTemp only echoes our own writes). Matches current_temp.
-        return TrumaState.wire_to_celsius(self.data.air_target_temp)
+        # The live setpoint lives on the appliance (AirHeating), not on the
+        # panel mirror -- RoomClimate.TgtTemp only echoes our own writes. Same
+        # source as current_temperature, so the two cannot disagree.
+        return Bus.wire_to_celsius(self.device.get("AirHeating", "TgtTemp"))
 
     @property
     def hvac_mode(self) -> HVACMode | None:
-        """Current heating mode."""
-        if self.data.room_mode is None:
+        """Current heating mode, as the panel relays it."""
+        mode = self.bus.relayed("RoomClimate", "Mode")
+        if not isinstance(mode, int):
             return None
-        return _MODE_TO_HVAC.get(self.data.room_mode, HVACMode.OFF)
+        return _MODE_TO_HVAC.get(mode, HVACMode.OFF)
 
     @property
     def fan_mode(self) -> str | None:
-        """Current circulation fan level, as a fan mode."""
-        if self.data.fan_level is None:
+        """This appliance's own circulation level, as a fan mode.
+
+        Its own, not the bus's: a Combi and a roof air conditioner both
+        publish AirCirculation.FanLevel, and reading them flat showed the
+        Combi running at 4 as a 2 because the roof unit spoke last (#9).
+        """
+        level = self.device.get("AirCirculation", "FanLevel")
+        if not isinstance(level, int):
             return None
-        # An unexpected level is reported as unknown rather than a value the
-        # frontend would reject for not being in fan_modes.
-        return _LEVEL_TO_FAN_MODE.get(self.data.fan_level)
+        label = self._fan_label(level)
+        # A level outside what the appliance described is reported as unknown
+        # rather than as a value the frontend would reject for not being in
+        # fan_modes.
+        return label if label in self.fan_modes else None
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        """Set the circulation fan level."""
+        """Set this appliance's circulation level."""
+        level = 0 if fan_mode == FAN_OFF else int(fan_mode)
         await self.coordinator.async_write(
-            "AirCirculation", "FanLevel", _FAN_MODE_TO_LEVEL[fan_mode]
+            self._addr, "AirCirculation", "FanLevel", level
         )
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Set the heating mode."""
+        """Set the heating mode (relayed by the panel)."""
         await self.coordinator.async_write(
-            "RoomClimate", "Mode", _HVAC_TO_MODE[hvac_mode]
+            self._addr, "RoomClimate", "Mode", _HVAC_TO_MODE[hvac_mode]
         )
 
     async def async_turn_on(self) -> None:
@@ -182,8 +229,8 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
         await self.async_set_hvac_mode(HVACMode.OFF)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set the target room temperature."""
+        """Set the target room temperature on this appliance."""
         temperature = kwargs[ATTR_TEMPERATURE]
         await self.coordinator.async_write(
-            "AirHeating", "TgtTemp", int(round(temperature * 10))
+            self._addr, "AirHeating", "TgtTemp", int(round(temperature * 10))
         )

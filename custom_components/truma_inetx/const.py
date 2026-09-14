@@ -12,7 +12,7 @@ LOCAL_NAME_PREFIX = "Truma iNetX"
 
 # Manufacturer shown in the HA device registry.
 MANUFACTURER = "Truma"
-MODEL = "iNet X (Combi)"
+MODEL = "iNet X Panel"
 
 # Repair-issue id raised when the panel is advertising and nothing can connect
 # to it. Without it the failure is silent: the resolver only logs at debug

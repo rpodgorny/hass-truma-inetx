@@ -1,15 +1,17 @@
-"""Switch platform for the Truma iNet X diesel burner, water pump and water boost."""
+"""Switch platform: every bus parameter the table presents as a switch."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
+from homeassistant.components.switch import SwitchEntity
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
-from .entity import TrumaEntity, async_add_when_reported
+from .entity import TrumaParamEntity, async_add_rows
+from .profiles import Row
 
 # Entities are coordinator-driven and have no update() method, so Home
 # Assistant would create no semaphore anyway; stated explicitly.
@@ -21,177 +23,52 @@ async def async_setup_entry(
     entry: TrumaConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the Truma switches."""
+    """Set up the Truma switches.
+
+    None of them is universal. A gas/electric Combi has no diesel burner and
+    its panel never mentions EnergySrc.DieselLevel (#16); only a vehicle with
+    a water system has a pump; and the two water-priority modes are not even a
+    pair that arrives together. Each appears on the device that publishes its
+    parameter and nowhere else -- see ``async_add_rows``.
+    """
     coordinator = entry.runtime_data
-    # Neither switch is universal.
-    #
-    # A gas/electric Combi has no diesel burner, and its panel never mentions
-    # EnergySrc.DieselLevel (#16) -- so the diesel switch was a control over
-    # nothing there, exactly as the electric select was on a Combi D before it
-    # started waiting for its own parameter. And only vehicles with a water
-    # system have a pump to switch. In both cases the parameter arriving is
-    # the evidence the hardware exists.
-    #
-    # The same holds, and matters more, for the two water-priority switches
-    # below: they come from the reverse-engineered schema rather than from a
-    # measurement, and both vehicles whose parameter dumps have been read --
-    # the gas Combi in #22 and this author's diesel van -- have
-    # FasterHeatingMode and no BoostMode at all. So they are not even a pair
-    # that arrives together. Gating them separately is what keeps a heater
-    # that never mentions one from being given a control that writes into
-    # nothing.
-    async_add_when_reported(
+    async_add_rows(
         coordinator,
         async_add_entities,
-        {
-            "EnergySrc.DieselLevel": lambda: TrumaDieselSwitch(coordinator),
-            "Switches.FreshWaterPump": lambda: TrumaWaterPumpSwitch(coordinator),
-            "WaterHeating.BoostMode": lambda: TrumaWaterBoostSwitch(coordinator),
-            "WaterHeating.FasterHeatingMode": (
-                lambda: TrumaFasterWaterHeatingSwitch(coordinator)
-            ),
-        },
+        Platform.SWITCH,
+        lambda addr, topic, param, row: TrumaSwitch(
+            coordinator, addr, topic, param, row
+        ),
     )
 
 
-class TrumaDieselSwitch(TrumaEntity, SwitchEntity):
-    """Diesel burner on/off."""
+class TrumaSwitch(TrumaParamEntity, SwitchEntity):
+    """One bus parameter, written as 0 or 1."""
 
-    _attr_translation_key = "diesel"
-    _attr_device_class = SwitchDeviceClass.SWITCH
-
-    def __init__(self, coordinator: TrumaCoordinator) -> None:
-        """Initialize."""
-        super().__init__(coordinator, "diesel")
-
-    @property
-    def is_on(self) -> bool | None:
-        """Whether the diesel burner is enabled."""
-        if self.data.diesel_level is None:
-            return None
-        return bool(self.data.diesel_level)
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Enable the diesel burner."""
-        await self.coordinator.async_write("EnergySrc", "DieselLevel", 1)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Disable the diesel burner."""
-        await self.coordinator.async_write("EnergySrc", "DieselLevel", 0)
-
-
-class TrumaWaterPumpSwitch(TrumaEntity, SwitchEntity):
-    """Fresh-water pump on/off.
-
-    The pump belongs to the vehicle's water hardware, not to the heater, so
-    the write is addressed to whichever device reported ``Switches`` rather
-    than to a device named here: that address differs per vehicle and changes
-    when the device is re-paired. See ``TrumaState.get_command_dest``.
-    """
-
-    _attr_translation_key = "water_pump"
-    _attr_device_class = SwitchDeviceClass.SWITCH
-
-    def __init__(self, coordinator: TrumaCoordinator) -> None:
-        """Initialize."""
-        super().__init__(coordinator, "water_pump")
+    def __init__(
+        self,
+        coordinator: TrumaCoordinator,
+        addr: int,
+        topic: str,
+        param: str,
+        row: Row,
+    ) -> None:
+        """Initialize from the row."""
+        super().__init__(coordinator, addr, topic, param, row)
+        self._attr_device_class = row.device_class
 
     @property
     def is_on(self) -> bool | None:
-        """Whether the fresh-water pump is running."""
-        if self.data.water_pump is None:
+        """Whether the parameter is set."""
+        value = self.value
+        if not isinstance(value, (int, float)):
             return None
-        return bool(self.data.water_pump)
+        return bool(value)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Start the pump."""
-        await self.coordinator.async_write("Switches", "FreshWaterPump", 1)
+        """Set the parameter."""
+        await self.async_write(self._param, 1)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Stop the pump."""
-        await self.coordinator.async_write("Switches", "FreshWaterPump", 0)
-
-
-class TrumaWaterBoostSwitch(TrumaEntity, SwitchEntity):
-    """Water boost on/off.
-
-    ``WaterHeating.BoostMode``, which the panel offers as the mode that puts
-    the burner's whole output into the boiler and stops heating the air while
-    it does. Documented in the reverse-engineered schema in
-    `daaaaan/truma-inetx-ble` as 0 = off, 1 = on, and nothing beyond that: what
-    the heater does to the air heating meanwhile is the panel's business, and
-    is not reported here.
-
-    Untested against hardware, and still unseen on any: neither of the two
-    vehicles read so far -- the gas Combi in #22, a diesel van -- has
-    BoostMode in its parameter dump, and on both of them the panel's boost is
-    the FasterHeatingMode below. Kept because the schema lists it and a
-    vehicle that has it may still turn up, and exactly why it waits to be
-    reported before it is created: on a heater that never mentions it, this
-    switch never appears.
-    """
-
-    _attr_translation_key = "water_boost"
-    _attr_device_class = SwitchDeviceClass.SWITCH
-
-    def __init__(self, coordinator: TrumaCoordinator) -> None:
-        """Initialize."""
-        super().__init__(coordinator, "water_boost")
-
-    @property
-    def is_on(self) -> bool | None:
-        """Whether water boost is on."""
-        if self.data.water_boost is None:
-            return None
-        return bool(self.data.water_boost)
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn water boost on."""
-        await self.coordinator.async_write("WaterHeating", "BoostMode", 1)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn water boost off."""
-        await self.coordinator.async_write("WaterHeating", "BoostMode", 0)
-
-
-class TrumaFasterWaterHeatingSwitch(TrumaEntity, SwitchEntity):
-    """Faster water heating on/off.
-
-    ``WaterHeating.FasterHeatingMode``, the schema's second way of favouring
-    the water, distinguished from boost above by the
-    ``FasterHeatingModeTime`` that sits beside it -- a duration in seconds,
-    exposed as its own sensor. Whether the panel's own "boost" button writes
-    this one or ``BoostMode`` is unmeasured; both are offered so that the
-    vehicle can answer it, and each appears only where its parameter is
-    reported.
-
-    This is the half that has been seen, on both vehicles read so far: the
-    gas Combi in #22 reports it as 0 with the duration at 0 beside it, and a
-    diesel van the same, neither of them reporting ``BoostMode`` at all. And
-    the panel on one of those vehicles does offer a boost -- so on a vehicle
-    shaped like these two, this parameter *is* the panel's boost, whatever the
-    schema's naming suggests. The write itself is still unwatched: no dump has
-    been taken with the button on.
-    """
-
-    _attr_translation_key = "faster_water_heating"
-    _attr_device_class = SwitchDeviceClass.SWITCH
-
-    def __init__(self, coordinator: TrumaCoordinator) -> None:
-        """Initialize."""
-        super().__init__(coordinator, "faster_water_heating")
-
-    @property
-    def is_on(self) -> bool | None:
-        """Whether faster water heating is on."""
-        if self.data.water_faster_heating is None:
-            return None
-        return bool(self.data.water_faster_heating)
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn faster water heating on."""
-        await self.coordinator.async_write("WaterHeating", "FasterHeatingMode", 1)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn faster water heating off."""
-        await self.coordinator.async_write("WaterHeating", "FasterHeatingMode", 0)
+        """Clear the parameter."""
+        await self.async_write(self._param, 0)

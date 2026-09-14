@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Offline checks for offering what the panel says this vehicle has.
+"""Offline checks for offering what the device says this vehicle has.
 
-No hardware, no Home Assistant install: HA is stubbed and the real
-``truma/state.py``, ``climate.py`` and ``select.py`` are loaded against it. The
-entity properties are called unbound, so nothing has to be constructed.
+No hardware, no Home Assistant install: HA is stubbed and the real ``bus.py``,
+``profiles.py``, ``climate.py`` and ``select.py`` are loaded against it, and
+the entities are built by the platforms' own setup.
 
 Why this exists. A list of modes written into the source is wrong in both
 directions at once. Measured on two vehicles:
@@ -16,183 +16,139 @@ directions at once. Measured on two vehicles:
 
 Offering a fixed ``[0, 3, 5]`` locks that vehicle out of its own air
 conditioner; offering everything puts cooling on a van that cannot cool. So the
-panel is asked. The same goes for the water-heating steps (#12).
+device is asked. The same goes for the water-heating steps (#12).
+
+And it is asked *per device*, which is the other half. A description is the
+property of whichever device gave it: a Combi's fan and a roof air
+conditioner's need not run to the same maximum, so a control built from a
+merged description offers values its own hardware refuses.
 
 What it pins:
 
-1. the values the panel enumerates are what gets offered, and a panel that
+1. the values the owning device enumerates are what gets offered, and one that
    describes nothing still gets the list this integration always had,
-2. a value the panel marks unavailable for this vehicle is not offered,
+2. a value marked unavailable for this vehicle is not offered,
 3. the panel's *names* never reach a user-facing string -- they arrive in the
    panel's display language (``40 / 60 / 70`` here, Eco / Comfort / Hot on the
    Combi 6 E), so only the values cross over,
-4. a write is validated against the panel's enum where there is one, so a mode
-   this heater really has stops being rejected by our own table,
-5. off is always offered, whatever the panel says,
-6. the electric select is not created at all until the vehicle reports an
-   electric element -- a Combi D has none, and its panel never mentions the
-   parameter,
-7. and the same for the air-heating mode select (#22): Fast / Comfort, from
-   ``AirHeating.Mode``, on the vehicles that report it.
+4. a write is validated against that device's enum where there is one, so a
+   mode this heater really has stops being rejected by our own table,
+5. off is always offered on the climate entity, whatever the panel says,
+6. each select is created only on a device that reports its parameter -- a
+   Combi D has no electric element and its panel never mentions the parameter,
+7. and a slider's range comes from its own device, not from a constant that
+   happens to be a Combi's.
 
 Run: ``python3 tests/test_panel_declared_options.py``
 """
 
 from __future__ import annotations
 
-import enum
-import importlib.util
+import asyncio
 import sys
-import types
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "custom_components" / "truma_inetx"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import stubs  # noqa: E402
 
+PANEL = 0x0101
+HEATER = 0x0201
+ROOF_AC = 0x0406
 
-def _mod(name: str, **attrs):
-    module = types.ModuleType(name)
-    module.__dict__.update(attrs)
-    sys.modules[name] = module
-    return module
-
-
-class _HVACMode(enum.StrEnum):
-    OFF = "off"
-    HEAT = "heat"
-    COOL = "cool"
-    AUTO = "auto"
-    DRY = "dry"
-    FAN_ONLY = "fan_only"
-
-
-class _Feature(enum.IntFlag):
-    TARGET_TEMPERATURE = 1
-    FAN_MODE = 8
-    TURN_OFF = 128
-    TURN_ON = 256
-
-
-def _load():
-    """Import the real climate/select platforms with HA and BLE stubbed."""
-    _mod("homeassistant", __path__=[])
-    _mod("homeassistant.core", HomeAssistant=object, callback=lambda f: f)
-    _mod("homeassistant.config_entries", ConfigEntry=dict)
-    _mod("homeassistant.exceptions", HomeAssistantError=RuntimeError)
-    _mod("homeassistant.const", ATTR_TEMPERATURE="temperature",
-         UnitOfTemperature=types.SimpleNamespace(CELSIUS="°C"),
-         CONF_ADDRESS="address", CONF_NAME="name")
-    _mod("homeassistant.helpers", __path__=[], issue_registry=types.SimpleNamespace(
-        async_create_issue=lambda *a, **kw: None,
-        async_delete_issue=lambda *a, **kw: None,
-        IssueSeverity=types.SimpleNamespace(WARNING="warning"),
-    ))
-    _mod("homeassistant.helpers.storage", Store=object)
-    _mod("homeassistant.helpers.device_registry", DeviceInfo=dict)
-    _mod("homeassistant.helpers.entity", Entity=object)
-    _mod("homeassistant.helpers.entity_platform",
-         AddConfigEntryEntitiesCallback=object)
-    _mod("bleak_retry_connector", BleakClientWithServiceCache=object,
-         establish_connection=None)
-
-    class _Coordinator:
-        def __class_getitem__(cls, _item):
-            return cls
-
-        def __init__(self, coordinator=None) -> None:
-            self.coordinator = coordinator
-
-    _mod("homeassistant.helpers.update_coordinator",
-         DataUpdateCoordinator=_Coordinator, CoordinatorEntity=_Coordinator)
-    _mod("homeassistant.components", __path__=[])
-    _mod("homeassistant.components.climate", ClimateEntity=object,
-         ClimateEntityFeature=_Feature, HVACMode=_HVACMode, FAN_OFF="off")
-    _mod("homeassistant.components.select", SelectEntity=object)
-
-    _mod("truma_pkg", __path__=[str(SRC)])
-    _mod("truma_pkg.truma", __path__=[str(SRC / "truma")])
-    _mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None)
-    _mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
-         async_resolve_device=None, async_wait_until_heard=None,
-         ADDR_IDENTITY="identity", ADDR_RPA="rpa",
-         address_kind=lambda _name, _address: "rpa")
-
-    def _real(name: str, package: str = "truma_pkg", path: Path = SRC):
-        spec = importlib.util.spec_from_file_location(
-            f"{package}.{name}", path / f"{name}.py"
-        )
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[f"{package}.{name}"] = module
-        spec.loader.exec_module(module)
-        return module
-
-    _real("const", "truma_pkg.truma", SRC / "truma")
-    _real("protocol", "truma_pkg.truma", SRC / "truma")
-    state = _real("state", "truma_pkg.truma", SRC / "truma")
-    _real("const")
-    _real("coordinator")
-    _real("entity")
-    return state, _real("climate"), _real("select")
-
-
-STATE, CLIMATE, SELECT = _load()
-
-
-class _Holder:
-    """Stands in for an entity: the properties only read ``self.data``."""
-
-    def __init__(self, state) -> None:
-        self.data = state
-
-
-def _described(state, topic: str, param: str, names: dict, **extra) -> None:
-    """Feed a panel description in, the shape the panel actually sends it."""
-    state.learn_param(topic, param, {
-        "pn": param,
-        "type": 2,
-        "avail": 1,
-        "enum": [{"n": name, "a": True, "v": value} for value, name in names.items()],
-        **extra,
-    })
-
+stubs.install_homeassistant()
+BUS = stubs.load("bus")
+stubs.load("const")
+stubs.mod("truma_pkg.coordinator", TrumaCoordinator=object, TrumaConfigEntry=object)
+stubs.load("profiles")
+stubs.load("entity")
+SELECT = stubs.load("select")
+NUMBER = stubs.load("number")
+CLIMATE = stubs.load("climate")
 
 # The two vehicles this is about, as their panels described themselves.
 THIS_VAN = {0: "Off", 3: "Heating", 5: "Ventilating"}
 COMBI_6E = {0: "Off", 1: "Automatic", 2: "Cooling", 3: "Heating", 5: "Ventilating"}
 
 
-def _hvac_modes(state) -> list:
-    return CLIMATE.TrumaClimate.hvac_modes.fget(_Holder(state))
+def _coordinator() -> stubs.FakeCoordinator:
+    return stubs.FakeCoordinator(BUS.Bus())
+
+
+def _keys(entities) -> list:
+    return [getattr(entity, "_attr_translation_key", None) for entity in entities]
+
+
+def _by_key(entities, key: str):
+    for entity in entities:
+        if getattr(entity, "_attr_translation_key", None) == key:
+            return entity
+    raise AssertionError(f"no entity with translation key {key}")
+
+
+def _enum(names: dict, unavailable: tuple = ()) -> list:
+    """An enum in the shape the panel actually sends it."""
+    return [
+        {"n": name, "a": value not in unavailable, "v": value}
+        for value, name in names.items()
+    ]
+
+
+def _climate(coordinator):
+    """The climate entity for the heater, created the way the platform does."""
+    made = stubs.setup_platform(CLIMATE, coordinator)
+    coordinator.report("AirHeating", "Temp", 228, HEATER)
+    assert len(made) == 1, made
+    return made[0]
 
 
 def test_a_van_without_cooling_is_not_offered_cooling() -> None:
     """Measured: this panel's enum has no 1 and no 2 in it at all."""
-    state = STATE.TrumaState()
-    _described(state, "RoomClimate", "Mode", THIS_VAN)
+    coordinator = _coordinator()
+    climate = _climate(coordinator)
+    coordinator.describe("RoomClimate", "Mode", PANEL, v=0, enum=_enum(THIS_VAN))
 
-    assert _hvac_modes(state) == ["off", "heat", "fan_only"]
+    assert climate.hvac_modes == ["off", "heat", "fan_only"]
 
 
 def test_a_vehicle_that_has_cooling_is_offered_it() -> None:
     """The whole of #11: the modes exist, the hardcoded list hid them."""
-    state = STATE.TrumaState()
-    _described(state, "RoomClimate", "Mode", COMBI_6E)
+    coordinator = _coordinator()
+    climate = _climate(coordinator)
+    coordinator.describe("RoomClimate", "Mode", PANEL, v=0, enum=_enum(COMBI_6E))
 
-    assert _hvac_modes(state) == ["off", "auto", "cool", "heat", "fan_only"]
+    assert climate.hvac_modes == ["off", "auto", "cool", "heat", "fan_only"]
 
 
 def test_a_silent_panel_still_gets_the_modes_this_always_offered() -> None:
     """Nothing described means fall back, not an empty climate card."""
-    assert _hvac_modes(STATE.TrumaState()) == ["off", "heat", "fan_only"]
+    assert _climate(_coordinator()).hvac_modes == ["off", "heat", "fan_only"]
 
 
 def test_a_value_we_have_no_name_for_is_left_out_and_off_stays() -> None:
     """An unknown mode must not become a mode the frontend cannot render."""
-    state = STATE.TrumaState()
-    _described(state, "RoomClimate", "Mode", {3: "Heating", 9: "Whatever"})
+    coordinator = _coordinator()
+    climate = _climate(coordinator)
+    coordinator.describe(
+        "RoomClimate", "Mode", PANEL, v=3, enum=_enum({3: "Heating", 9: "Whatever"})
+    )
 
-    modes = _hvac_modes(state)
-    assert modes == ["off", "heat"], modes
+    assert climate.hvac_modes == ["off", "heat"], climate.hvac_modes
+
+
+def test_the_room_mode_is_read_from_the_panel_that_relays_it() -> None:
+    """The heater does not publish RoomClimate; the panel does, for the bus."""
+    coordinator = _coordinator()
+    climate = _climate(coordinator)
+    assert climate.hvac_mode is None
+
+    coordinator.report("RoomClimate", "Mode", 3, PANEL)
+    assert climate.hvac_mode == "heat"
+
+    # ...and a write to it goes back to the panel, not to the heater the
+    # entity belongs to.
+    asyncio.run(climate.async_turn_off())
+    assert coordinator.writes == [(HEATER, "RoomClimate", "Mode", 0)]
+    assert coordinator.data.command_dest(HEATER, "RoomClimate") == PANEL
 
 
 def test_the_water_steps_come_from_the_panel_but_the_words_do_not() -> None:
@@ -202,212 +158,189 @@ def test_the_water_steps_come_from_the_panel_but_the_words_do_not() -> None:
     panel's own names are in the panel's language, and a select option is
     user-facing text automations match on.
     """
-    state = STATE.TrumaState()
-    _described(state, "WaterHeating", "Mode", {0: "Eco", 1: "Comfort", 2: "Hot"})
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SELECT, coordinator)
+    coordinator.describe(
+        "WaterHeating", "Mode", HEATER, v=1,
+        enum=_enum({0: "Eco", 1: "Comfort", 2: "Hot"}),
+    )
 
-    options = SELECT.TrumaWaterModeSelect.options.fget(_Holder(state))
-    assert options == ["off", "Eco (40 °C)", "Comfort (60 °C)", "Hot (70 °C)"], options
+    water = _by_key(made, "water_mode")
+    assert water.options == [
+        "off", "Eco (40 °C)", "Comfort (60 °C)", "Hot (70 °C)"
+    ], water.options
 
 
 def test_a_step_the_vehicle_does_not_have_is_not_offered() -> None:
     """A panel can describe a value and mark it unavailable here."""
-    state = STATE.TrumaState()
-    state.learn_param("EnergySrc", "ElectricLevel", {
-        "type": 2,
-        "enum": [
-            {"n": "Off", "a": True, "v": 0},
-            {"n": "900 W", "a": True, "v": 1},
-            {"n": "1800 W", "a": False, "v": 2},
-        ],
-    })
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SELECT, coordinator)
+    coordinator.describe(
+        "EnergySrc", "ElectricLevel", HEATER, v=0,
+        enum=_enum({0: "Off", 1: "900 W", 2: "1800 W"}, unavailable=(2,)),
+    )
 
-    options = SELECT.TrumaElectricLevelSelect.options.fget(_Holder(state))
-    assert options == ["off", "900 W"], options
+    assert _by_key(made, "electric_level").options == ["off", "900 W"]
 
 
-def test_a_silent_panel_leaves_both_selects_as_they_were() -> None:
-    state = STATE.TrumaState()
-    assert SELECT.TrumaWaterModeSelect.options.fget(_Holder(state)) == [
+def test_a_silent_panel_leaves_the_selects_as_they_were() -> None:
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SELECT, coordinator)
+    coordinator.report("WaterHeating", "Mode", 1, HEATER)
+    coordinator.report("EnergySrc", "ElectricLevel", 1, HEATER)
+
+    assert _by_key(made, "water_mode").options == [
         "off", "Eco (40 °C)", "Comfort (60 °C)", "Hot (70 °C)",
     ]
-    assert SELECT.TrumaElectricLevelSelect.options.fget(_Holder(state)) == [
-        "off", "900 W", "1800 W",
-    ]
+    assert _by_key(made, "electric_level").options == ["off", "900 W", "1800 W"]
 
 
-def test_the_panel_outranks_our_table_when_it_has_spoken() -> None:
+def test_the_water_select_switches_the_function_off_rather_than_the_step() -> None:
+    """The panel switches water heating off in its own right."""
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SELECT, coordinator)
+    coordinator.report("WaterHeating", "Mode", 1, HEATER)
+    coordinator.report("WaterHeating", "Active", 1, HEATER)
+    water = _by_key(made, "water_mode")
+
+    assert water.current_option == "Comfort (60 °C)"
+    coordinator.report("WaterHeating", "Active", 0, HEATER)
+    assert water.current_option == "off"
+
+    asyncio.run(water.async_select_option("off"))
+    asyncio.run(water.async_select_option("Hot (70 °C)"))
+    assert coordinator.writes == [
+        (HEATER, "WaterHeating", "Active", 0),
+        (HEATER, "WaterHeating", "Active", 1),
+        (HEATER, "WaterHeating", "Mode", 2),
+    ], coordinator.writes
+
+
+def test_the_device_outranks_our_table_when_it_has_spoken() -> None:
     """PARAM_VALIDATION says [0, 3, 5]; this vehicle says otherwise."""
-    state = STATE.TrumaState()
-    assert state.validate_write("RoomClimate", "Mode", 2)[0] is False
+    bus = BUS.Bus()
+    assert bus.validate_write(PANEL, "RoomClimate", "Mode", 2)[0] is False
 
-    _described(state, "RoomClimate", "Mode", COMBI_6E)
-    ok, msg = state.validate_write("RoomClimate", "Mode", 2)
+    bus.learn_param("RoomClimate", "Mode", {"enum": _enum(COMBI_6E)}, PANEL)
+    ok, msg = bus.validate_write(PANEL, "RoomClimate", "Mode", 2)
     assert ok, msg
     # ...and it constrains as well as permits: 4 is in the protocol, not on
     # this vehicle's panel.
-    assert state.validate_write("RoomClimate", "Mode", 4)[0] is False
+    assert bus.validate_write(PANEL, "RoomClimate", "Mode", 4)[0] is False
+    # ...and it is that device's claim, not the bus's: another device is still
+    # judged by the table.
+    assert bus.validate_write(HEATER, "RoomClimate", "Mode", 2)[0] is False
 
 
-def test_our_table_still_applies_where_the_panel_said_nothing() -> None:
-    state = STATE.TrumaState()
-    assert state.validate_write("Switches", "FreshWaterPump", 1)[0] is True
-    assert state.validate_write("Switches", "FreshWaterPump", 2)[0] is False
+def test_our_table_still_applies_where_nothing_was_described() -> None:
+    bus = BUS.Bus()
+    assert bus.validate_write(HEATER, "Switches", "FreshWaterPump", 1)[0] is True
+    assert bus.validate_write(HEATER, "Switches", "FreshWaterPump", 2)[0] is False
     # Ranges keep working too -- those are never enums.
-    assert state.validate_write("RoomClimate", "TgtTemp", 200)[0] is True
-    assert state.validate_write("RoomClimate", "TgtTemp", 900)[0] is False
+    assert bus.validate_write(PANEL, "RoomClimate", "TgtTemp", 200)[0] is True
+    assert bus.validate_write(PANEL, "RoomClimate", "TgtTemp", 900)[0] is False
 
 
 def test_allowed_values_reports_values_never_names() -> None:
     """The names are evidence for us, not strings for anybody else."""
-    state = STATE.TrumaState()
-    _described(state, "WaterHeating", "Mode", {0: "Eco", 1: "Comfort", 2: "Hot"})
-
-    assert state.allowed_values("WaterHeating", "Mode") == [0, 1, 2]
-    assert state.allowed_values("WaterHeating", "Nothing") is None
-
-
-class _FakeCoordinator:
-    """Enough coordinator for the select platform's setup to run."""
-
-    unique_id = "Truma iNetX-FFB4D1"
-
-    def __init__(self, state) -> None:
-        self.data = state
-        self._listeners: list = []
-        coordinator = self
-
-        class _Entry:
-            runtime_data = coordinator
-
-            @staticmethod
-            def async_on_unload(_unsub) -> None:
-                pass
-
-        self.config_entry = _Entry()
-        self.entry = _Entry()
-
-    def async_add_listener(self, cb):
-        self._listeners.append(cb)
-        return lambda: self._listeners.remove(cb)
-
-    def report(self, topic: str, param: str, value: int) -> None:
-        """Deliver a parameter the way a decoded frame would."""
-        self.data.update(topic, param, value)
-        for cb in list(self._listeners):
-            cb()
-
-
-def _setup_selects(coordinator) -> list:
-    """Run the real platform setup, collecting what it creates."""
-    made: list = []
-    import asyncio
-
-    asyncio.run(
-        SELECT.async_setup_entry(None, coordinator.entry, lambda new: made.extend(new))
+    bus = BUS.Bus()
+    bus.learn_param(
+        "WaterHeating", "Mode",
+        {"enum": _enum({0: "Eco", 1: "Comfort", 2: "Hot"})}, HEATER,
     )
-    return made
+
+    heater = bus.device(HEATER)
+    assert heater.allowed_values("WaterHeating", "Mode") == [0, 1, 2]
+    assert heater.allowed_values("WaterHeating", "Nothing") is None
 
 
-def test_the_electric_select_waits_for_an_electric_element() -> None:
+def test_each_select_waits_for_its_own_parameter() -> None:
     """Measured on a Combi D van: the panel never mentions ElectricLevel.
 
     That select was offering off / 900 W / 1800 W against hardware that has
     none of them, which reads as a broken integration rather than as absent
-    hardware -- the same reasoning the water entities already follow.
+    hardware -- the same reasoning the water entities already follow. The
+    air-heating mode (#22) is gated for a weaker reason: two panels are known
+    to offer Fast / Comfort, but only one has been read in a parameter dump.
     """
-    coordinator = _FakeCoordinator(STATE.TrumaState())
-    made = _setup_selects(coordinator)
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SELECT, coordinator)
+    assert made == [], "a select was created for an unmeasured parameter"
 
-    assert [type(entity).__name__ for entity in made] == ["TrumaWaterModeSelect"], made
+    coordinator.report("EnergySrc", "ElectricLevel", 0, HEATER)
+    assert _keys(made) == ["electric_level"], made
 
-    # A heater that has the element says so, and then it appears.
-    coordinator.report("EnergySrc", "ElectricLevel", 0)
-    assert [type(entity).__name__ for entity in made] == [
-        "TrumaWaterModeSelect",
-        "TrumaElectricLevelSelect",
-    ], made
+    coordinator.report("AirHeating", "Mode", 1, HEATER)
+    assert _keys(made) == ["electric_level", "air_mode"], made
 
-    # ...and only once, however many frames follow.
-    coordinator.report("EnergySrc", "ElectricLevel", 1)
-    assert len(made) == 2, made
+    coordinator.report("WaterHeating", "Mode", 1, HEATER)
+    assert _keys(made) == ["electric_level", "air_mode", "water_mode"], made
 
-
-def test_water_heating_is_not_gated_on_anything() -> None:
-    """Every vehicle this runs on has water heating; it is the heater itself."""
-    made = _setup_selects(_FakeCoordinator(STATE.TrumaState()))
-    assert len(made) == 1
-
-
-def test_the_air_heating_mode_select_waits_for_the_parameter() -> None:
-    """#22: the panel's "fast" setting, which two panels are known to offer.
-
-    Probably every Combi has it, but only one has been read in a parameter
-    dump, so the select waits for ``AirHeating.Mode`` the way the electric one
-    waits for its element -- rather than sitting permanently unknown on a
-    heater that never offers the choice.
-    """
-    coordinator = _FakeCoordinator(STATE.TrumaState())
-    made = _setup_selects(coordinator)
-
-    assert [type(entity).__name__ for entity in made] == ["TrumaWaterModeSelect"], made
-
-    coordinator.report("AirHeating", "Mode", 1)
-    assert [type(entity).__name__ for entity in made] == [
-        "TrumaWaterModeSelect",
-        "TrumaAirHeatingModeSelect",
-    ], made
-
-    # ...and only once, however many frames follow.
-    coordinator.report("AirHeating", "Mode", 0)
-    assert len(made) == 2, made
+    # ...and only once each, however many frames follow.
+    coordinator.report("EnergySrc", "ElectricLevel", 1, HEATER)
+    coordinator.report("AirHeating", "Mode", 0, HEATER)
+    assert len(made) == 3, made
 
 
 def test_the_air_mode_reads_back_what_the_heater_reports() -> None:
     """Measured in #22: fast writes 0, normal heating writes 1."""
-    state = STATE.TrumaState()
-    holder = _Holder(state)
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SELECT, coordinator)
+    coordinator.report("AirHeating", "Mode", 0, HEATER)
+    air = _by_key(made, "air_mode")
 
-    assert SELECT.TrumaAirHeatingModeSelect.current_option.fget(holder) is None
+    assert air.current_option == "Fast"
+    coordinator.report("AirHeating", "Mode", 1, HEATER)
+    assert air.current_option == "Comfort"
+    # The panel's own names, in the panel's language, never become options.
+    coordinator.describe(
+        "AirHeating", "Mode", HEATER, v=1,
+        enum=_enum({0: "Schnell", 1: "Komfort"}),
+    )
+    assert air.options == ["Fast", "Comfort"], air.options
 
-    state.update("AirHeating", "Mode", 0)
-    assert SELECT.TrumaAirHeatingModeSelect.current_option.fget(holder) == "Fast"
-    state.update("AirHeating", "Mode", 1)
-    assert SELECT.TrumaAirHeatingModeSelect.current_option.fget(holder) == "Comfort"
+    asyncio.run(air.async_select_option("Fast"))
+    assert coordinator.writes == [(HEATER, "AirHeating", "Mode", 0)]
 
 
-def test_the_air_mode_options_come_from_the_panel_but_the_words_do_not() -> None:
-    """Same rule as the water steps: values from the panel, labels from here.
+def test_a_slider_takes_its_range_from_its_own_device() -> None:
+    """0-10 is a Combi's range; it was handed to every fan on the bus."""
+    coordinator = _coordinator()
+    made = stubs.setup_platform(NUMBER, coordinator)
+    coordinator.report("AirCirculation", "FanLevel", 4, HEATER)
+    coordinator.describe(
+        "AirCirculation", "FanLevel", ROOF_AC, v=2, min=1, max=6,
+    )
 
-    The names in the enum below are the panel's, in the panel's language; the
-    strings an automation matches on have to be ours.
-    """
-    state = STATE.TrumaState()
-    options = SELECT.TrumaAirHeatingModeSelect.options.fget(_Holder(state))
-    assert options == ["Fast", "Comfort"], options
+    by_addr = {entity._addr: entity for entity in made}
+    # The Combi described nothing, so it keeps the fallback.
+    assert (
+        by_addr[HEATER].native_min_value,
+        by_addr[HEATER].native_max_value,
+    ) == (0, 10)
+    assert (
+        by_addr[ROOF_AC].native_min_value,
+        by_addr[ROOF_AC].native_max_value,
+    ) == (1, 6)
 
-    _described(state, "AirHeating", "Mode", {0: "Schnell", 1: "Komfort"})
-    options = SELECT.TrumaAirHeatingModeSelect.options.fget(_Holder(state))
-    assert options == ["Fast", "Comfort"], options
 
-    # A heater whose panel offers only the one mode is offered only the one.
-    state = STATE.TrumaState()
-    state.learn_param("AirHeating", "Mode", {
-        "type": 2,
-        "enum": [
-            {"n": "Fast", "a": False, "v": 0},
-            {"n": "Comfort", "a": True, "v": 1},
-        ],
-    })
-    options = SELECT.TrumaAirHeatingModeSelect.options.fget(_Holder(state))
-    assert options == ["Comfort"], options
+def test_the_climate_fan_modes_follow_the_appliance_too() -> None:
+    """The fan on the climate card is the same parameter, same argument."""
+    coordinator = _coordinator()
+    climate = _climate(coordinator)
+    coordinator.report("AirCirculation", "FanLevel", 2, HEATER)
+    assert climate.fan_modes == ["off", *[str(n) for n in range(1, 11)]]
+    assert climate.fan_mode == "2"
+
+    coordinator.describe("AirCirculation", "FanLevel", HEATER, v=2, min=0, max=3)
+    assert climate.fan_modes == ["off", "1", "2", "3"]
+
+    asyncio.run(climate.async_set_fan_mode("3"))
+    assert coordinator.writes == [(HEATER, "AirCirculation", "FanLevel", 3)]
 
 
 def _main() -> None:
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-            print(f"ok  {name}")
-    print("panel-declared options: all checks OK")
+    stubs.run_tests(globals(), "panel-declared options")
 
 
 if __name__ == "__main__":

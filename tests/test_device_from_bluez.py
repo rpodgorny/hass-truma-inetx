@@ -54,7 +54,6 @@ def _load():
     _mod("truma_pkg.truma.protocol", **dict.fromkeys(
         ("build_identity_frames", "build_register_frame", "build_subscribe_frame",
          "build_v3_frame", "build_write_frame", "parse_v3_frame"), None))
-    _mod("truma_pkg.truma.state", TrumaState=object)
 
     spec = importlib.util.spec_from_file_location("truma_pkg.ble", SRC / "ble.py")
     assert spec is not None and spec.loader is not None

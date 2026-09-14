@@ -82,6 +82,9 @@
       "fresh_water_level": {
         "name": "Fresh water"
       },
+      "gas_bottle_level": {
+        "name": "Gas bottle level"
+      },
       "grey_water_level": {
         "name": "Grey water"
       },

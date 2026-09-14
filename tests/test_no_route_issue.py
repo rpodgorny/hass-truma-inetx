@@ -112,6 +112,8 @@ def _load():
     _mod("homeassistant.exceptions", HomeAssistantError=RuntimeError)
     _mod("homeassistant.helpers", __path__=[], issue_registry=IR)
     _mod("homeassistant.helpers.storage", Store=object)
+    # DeviceInfo is a TypedDict; a plain dict is the same thing at runtime.
+    _mod("homeassistant.helpers.device_registry", DeviceInfo=dict)
     _mod("homeassistant.components", __path__=[])
     _mod("bleak", __path__=[])
     _mod("bleak.backends", __path__=[])
@@ -124,7 +126,7 @@ def _load():
     )
 
     class _Coordinator:
-        """DataUpdateCoordinator stand-in that tolerates [TrumaState]."""
+        """DataUpdateCoordinator stand-in that tolerates [Bus]."""
 
         def __class_getitem__(cls, _item):
             return cls
@@ -144,13 +146,13 @@ def _load():
     _mod("truma_pkg", __path__=[str(SRC)])
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", SERVICE_UUID=SERVICE_UUID,
-         DEVICE_SEED=frozenset(), MEASURE_REQUEST_TOPICS={}, **dict.fromkeys(
+         DEVICE_SEED=frozenset(), MEASURE_REQUEST_TOPICS={}, DEV_PANEL=0x0101,
+         **dict.fromkeys(
         ("CTRL_MBP", "DEV_APP_DEFAULT", "DEV_BROADCAST", "DEV_MSG_BROKER",
          "MBP_PARAM_DISC", "MEASURE_REQUEST_PARAM", "TOPIC_BATCHES"), 0))
     _mod("truma_pkg.truma.protocol", **dict.fromkeys(
         ("build_identity_frames", "build_register_frame", "build_subscribe_frame",
          "build_v3_frame", "build_write_frame"), None))
-    _mod("truma_pkg.truma.state", TrumaState=object)
     async def _no_bluez_device(_address):
         return None
 

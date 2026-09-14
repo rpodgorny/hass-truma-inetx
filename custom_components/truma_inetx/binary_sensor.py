@@ -1,4 +1,4 @@
-"""Binary sensor platform for Truma iNet X flame and link status."""
+"""Binary sensor platform: bus flags, plus the BLE link itself."""
 
 from __future__ import annotations
 
@@ -6,12 +6,14 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
-from .entity import TrumaEntity, async_add_when_reported
-from .truma.state import ActiveState
+from .entity import TrumaEntity, TrumaParamEntity, async_add_rows
+from .profiles import Row
+from .truma.const import DEV_PANEL
 
 # Entities are coordinator-driven and have no update() method, so Home
 # Assistant would create no semaphore anyway; stated explicitly.
@@ -25,80 +27,50 @@ async def async_setup_entry(
 ) -> None:
     """Set up Truma binary sensors."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        [TrumaFlameSensor(coordinator), TrumaConnectionSensor(coordinator)]
-    )
-    # Gas appears only on a heater that burns it, and then only to be read.
-    async_add_when_reported(
+    # The link is not a bus parameter and cannot wait for one: it is what says
+    # whether anything on the bus can be heard at all, so it exists from setup
+    # and reports the panel, which is the thing we are connected to.
+    async_add_entities([TrumaConnectionSensor(coordinator)])
+    async_add_rows(
         coordinator,
         async_add_entities,
-        {"EnergySrc.GasLevel": lambda: TrumaGasSensor(coordinator)},
+        Platform.BINARY_SENSOR,
+        lambda addr, topic, param, row: TrumaBinarySensor(
+            coordinator, addr, topic, param, row
+        ),
     )
 
 
-class TrumaFlameSensor(TrumaEntity, BinarySensorEntity):
-    """Flame/burner running status."""
+class TrumaBinarySensor(TrumaParamEntity, BinarySensorEntity):
+    """One bus parameter, read as on or off."""
 
-    _attr_translation_key = "flame"
-    _attr_device_class = BinarySensorDeviceClass.RUNNING
-
-    def __init__(self, coordinator: TrumaCoordinator) -> None:
-        """Initialize."""
-        super().__init__(coordinator, "flame")
+    def __init__(
+        self,
+        coordinator: TrumaCoordinator,
+        addr: int,
+        topic: str,
+        param: str,
+        row: Row,
+    ) -> None:
+        """Initialize from the row."""
+        super().__init__(coordinator, addr, topic, param, row)
+        self._attr_device_class = row.device_class
 
     @property
     def is_on(self) -> bool | None:
-        """Whether the burner is actually firing.
+        """Whether the parameter reads as on, by the row's own definition.
 
-        ``System.FlameStatus`` is type 105, the family the various ``Active``
-        parameters belong to, and it takes three values: 0 off, 1 running,
-        2 idle. Measured on a Combi 6 E against an independent shore-power
-        meter (#15) -- the value went 1 -> 2 in the same second the draw fell
-        from 1787 W to 105 W, with ``AirHeating.Active`` making the same move
-        in the same record.
-
-        So "anything above zero" is not on. 2 is the appliance standing by,
-        and reporting a flame while it stands by is worse than reporting
-        nothing at all: it is the reading an automation would act on.
-
-        It does not name the energy source either, which was the other
-        candidate reading: on the one vehicle reported that has both, it read
-        1 with gas off and a 1775 W element running.
+        A row that names the values that count as on gets exactly those; the
+        rest are plain flags where anything non-zero is on. The difference is
+        the tri-state Active family, where 2 is the appliance standing by --
+        see the FlameStatus row in profiles.py.
         """
-        if self.data.flame_status is None:
+        value = self.value
+        if not isinstance(value, (int, float)):
             return None
-        return self.data.flame_status == ActiveState.ACTIVE
-
-
-class TrumaGasSensor(TrumaEntity, BinarySensorEntity):
-    """Whether the heater is drawing on gas.
-
-    Deliberately a sensor and not a switch (#16). ``EnergySrc.GasLevel`` is
-    writable and a write to it does go through -- measured on a gas/electric
-    Combi 6 E, where the panel followed and the value came back. But the heater
-    writes it too: on that vehicle ``NeedsEnergySrc`` read 1 throughout, and
-    switching the electric element off moved the gas source on by itself, with
-    nothing sent from here. A switch presented as the user's to own would
-    therefore fight the heater and flap, so this reflects the heater's choice
-    instead of pretending to make it.
-
-    Gas is what a Combi burns when it has no diesel burner, so the parameter
-    arriving is also the evidence this is a gas heater -- see the diesel switch
-    in ``switch.py``, which waits on its own parameter for the same reason.
-    """
-
-    _attr_translation_key = "gas"
-
-    def __init__(self, coordinator: TrumaCoordinator) -> None:
-        """Initialize."""
-        super().__init__(coordinator, "gas")
-
-    @property
-    def is_on(self) -> bool | None:
-        """Whether gas is selected as an energy source."""
-        if self.data.gas_level is None:
-            return None
-        return bool(self.data.gas_level)
+        if self.row.on_values is None:
+            return bool(value)
+        return int(value) in self.row.on_values
 
 
 class TrumaConnectionSensor(TrumaEntity, BinarySensorEntity):
@@ -111,9 +83,9 @@ class TrumaConnectionSensor(TrumaEntity, BinarySensorEntity):
 
     def __init__(self, coordinator: TrumaCoordinator) -> None:
         """Initialize."""
-        super().__init__(coordinator, "connection")
+        super().__init__(coordinator, DEV_PANEL, "connection")
 
     @property
     def is_on(self) -> bool:
         """Whether the BLE link to the panel is up."""
-        return self.data.connected
+        return self.bus.connected
