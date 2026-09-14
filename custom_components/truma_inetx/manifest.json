@@ -10,6 +10,9 @@
     },
     {
       "service_uuid": "fc310002-f3b2-11e8-8eb2-f2801f1b9fd1"
+    },
+    {
+      "service_uuid": "fc310006-f3b2-11e8-8eb2-f2801f1b9fd1"
     }
   ],
   "codeowners": [

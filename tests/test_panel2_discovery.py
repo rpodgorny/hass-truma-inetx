@@ -27,7 +27,9 @@ What it pins:
    either flow step,
 3. the original panel still works by name alone, with no service UUID in the
    advert (passive scanning shows no scan response),
-4. an unrelated BLE device is not picked up by the manual step.
+4. an unrelated BLE device is not picked up by the manual step,
+5. the service UUID a real Panel 2 advertises, fc310006, is one of the ones
+   matched.
 
 Run: ``python3 tests/test_panel2_discovery.py``
 """
@@ -51,6 +53,9 @@ PANEL_2 = "Truma iNet X Panel 2-A1B2C3"
 
 ADVERT_SERVICE_UUID = "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
 SERVICE_UUID = "fc310002-f3b2-11e8-8eb2-f2801f1b9fd1"
+# What a Panel 2 actually advertises, from the nRF Connect capture in issue #6
+# (hardware 1.4, firmware 3.5.38.1). Not a guess, unlike PANEL_2 above.
+PANEL2_ADVERT_SERVICE_UUID = "fc310006-f3b2-11e8-8eb2-f2801f1b9fd1"
 
 RPA = "62:4A:BD:AD:73:5D"
 
@@ -218,6 +223,18 @@ def test_the_service_uuid_identifies_a_panel_on_its_own() -> None:
     assert BT.is_panel_advert(_Info(name=PANEL_1))
     assert BT.is_panel_advert(_Info(uuids=(SERVICE_UUID,)))
     assert not BT.is_panel_advert(_Info(name="Some Sensor", uuids=("180f",)))
+
+
+def test_the_panel_2_advert_uuid_is_recognised() -> None:
+    """The captured Panel 2 advert: fc310006, which nothing matched before."""
+    assert BT.is_panel_advert(_Info(name=PANEL_2, uuids=(PANEL2_ADVERT_SERVICE_UUID,)))
+    assert BT.is_panel_advert(_Info(uuids=(PANEL2_ADVERT_SERVICE_UUID,)))
+    result = _discover(_Info(name=PANEL_2, uuids=(PANEL2_ADVERT_SERVICE_UUID,)))
+    assert not isinstance(result, _Aborted), f"aborted: {result}"
+    assert result.unique_id == PANEL_2
+    assert _manual_choices(
+        _Info(name=PANEL_2, uuids=(PANEL2_ADVERT_SERVICE_UUID,))
+    ) == [PANEL_2]
 
 
 def test_an_address_is_not_a_name() -> None:

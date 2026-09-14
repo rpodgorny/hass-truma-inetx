@@ -48,10 +48,21 @@ if TYPE_CHECKING:
 # the panel is invisible even though the radio hears it perfectly.
 ADVERT_SERVICE_UUID = "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
 
-# Everything the panel puts on air that identifies it as a Truma panel. Both
-# UUIDs are proprietary to Truma, so either one matching is evidence on its
+# What the iNet X Panel 2 advertises instead (issue #6). An nRF Connect capture
+# of a Panel 2 -- hardware 1.4, firmware 3.5.38.1 -- shows one advertised
+# service, fc310006, plus manufacturer data under Truma's company ID 0x0c73.
+# The GATT table behind it is the panel protocol unchanged: fc314001 write +
+# notify, fc314002 write-without-response, fc314003 and fc314004 notify, the
+# same four characteristics this integration already drives. So only the
+# advertised number moved, and matching it is the whole of Panel 2 discovery.
+ADVERT_SERVICE_UUID_PANEL2 = "fc310006-f3b2-11e8-8eb2-f2801f1b9fd1"
+
+# Everything the panel puts on air that identifies it as a Truma panel. Every
+# UUID here is proprietary to Truma, so any one matching is evidence on its
 # own -- no local name required.
-PANEL_SERVICE_UUIDS = frozenset({ADVERT_SERVICE_UUID, SERVICE_UUID})
+PANEL_SERVICE_UUIDS = frozenset(
+    {ADVERT_SERVICE_UUID, ADVERT_SERVICE_UUID_PANEL2, SERVICE_UUID}
+)
 
 # How recently the panel must have been heard for a connect to be worth
 # starting, and how long to wait for that to happen.
