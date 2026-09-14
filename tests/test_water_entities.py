@@ -26,8 +26,9 @@ What it pins:
 5. the pump only accepts 0 and 1,
 6. an entity is created when -- and only when -- its parameter is reported,
    and only once,
-7. every translation_key in the platforms has a name in strings.json, and the
-   water sensors carry an icon, having no device class to draw one from.
+7. every translation_key in the platforms has a name in strings.json, the
+   water sensors carry an icon, having no device class to draw one from, and
+   every non-English translation still covers every key English has.
 
 Run: ``python3 tests/test_water_entities.py``
 """
@@ -297,6 +298,14 @@ def _translation_keys(platform: str) -> set[str]:
     return set(re.findall(r'translation_key\s*=\s*"([a-z_0-9]+)"', text))
 
 
+def _leaf_keys(node: object, prefix: str = "") -> set:
+    """Every path through a translation file that ends in a string."""
+    if not isinstance(node, dict):
+        return {prefix}
+    return {key for name, value in node.items()
+            for key in _leaf_keys(value, f"{prefix}/{name}")}
+
+
 def test_every_new_entity_is_named_and_iconed() -> None:
     strings = json.loads((SRC / "strings.json").read_text())["entity"]
     icons = json.loads((SRC / "icons.json").read_text())["entity"]
@@ -318,6 +327,17 @@ def test_every_new_entity_is_named_and_iconed() -> None:
     assert en == (SRC / "strings.json").read_text(), (
         "strings.json and translations/en.json have drifted again"
     )
+
+    # A translation that has lost keys is worse than no translation: Home
+    # Assistant falls back per key, so the drift shows up as a German UI with
+    # English words scattered through it rather than as an error.
+    for path in sorted((SRC / "translations").glob("*.json")):
+        if path.name == "en.json":
+            continue
+        missing = _leaf_keys(json.loads(en)) - _leaf_keys(
+            json.loads(path.read_text())
+        )
+        assert not missing, f"translations/{path.name} is missing {sorted(missing)}"
 
 
 def test_optional_sensors_all_declare_what_proves_them() -> None:

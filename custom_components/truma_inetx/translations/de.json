@@ -1,0 +1,132 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Truma iNet X hinzufügen",
+        "description": "Wähle das Truma-Bedienteil aus, das hinzugefügt werden soll.",
+        "data": {
+          "address": "Gerät"
+        },
+        "data_description": {
+          "address": "Das Truma-Bedienteil, mit dem gekoppelt werden soll. Aufgeführt werden nur Bedienteile, die aktuell in Reichweite des Bluetooth von Home Assistant senden -- ob das ein ESP32-Proxy oder ein lokaler Adapter ist."
+        }
+      },
+      "confirm": {
+        "description": "Möchtest du das Truma-Bedienteil {name} hinzufügen?"
+      },
+      "pair": {
+        "title": "Mit dem Truma-Bedienteil koppeln",
+        "description": "Versetze das Bedienteil {name} in den Modus zum Hinzufügen eines Geräts (in der Truma-InetX-App oder am Bedienteil selbst) und wähle anschließend einmal **Absenden**. Das Koppeln kann bis zu einer Minute dauern.\n\n**Falls das Koppeln fehlschlägt, arbeite Folgendes der Reihe nach ab:**\n\n1. **Leere die gespeicherte Bluetooth-Geräteliste des Bedienteils.** Sie fasst nur etwa vier Geräte und lehnt neue Kopplungen danach stillschweigend ab. Versetze das Bedienteil wieder in den Modus zum Hinzufügen eines Geräts und versuche es erneut.\n2. **Hat das Leeren der Liste nicht geholfen, schalte das Bedienteil aus und wieder ein und beginne von vorn** -- ausschalten, einschalten, erneut in den Modus zum Hinzufügen eines Geräts versetzen und diesen Schritt wiederholen. Das Aus- und Einschalten beendet hängende Verbindungen, die einen Verbindungsplatz belegen, und lässt das Bedienteil eine frische Bluetooth-Adresse senden, die sich problemlos koppeln lässt. Damit lösen sich die meisten hartnäckigen Fälle.\n\nVersetze das Bedienteil vor jedem Versuch erneut in den Modus zum Hinzufügen eines Geräts: Es nimmt eine Kopplung nur an, während sein Kopplungsbildschirm angezeigt wird."
+      }
+    },
+    "error": {
+      "pairing_failed": "Die Kopplung mit dem Bedienteil ist fehlgeschlagen. Versetze es wieder in den Modus zum Hinzufügen eines Geräts und versuche es erneut. Schlägt das fehl, leere seine gespeicherte Bluetooth-Geräteliste (sie fasst nur etwa vier Geräte); hilft auch das nicht, schalte das Bedienteil aus und wieder ein, versetze es erneut in den Modus zum Hinzufügen eines Geräts und beginne von vorn."
+    },
+    "abort": {
+      "no_devices_found": "Kein Truma iNet X Bedienteil gefunden. Stelle sicher, dass das Bedienteil eingeschaltet und in Bluetooth-Reichweite ist.",
+      "already_configured": "Dieses Truma-Bedienteil ist bereits eingerichtet.",
+      "awaiting_name": "Es wird darauf gewartet, dass das Truma-Bedienteil vor dem Koppeln seinen Namen sendet.",
+      "reconfigure_successful": "Das Truma-Bedienteil wurde erfolgreich neu gekoppelt."
+    }
+  },
+  "exceptions": {
+    "control_not_ready": {
+      "message": "Die Truma-BLE-Steuerung ist noch nicht verfügbar (der Transport wird in einer späteren Build-Stufe eingebunden)."
+    }
+  },
+  "issues": {
+    "no_route": {
+      "title": "Nichts kann das Truma-Bedienteil erreichen",
+      "description": "Home Assistant empfängt die Bluetooth-Werbung des Truma-Bedienteils, aber keiner der vorhandenen Bluetooth-Adapter und -Proxys kann eine Verbindung zu ihm aufbauen.\n\nDas Bedienteil verwendet eine rotierende private Bluetooth-Adresse und antwortet nur auf einen Verbindungsversuch, der seine *aktuelle* Adresse auf die Luft bringt. Ob das geschieht, hängt vom Host ab:\n\n- Ein Linux-Kernel vor 6.19 erledigt das in Software, ein einfacher lokaler Adapter funktioniert also.\n- Ab 6.19 sendet der Kernel stattdessen die Identitätsadresse des Bedienteils, auf die das Bedienteil nicht antwortet. Ein lokaler Adapter funktioniert dann nur, wenn sein Controller LL Privacy unterstützt und BlueZ den Schlüssel des Bedienteils in die Resolving List eingetragen hat, was es für diese Art der Kopplung derzeit nicht tut. Eine Kernel-Korrektur ist upstream eingereicht und noch nicht übernommen.\n- Der Controller eines ESPHome-Bluetooth-Proxys erledigt das selbst, auf jedem Host.\n\nPrüfe, dass das Bedienteil in Reichweite dessen ist, was davon vorhanden ist, und dass nicht schon etwas anderes eine Verbindung zu ihm hält. Beachte, dass eine Kopplung an dem Adapter hängt, mit dem sie hergestellt wurde: Ist der Adapter oder Proxy, der das Bedienteil gekoppelt hat, nicht mehr da, muss das Bedienteil erneut gekoppelt werden.\n\nHome Assistant wählt selbst, über welchen Adapter oder Proxy verbunden wird; diese Integration bindet das Bedienteil nicht an einen bestimmten."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connection": {
+        "name": "BLE-Verbindung"
+      },
+      "flame": {
+        "name": "Flamme"
+      },
+      "gas": {
+        "name": "Gas"
+      }
+    },
+    "number": {
+      "fan_level": {
+        "name": "Lüfterstufe"
+      }
+    },
+    "select": {
+      "air_mode": {
+        "name": "Heizmodus"
+      },
+      "electric_level": {
+        "name": "Elektrische Heizung"
+      },
+      "water_mode": {
+        "name": "Warmwasser"
+      }
+    },
+    "sensor": {
+      "current_temp": {
+        "name": "Raumtemperatur"
+      },
+      "faster_water_heating_time": {
+        "name": "Schnellaufheizzeit"
+      },
+      "flame_status": {
+        "name": "Flammenstatus"
+      },
+      "fresh_water_level": {
+        "name": "Frischwasser"
+      },
+      "grey_water_level": {
+        "name": "Grauwasser"
+      },
+      "internal_temp": {
+        "name": "Innentemperatur"
+      },
+      "leisure_battery_voltage": {
+        "name": "Aufbaubatterie"
+      },
+      "starter_battery_voltage": {
+        "name": "Starterbatterie"
+      },
+      "voltage": {
+        "name": "Versorgungsspannung"
+      },
+      "water_temp": {
+        "name": "Wassertemperatur"
+      }
+    },
+    "switch": {
+      "diesel": {
+        "name": "Dieselbrenner"
+      },
+      "faster_water_heating": {
+        "name": "Schnelles Wasseraufheizen"
+      },
+      "water_boost": {
+        "name": "Warmwasser-Boost"
+      },
+      "water_pump": {
+        "name": "Frischwasserpumpe"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Truma iNet X Optionen",
+        "data": {
+          "poll_interval_seconds": "Abfrageintervall (Sekunden, 0 = verbunden bleiben)"
+        },
+        "data_description": {
+          "poll_interval_seconds": "0 hält die Verbindung offen, Änderungen erscheinen also sofort. Ein Wert größer 0 verbindet sich, liest die Werte und trennt wieder -- langsamer, gibt aber zwischen den Messungen den Verbindungsplatz des Adapters frei, was zählt, wenn weitere Bluetooth-Geräte denselben Adapter nutzen."
+        }
+      }
+    }
+  }
+}
