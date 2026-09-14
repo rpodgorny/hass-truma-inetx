@@ -197,14 +197,17 @@ panel writes on the vehicle and the temperature says what the name means. An
 automation or script that calls `select.select_option` with one of the old
 strings has to be updated; the values on the wire are unchanged.
 
-**0.9.0 moves every entity onto the bus device that reports it, and every
-entity id changes with it.** There is no migration: the integration is still in
-development, and a unique id that used to mean "this parameter, somewhere on
-this panel" cannot be mapped onto one that means "this parameter, on this
-device" without guessing which device. Old entities stay in the registry as
-unavailable until they are deleted from the device page, and history does not
-carry over. Automations and dashboards that name an entity have to be pointed
-at the new one.
+**Unreleased, and not yet run against hardware.** The 0.9.0 betas move every
+entity onto the bus device that reports it, and every entity id changes with
+it. There is no migration: the integration is still in development, and a
+unique id that used to mean "this parameter, somewhere on this panel" cannot be
+mapped onto one that means "this parameter, on this device" without guessing
+which device. Old entities stay in the registry as unavailable until they are
+deleted from the device page, and history does not carry over. Automations and
+dashboards that name an entity have to be pointed at the new one. The checks
+behind this are offline ones against captured frames; see
+[#23](https://github.com/rpodgorny/hass-truma-inetx/issues/23) for what still
+has to be confirmed on a vehicle.
 
 On a vehicle that already had the electric select or the diesel switch before
 they became conditional, the same applies. The integration does not remove
