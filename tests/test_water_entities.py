@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Offline checks for the water entities and how their writes are addressed.
 
-``truma/state.py`` needs no stubbing at all -- that is the point of keeping it
-free of Home Assistant. ``entity.py`` is loaded for real against a stub
-coordinator, because the "create it once the hardware reports" helper is the
-part with actual logic in it.
+``bus.py`` needs no stubbing at all -- that is the point of keeping it free of
+Home Assistant. The platforms are loaded for real against a stub coordinator,
+because "create it on the device that reports it" is the part with actual
+logic in it.
 
 Why this exists: the fresh-water pump and the tank levels belong to a device
 that is not the heater and not the panel -- an electrical block, at 0x0405 on
@@ -15,287 +15,197 @@ all, so the entities cannot simply be created for everyone.
 
 What it pins:
 
-1. the three water parameters reach the state fields the entities read,
-2. a topic's source address is learned, and the message broker is not mistaken
-   for one,
-3. the measured destination table still wins for every topic it names, so this
-   changes nothing for the heater and the panel,
-4. a water write goes to whoever reported the topic, falling back to the panel
-   while nothing has -- and so does a cooling write, which used to go to the
-   heater and be swallowed there (#10),
+1. the water parameters land under the device that published them, and the
+   entities built on them read that device rather than the bus,
+2. an entity is created when -- and only when -- its parameter is reported,
+   on the device that reported it, and only once,
+3. a write goes to that same device, and no address for the water hardware is
+   written into the source,
+4. a topic the panel relays keeps going to the panel,
 5. the pump only accepts 0 and 1,
-6. an entity is created when -- and only when -- its parameter is reported,
-   and only once,
-7. every translation_key in the platforms has a name in strings.json, the
-   water sensors carry an icon, having no device class to draw one from, and
-   every non-English translation still covers every key English has.
+6. every translation key the presentation table and the platforms use has a
+   name in strings.json, the water sensors carry an icon (having no device
+   class to draw one from), and every non-English translation still covers
+   every key English has.
 
 Run: ``python3 tests/test_water_entities.py``
 """
 
 from __future__ import annotations
 
-import importlib.util
+import asyncio
 import json
 import re
 import sys
-import types
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "custom_components" / "truma_inetx"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import stubs  # noqa: E402
+
+SRC = stubs.SRC
 
 PANEL = 0x0101
 HEATER = 0x0201
 BROKER = 0x0000
 # The electrical block, as measured on a Weinsberg and on a second vehicle.
-# Named here only to prove nothing in the source needs to name it.
+# Named here only to prove nothing in the source needs to name it -- which is
+# what the second address is for: the same hardware, re-paired, renumbered.
 BOARD = 0x0405
+RENUMBERED = 0x0407
 # The roof air conditioner on the Combi 6 E of issue #10, for the same reason.
 ROOF_AC = 0x0406
 
-
-def _load_state():
-    """Import truma/state.py alone -- it imports nothing but the stdlib."""
-    spec = importlib.util.spec_from_file_location(
-        "truma_state_only", SRC / "truma" / "state.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _mod(name: str, **attrs):
-    module = types.ModuleType(name)
-    module.__dict__.update(attrs)
-    sys.modules[name] = module
-    return module
+stubs.install_homeassistant()
+BUS = stubs.load("bus")
+stubs.load("const")
+stubs.mod("truma_pkg.coordinator", TrumaCoordinator=object, TrumaConfigEntry=object)
+PROFILES = stubs.load("profiles")
+stubs.load("entity")
+SENSOR = stubs.load("sensor")
+SWITCH = stubs.load("switch")
+SELECT = stubs.load("select")
+NUMBER = stubs.load("number")
+BINARY = stubs.load("binary_sensor")
 
 
-def _load_entity():
-    """Import the real entity.py against stubs for everything it leans on."""
-
-    class _CoordinatorEntity:
-        def __class_getitem__(cls, _item):
-            return cls
-
-        def __init__(self, coordinator) -> None:
-            self.coordinator = coordinator
-
-    _mod("homeassistant", __path__=[])
-    _mod("homeassistant.core", callback=lambda f: f)
-    _mod("homeassistant.helpers", __path__=[])
-    _mod("homeassistant.helpers.device_registry", DeviceInfo=dict)
-    _mod("homeassistant.helpers.entity", Entity=object)
-    _mod(
-        "homeassistant.helpers.update_coordinator",
-        CoordinatorEntity=_CoordinatorEntity,
-    )
-    _mod("truma_pkg", __path__=[str(SRC)])
-    _mod("truma_pkg.truma", __path__=[str(SRC / "truma")])
-
-    class _Coordinator:
-        def __class_getitem__(cls, _item):
-            return cls
-
-    _mod("truma_pkg.coordinator", TrumaCoordinator=_Coordinator)
-    _mod("truma_pkg.truma.state", TrumaState=object)
-
-    def _real(name: str, path: Path = SRC):
-        spec = importlib.util.spec_from_file_location(
-            f"truma_pkg.{name}", path / f"{name}.py"
-        )
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[f"truma_pkg.{name}"] = module
-        spec.loader.exec_module(module)
-        return module
-
-    _real("const")
-    return _real("entity")
+def _coordinator() -> stubs.FakeCoordinator:
+    return stubs.FakeCoordinator(BUS.Bus())
 
 
-STATE = _load_state()
-ENTITY = _load_entity()
+def _keys(entities) -> list[str]:
+    return [entity._attr_translation_key for entity in entities]
 
 
-class _FakeCoordinator:
-    """Carries only what async_add_when_reported touches."""
-
-    def __init__(self, raw: dict | None = None) -> None:
-        self.data = types.SimpleNamespace(raw_params=dict(raw or {}))
-        self._listeners: list = []
-        self.unsubs = 0
-        coordinator = self
-
-        class _Entry:
-            @staticmethod
-            def async_on_unload(unsub):
-                coordinator.on_unload = unsub
-
-        self.config_entry = _Entry()
-        self.on_unload = None
-
-    def async_add_listener(self, cb):
-        self._listeners.append(cb)
-
-        def _unsub():
-            self.unsubs += 1
-            self._listeners.remove(cb)
-
-        return _unsub
-
-    def report(self, key: str, value=1) -> None:
-        """Deliver a parameter the way a decoded frame would."""
-        self.data.raw_params[key] = value
-        for cb in list(self._listeners):
-            cb()
+def _by_key(entities, key: str):
+    for entity in entities:
+        if getattr(entity, "_attr_translation_key", None) == key:
+            return entity
+    raise AssertionError(f"no entity with translation key {key}")
 
 
-def test_water_params_reach_the_entity_fields() -> None:
-    s = STATE.TrumaState()
-    s.update("FreshWater", "Level", 25, BOARD)
-    s.update("GreyWater", "Level", 0, BOARD)
-    s.update("Switches", "FreshWaterPump", 1, BOARD)
+def test_water_values_land_under_the_device_that_published_them() -> None:
+    bus = BUS.Bus()
+    bus.update("FreshWater", "Level", 25, BOARD)
+    bus.update("GreyWater", "Level", 0, BOARD)
+    bus.update("Switches", "FreshWaterPump", 1, BOARD)
 
-    assert s.fresh_water_level == 25
-    assert s.grey_water_level == 0
-    assert s.water_pump == 1
+    board = bus.device(BOARD)
     # Levels are a percentage in quarter steps; nothing is scaled on the way
-    # in, so a sensor showing 25 must mean the panel said 25.
-    assert s.raw_params["FreshWater.Level"] == 25
-
-
-def test_the_topic_source_is_learned_but_the_broker_is_not() -> None:
-    s = STATE.TrumaState()
-    s.update("Switches", "FreshWaterPump", 0, BOARD)
-    assert s.topic_source["Switches"] == BOARD
-
-    # 0x0000 is the message broker, not a device. Addressing a write there
-    # would send it nowhere, so it must never be learned.
-    s.update("GreyWater", "Level", 50, BROKER)
-    assert "GreyWater" not in s.topic_source
-    # ...and a value with no source at all must not invent one.
-    s.update("FreshWater", "Level", 75, None)
-    assert "FreshWater" not in s.topic_source
-
-
-def test_the_measured_table_still_wins() -> None:
-    """Nothing about the heater or the panel may change."""
-    s = STATE.TrumaState()
-    # Even when a topic arrives from somewhere unexpected, the fixed entry is
-    # what a write follows: some topics are relayed on our behalf, so the
-    # sender is not necessarily the right recipient.
-    s.update("RoomClimate", "Mode", 0, 0x0999)
-    s.update("AirHeating", "Temp", 228, 0x0999)
-
-    assert s.get_command_dest("RoomClimate") == PANEL
-    assert s.get_command_dest("AirHeating") == HEATER
-    for topic in ("WaterHeating", "AirCirculation", "EnergySrc"):
-        assert s.get_command_dest(topic) == STATE.COMMAND_DEST[topic]
-
-
-def test_cooling_goes_to_the_air_conditioner_not_the_heater() -> None:
-    """#10: AirCooling was addressed to the Combi, which cannot cool.
-
-    Measured on a Combi 6 E with a Dometic FreshJet 2200: the write to the
-    heater is acknowledged by the transport and then silently dropped, and the
-    same write to the roof unit's own address starts it cooling. The unit's
-    address is 0x0406 there, and naming it here would break the next vehicle,
-    so what is pinned is that the *topic's reporter* is used.
-    """
-    s = STATE.TrumaState()
-    # Nothing has reported cooling yet: fall back to the panel, as for any
-    # other unknown topic. Never the heater.
-    assert s.get_command_dest("AirCooling") == PANEL
-    assert "AirCooling" not in STATE.COMMAND_DEST
-
-    s.update("AirCooling", "TgtTemp", 170, ROOF_AC)
-    assert s.get_command_dest("AirCooling") == ROOF_AC, (
-        "cooling is still addressed to the heater, which swallows it"
-    )
-
-    # The heater may well relay the topic; that does not make it the owner.
-    # And no fixed destination anywhere may be the roof unit's address either.
-    assert ROOF_AC not in STATE.COMMAND_DEST.values()
-
-
-def test_a_water_write_goes_to_whoever_owns_the_topic() -> None:
-    s = STATE.TrumaState()
-    # Before anything has reported, the old behaviour stands: try the panel.
-    assert s.get_command_dest("Switches") == PANEL
-
-    s.update("Switches", "FreshWaterPump", 1, BOARD)
-    assert s.get_command_dest("Switches") == BOARD, (
-        "the pump write is still addressed to the panel"
-    )
-
-    # No address for the water hardware may be written into the source: it is
-    # renumbered when the device is re-paired.
-    for name in ("state.py", "switch.py", "sensor.py"):
-        path = SRC / ("truma/state.py" if name == "state.py" else name)
-        assert "0x0405" not in path.read_text(), f"{name} hardcodes the block"
-
-
-def test_the_pump_only_takes_zero_and_one() -> None:
-    ok, _ = STATE.TrumaState.validate_command("Switches", "FreshWaterPump", 1)
-    assert ok
-    ok, msg = STATE.TrumaState.validate_command("Switches", "FreshWaterPump", 2)
-    assert not ok and "2" in msg
+    # in, so a sensor showing 25 must mean the sensor said 25.
+    assert board.get("FreshWater", "Level") == 25
+    assert board.get("GreyWater", "Level") == 0
+    assert board.get("Switches", "FreshWaterPump") == 1
+    # Nothing else on the bus acquired them by standing nearby.
+    assert bus.device(HEATER).params == {}
 
 
 def test_an_entity_appears_only_once_its_hardware_reports() -> None:
-    made: list[str] = []
-    coordinator = _FakeCoordinator()
-    ENTITY.async_add_when_reported(
-        coordinator,
-        lambda new: made.extend(new),
-        {
-            "FreshWater.Level": lambda: "fresh",
-            "Switches.FreshWaterPump": lambda: "pump",
-        },
-    )
-    assert made == [], "created an entity for hardware that never reported"
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SENSOR, coordinator)
+    assert made == [], "created a sensor for hardware that never reported"
 
-    coordinator.report("FreshWater.Level", 25)
-    assert made == ["fresh"], "the tank reported and got no entity"
+    coordinator.report("FreshWater", "Level", 25, BOARD)
+    assert _keys(made) == ["fresh_water_level"], "the tank reported and got no sensor"
 
     # An unrelated parameter must not conjure the rest.
-    coordinator.report("AirHeating.Temp", 228)
-    assert made == ["fresh"]
+    coordinator.report("Eol", "Vcc12", 13800, HEATER)
+    assert _keys(made) == ["fresh_water_level", "voltage"]
 
     # Repeated reports of the same parameter must not duplicate the entity.
-    coordinator.report("FreshWater.Level", 50)
-    assert made == ["fresh"]
+    coordinator.report("FreshWater", "Level", 50, BOARD)
+    assert len(made) == 2
 
-    coordinator.report("Switches.FreshWaterPump", 1)
-    assert made == ["fresh", "pump"]
-    # Everything is accounted for, so nothing should still be listening.
-    assert coordinator.unsubs == 0 or not coordinator._listeners
+    coordinator.report("GreyWater", "Level", 0, BOARD)
+    assert "grey_water_level" in _keys(made)
 
 
-def test_data_already_in_hand_needs_no_listener() -> None:
-    """A config-entry reload re-runs setup against a live coordinator."""
-    made: list[str] = []
-    coordinator = _FakeCoordinator({"GreyWater.Level": 0})
-    ENTITY.async_add_when_reported(
-        coordinator, lambda new: made.extend(new), {"GreyWater.Level": lambda: "grey"}
+def test_an_entity_belongs_to_the_device_that_reported_it() -> None:
+    """Two devices reporting one parameter are two entities, not one."""
+    coordinator = _coordinator()
+    made = stubs.setup_platform(NUMBER, coordinator)
+    coordinator.report("AirCirculation", "FanLevel", 4, HEATER)
+    coordinator.report("AirCirculation", "FanLevel", 2, ROOF_AC)
+
+    assert len(made) == 2, "the roof unit's fan overwrote the Combi's again (#9)"
+    by_addr = {entity._addr: entity for entity in made}
+    assert by_addr[HEATER].native_value == 4
+    assert by_addr[ROOF_AC].native_value == 2
+    # ...and they are two entities on two devices, not two on one.
+    assert (
+        by_addr[HEATER]._attr_device_info != by_addr[ROOF_AC]._attr_device_info
     )
-    assert made == ["grey"], "an already-reported tank got no entity on reload"
-    assert not coordinator._listeners, "listener registered with nothing left to wait for"
+    assert by_addr[HEATER]._attr_unique_id != by_addr[ROOF_AC]._attr_unique_id
 
 
-def _translation_keys(platform: str) -> set[str]:
-    """Translation keys a platform file declares, read as source.
+def test_data_already_in_hand_needs_no_second_pass() -> None:
+    """A config-entry reload re-runs setup against a live coordinator."""
+    coordinator = _coordinator()
+    coordinator.data.update("GreyWater", "Level", 0, BOARD)
 
-    Importing the platform would drag in Home Assistant, and the point is to
-    check the table rather than to run it.
+    made = stubs.setup_platform(SENSOR, coordinator)
+
+    assert _keys(made) == ["grey_water_level"], (
+        "an already-reported tank got no sensor on reload"
+    )
+
+
+def test_a_water_write_goes_to_whoever_owns_the_topic() -> None:
+    """The pump's owner differs per vehicle, and changes when it is re-paired."""
+    for owner in (BOARD, RENUMBERED):
+        coordinator = _coordinator()
+        made = stubs.setup_platform(SWITCH, coordinator)
+        coordinator.report("Switches", "FreshWaterPump", 0, owner)
+
+        pump = _by_key(made, "water_pump")
+        asyncio.run(pump.async_turn_on())
+        assert coordinator.writes == [(owner, "Switches", "FreshWaterPump", 1)]
+
+    # No address for the water hardware may be written into the source.
+    for name in ("bus.py", "profiles.py", "switch.py", "sensor.py"):
+        assert "0x0405" not in (SRC / name).read_text(), f"{name} hardcodes the block"
+
+
+def test_a_topic_the_panel_relays_still_goes_to_the_panel() -> None:
+    """RoomClimate is the panel's own, however the value reaches us."""
+    bus = BUS.Bus()
+    assert bus.command_dest(HEATER, "RoomClimate") == PANEL
+    # Everything else follows the device the entity belongs to.
+    for topic in ("WaterHeating", "AirCirculation", "EnergySrc", "AirCooling"):
+        assert bus.command_dest(ROOF_AC, topic) == ROOF_AC
+    assert set(BUS.COMMAND_DEST) == {"RoomClimate"}, (
+        "a destination table that names appliances is what #10 was"
+    )
+    assert ROOF_AC not in BUS.COMMAND_DEST.values()
+
+
+def test_the_pump_only_takes_zero_and_one() -> None:
+    bus = BUS.Bus()
+    assert bus.validate_write(BOARD, "Switches", "FreshWaterPump", 1)[0]
+    ok, msg = bus.validate_write(BOARD, "Switches", "FreshWaterPump", 2)
+    assert not ok and "2" in msg
+
+
+def _table_translation_keys() -> dict[str, set[str]]:
+    """Every (platform, translation_key) the presentation table declares.
+
+    Read as source rather than imported: the point is to check the table, and
+    a key that only exists inside a Home Assistant install is no use to anyone
+    reading strings.json.
     """
+    text = (SRC / "profiles.py").read_text()
+    found: dict[str, set[str]] = {}
+    for platform, key in re.findall(
+        r"platform=Platform\.([A-Z_]+),\s*\n\s*translation_key=\"([a-z_0-9]+)\"",
+        text,
+    ):
+        found.setdefault(platform.lower(), set()).add(key)
+    return found
+
+
+def _platform_translation_keys(platform: str) -> set[str]:
+    """Translation keys a platform file declares on an entity class."""
     text = (SRC / f"{platform}.py").read_text()
-    # Both spellings: a description's ``translation_key=`` and an entity
-    # class's ``_attr_translation_key =``.
-    return set(re.findall(r'translation_key\s*=\s*"([a-z_0-9]+)"', text))
+    return set(re.findall(r'_attr_translation_key\s*=\s*"([a-z_0-9]+)"', text))
 
 
 def _leaf_keys(node: object, prefix: str = "") -> set:
@@ -306,22 +216,33 @@ def _leaf_keys(node: object, prefix: str = "") -> set:
             for key in _leaf_keys(value, f"{prefix}/{name}")}
 
 
-def test_every_new_entity_is_named_and_iconed() -> None:
+def test_every_entity_is_named_and_iconed() -> None:
     strings = json.loads((SRC / "strings.json").read_text())["entity"]
     icons = json.loads((SRC / "icons.json").read_text())["entity"]
 
-    for platform in ("binary_sensor", "number", "select", "sensor", "switch"):
-        for key in _translation_keys(platform):
+    table = _table_translation_keys()
+    assert table, "no rows were found in profiles.py -- the regex has rotted"
+    for platform, keys in table.items():
+        for key in keys:
+            assert key in strings.get(platform, {}), (
+                f"{platform}.{key} is a row in profiles.py with no name in "
+                "strings.json"
+            )
+
+    for platform in ("binary_sensor", "climate", "number", "select", "sensor",
+                     "switch"):
+        for key in _platform_translation_keys(platform):
             assert key in strings.get(platform, {}), (
                 f"{platform}.{key} has no name in strings.json"
             )
 
-    # These three are the new ones, and the two sensors have no device class
-    # to take an icon from, so one has to be given.
-    assert "water_pump" in strings["switch"]
-    for key in ("fresh_water_level", "grey_water_level"):
+    # The water sensors have no device class to take an icon from, so one has
+    # to be given; the same for the gas-bottle level.
+    for key in ("fresh_water_level", "grey_water_level", "gas_bottle_level"):
         assert key in strings["sensor"], f"sensor.{key} is unnamed"
-        assert key in icons["sensor"], f"sensor.{key} has neither icon nor device class"
+        assert key in icons["sensor"], (
+            f"sensor.{key} has neither icon nor device class"
+        )
 
     en = (SRC / "translations" / "en.json").read_text()
     assert en == (SRC / "strings.json").read_text(), (
@@ -340,21 +261,21 @@ def test_every_new_entity_is_named_and_iconed() -> None:
         assert not missing, f"translations/{path.name} is missing {sorted(missing)}"
 
 
-def test_optional_sensors_all_declare_what_proves_them() -> None:
-    """A description with no parameter behind it would never be created."""
-    text = (SRC / "sensor.py").read_text()
-    block = text[text.index("OPTIONAL_SENSORS"): text.index("async def async_setup_entry")]
-    keys = set(re.findall(r'key="([a-z_0-9]+)"', block))
-    mapped = set(re.findall(r'"([a-z_0-9]+)": "[A-Za-z0-9]+\.[A-Za-z0-9]+"', block))
-    assert keys == mapped, f"OPTIONAL_SENSOR_PARAM does not cover {keys ^ mapped}"
+def test_every_row_names_a_platform_that_is_set_up() -> None:
+    """A row on a platform nothing forwards to would never be created."""
+    forwarded = set(
+        re.findall(r"Platform\.([A-Z_]+),", (SRC / "__init__.py").read_text())
+    )
+    for (topic, param), rows in PROFILES.ROWS.items():
+        for row in rows:
+            assert row.platform.upper() in forwarded, (
+                f"{topic}.{param} is presented on {row.platform}, which "
+                "__init__.py does not forward to"
+            )
 
 
 def _main() -> None:
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-            print(f"ok  {name}")
-    print("water entities: all checks OK")
+    stubs.run_tests(globals(), "water entities")
 
 
 if __name__ == "__main__":

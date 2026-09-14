@@ -34,6 +34,9 @@
       "fresh_water_level": {
         "default": "mdi:water"
       },
+      "gas_bottle_level": {
+        "default": "mdi:gas-cylinder"
+      },
       "grey_water_level": {
         "default": "mdi:water-opacity"
       }

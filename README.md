@@ -108,6 +108,7 @@ and clears the issue on the next successful connect.
 | Water boost | `switch` | `WaterHeating.BoostMode`. Only where the heater reports it |
 | Faster water heating | `switch` | `WaterHeating.FasterHeatingMode`. Only where the heater reports it |
 | Faster water heating time | `sensor` | Diagnostic, seconds — the duration beside it. Only where the heater reports it |
+| Gas bottle level | `sensor` | % — one per Truma LevelControl sensor, on the sensor's own device |
 | Starter battery | `sensor` | V — only where something reports `VBat.Voltage` |
 | Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
 | Flame status | `sensor` | Diagnostic, disabled by default — the raw `System.FlameStatus` value |
@@ -127,6 +128,30 @@ the parameter, a gas/electric Combi has no diesel burner, most vans have no
 tanks and no electrical block — and an entity that is permanently unknown
 because the hardware does not exist looks exactly like one that is unknown
 because the integration is broken.
+
+### One device per device
+
+The panel is not a heater remote — it is a gateway onto a TIN bus of Truma
+appliances, a CI bus of vehicle electrics and third-party air conditioners, a
+CAN bus and Bluetooth gas sensors. Home Assistant is given that shape: the
+panel is the hub, and every bus device that has published something appears
+below it, with the entities built from what *it* reported.
+
+That is what makes two of a kind possible. A Combi and a Dometic roof air
+conditioner both publish `AirCirculation.FanLevel`, and two Truma LevelControl
+bottle sensors publish the whole of `GasBtl` — so each gets its own fan and its
+own level rather than the two overwriting each other (#9). A write follows the
+same rule: it goes to the device the entity belongs to, which is why cooling
+now reaches the roof unit that does it instead of the heater that silently
+dropped it (#10).
+
+Devices are named from what the bus says: the panel's own name for them
+(`Identify.Name`), plus the address instance where the panel is using more than
+the first of a class — "Truma LevelControl 3" and "Truma LevelControl 4". One
+that publishes no name is named after its address, because a device class is
+not a product: a Dometic air conditioner and a Schaudt electrical block share
+one. Bus addresses are reassigned when a device is re-paired, so a re-pairing
+gives new entities; the serial number is on each device page.
 
 Gas is deliberately a sensor and not a switch. `EnergySrc.GasLevel` is
 writable and the write does go through, but the heater writes it too: on a
@@ -172,12 +197,19 @@ panel writes on the vehicle and the temperature says what the name means. An
 automation or script that calls `select.select_option` with one of the old
 strings has to be updated; the values on the wire are unchanged.
 
+**0.9.0 moves every entity onto the bus device that reports it, and every
+entity id changes with it.** There is no migration: the integration is still in
+development, and a unique id that used to mean "this parameter, somewhere on
+this panel" cannot be mapped onto one that means "this parameter, on this
+device" without guessing which device. Old entities stay in the registry as
+unavailable until they are deleted from the device page, and history does not
+carry over. Automations and dashboards that name an entity have to be pointed
+at the new one.
+
 On a vehicle that already had the electric select or the diesel switch before
-they became conditional, Home Assistant keeps the old entity in its registry
-and shows it as unavailable. Deleting it once from the device page is the only
-cleanup; the integration does not remove entities by itself, because a
-parameter that has not been reported *yet* is not the same as hardware that
-does not exist.
+they became conditional, the same applies. The integration does not remove
+entities by itself, because a parameter that has not been reported *yet* is not
+the same as hardware that does not exist.
 
 Updates are pushed as the panel sends them (roughly 25 frames/minute), not
 polled. The tank levels are the exception. A tank sensor answers with the
@@ -309,17 +341,26 @@ To re-pair later, use **Reconfigure** on the device.
 ## Diagnostics
 
 The device page's ⋮ → **Download diagnostics** dumps the config entry, whether
-the last update succeeded, and the full decoded panel state — including
-`seen_devices`, every bus address the integration has heard from, which is the
-evidence for what is actually on a given vehicle's bus.
+the last update succeeded, and the whole bus — every address the integration
+has heard from, in hex, with everything that address published under it. That
+is the evidence for what is actually on a given vehicle's bus, and it is the
+form addresses are read and quoted in.
 
-The state also carries `param_meta`: what the panel says each parameter *is*,
-as opposed to what it currently reads — its range, whether it can be written,
-and for an enum the panel's own name for every value, with the ones this
-vehicle cannot produce marked. Truma documents none of the protocol, but the
-panel describes it in every frame, so a download answers "what does this value
-mean" without anyone having to watch their heater and write it down. The same
-descriptions are logged, once each, at debug level.
+Each device also carries its own `param_meta`: what it says each parameter
+*is*, as opposed to what it currently reads — its range, whether it can be
+written, and for an enum the panel's own name for every value, with the ones
+this vehicle cannot produce marked. Truma documents none of the protocol, but
+the panel describes it in every frame, so a download answers "what does this
+value mean" without anyone having to watch their heater and write it down. The
+same descriptions are logged, once each, at debug level.
+
+`contested_topics` names the topics more than one device publishes on that
+vehicle — usually none, which is why a single flat view of the bus looked
+correct for so long. `unattributed` holds anything that arrived without a usable
+source address; nothing reads it, and it should be empty.
+
+A download can be read back with the dump tool below, which prints the same bus
+device by device without Home Assistant in the way.
 
 The BLE address, the panel's name and the persisted app identity (`muid` /
 `uuid`) are redacted: the address is a private address that still pins the panel
@@ -340,6 +381,39 @@ itself carries nothing identifying.
 
 ## Development
 
+### Dumping the bus without Home Assistant
+
+`custom_components/truma_inetx/bus.py` is the protocol's own model of the
+panel's bus and imports no Home Assistant, so it can be run on its own — which
+is the only way to debug the protocol on the bench. `tools/dump_bus.py` is the
+launcher; it prints every device on the bus, everything each one publishes, and
+what each device says those parameters are.
+
+```bash
+./tools/dump_bus.py diagnostics.json        # read somebody's download back
+./tools/dump_bus.py --live --identity ~/homeassistant/.storage/truma_inetx_<entry id>
+```
+
+Reading a download needs nothing but the standard library. `--live` needs
+`bleak`, and it needs the app identity the panel is bonded to — a panel only
+talks to one it has been paired with, and Home Assistant stores that under
+`.storage/truma_inetx_<config entry id>`. Add `--name 'Truma iNetX-XXXXXX'` if
+more than one panel is in range, `--json` for machine-readable output, and
+`--debug` to log every frame.
+
+```
+0x0201  class 0x02 instance 1  Combi 6 E  serial 12345678  (31 parameters)
+    AirCirculation.FanLevel                      4   [0..10; perm 1]
+    AirHeating.Temp                              228
+    ...
+
+Topics with more than one publisher -- no flat reading of
+these can mean anything:
+    AirCirculation           0x0201, 0x0406
+```
+
+### Tests
+
 The checks in `tests/` are self-contained. They stub Home Assistant, bleak and
 dbus, so they need neither an HA install nor hardware, and each file is a
 script — run one directly, or all of them:
@@ -348,25 +422,31 @@ script — run one directly, or all of them:
 python3 tests/test_pairing_rotation.py            # pairing address rotation
 python3 tests/test_pairing_transport_dispatch.py  # bonding uses the transport it has
 python3 tests/test_device_from_bluez.py           # BLEDevice built from BlueZ's object
+python3 tests/test_transport_ack_order.py         # fragment reassembly and acknowledgements
 python3 tests/test_no_route_issue.py              # the "nothing can connect" repair
 python3 tests/test_water_entities.py              # water entities and write addressing
 python3 tests/test_energy_entities.py             # energy sources, batteries, raw flame value
+python3 tests/test_water_priority.py              # the two water-priority modes
+python3 tests/test_panel_declared_options.py      # offering what the device says exists
 ```
 
-The remaining five drive real code that imports a library, so they need it
-installed — `voluptuous` for the config flow's schema, `cbor2` for the four
-that reach the protocol module, whether to build real frames and parse them back
-or by way of the coordinator that imports it:
+`tests/stubs.py` holds the Home Assistant stand-ins they share; it is not a
+test and runs nothing on its own.
+
+The rest drive real code that imports a library, so they need it installed —
+`voluptuous` for the config flow's schema, `cbor2` for the four that reach the
+protocol module, whether to build real frames and parse them back or by way of
+the coordinator that imports it:
 
 ```bash
 pip install voluptuous
 python3 tests/test_panel2_discovery.py            # a renamed panel is still offered
 
 pip install cbor2==5.6.5
+python3 tests/test_device_params.py               # two devices under one topic stay apart
 python3 tests/test_param_discovery.py             # startup registration + discovery
 python3 tests/test_measure_request.py             # asking the tanks to measure
-python3 tests/test_param_meta.py                  # what the panel says a value means
-python3 tests/test_panel_declared_options.py      # offering what the panel says exists
+python3 tests/test_param_meta.py                  # what a device says a value means
 ```
 
 ## Credits and licensing
@@ -376,7 +456,7 @@ flow and all entity platforms — is original work in this repository and is
 licensed under **GPL-3.0** (see [LICENSE](LICENSE)).
 
 The wire protocol implementation in `custom_components/truma_inetx/truma/`
-(`protocol.py`, `state.py`, `const.py`) is **vendored from
+(`protocol.py`, `const.py`) is **vendored from
 [daaaaan/truma-inetx-ble](https://github.com/daaaaan/truma-inetx-ble)**, whose
 reverse-engineering of the iNet X protocol made this integration possible.
 That project publishes no licence, so its author retains all rights and the
@@ -384,13 +464,17 @@ GPL-3.0 above does **not** apply to those files. They are isolated in their own
 subpackage so the boundary stays visible; if upstream adds a licence and ships
 an installable package, that subpackage will be replaced by a dependency.
 
-`protocol.py` is vendored unchanged. `state.py` and `const.py` carry local
-additions on top of the vendored code: the fresh-water pump and the two tank
-levels, `seen_devices` and `topic_source` (which bus device reported a topic),
-the extra device seeds and topics that parameter discovery walks, and the
-measure-request constants. Those additions are original work in this
-repository, but they sit inside files whose base is not, so the licence
-position above governs the files as a whole.
+`protocol.py` is vendored unchanged. `const.py` carries local additions on top
+of the vendored code: the extra device seeds and topics that parameter
+discovery walks, and the measure-request constants. Those additions are
+original work in this repository, but they sit inside a file whose base is not,
+so the licence position above governs the file as a whole.
+
+`state.py` used to sit there too. It no longer exists: the model it held — one
+flat `Topic.Param` dict and a table of typed fields — assumed every topic has a
+single owner, which a bus does not. What replaced it is `bus.py`, written from
+the frames on the wire, so it is original work and sits outside the quarantine
+under GPL-3.0 with the rest.
 
 The integration icon is the Truma iNet X system mark, used descriptively to
 identify the device this integration talks to — see

@@ -9,10 +9,12 @@ from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import CONF_ADDRESS, EVENT_HOMEASSISTANT_STOP, Platform
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.loader import async_get_integration
 
 from .const import DOMAIN, LOGGER
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
+from .truma.const import DEV_PANEL
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -91,6 +93,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: TrumaConfigEntry) -> boo
     await coordinator.async_config_entry_first_refresh()
     await coordinator.async_start()
     entry.runtime_data = coordinator
+
+    # Register the panel up front rather than letting the first entity create
+    # it. The panel is the hub every other bus device hangs off, and a
+    # via_device pointing at a device that does not exist yet is dropped
+    # silently -- so a gas sensor that answers before the panel does would end
+    # up at the top level, permanently. It also means a bus that has not
+    # spoken yet is still visible as a device, which is the difference between
+    # "nothing has answered" and "the integration did nothing".
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        **coordinator.device_info(DEV_PANEL),
+    )
 
     async def _async_stop(_event: Event) -> None:
         """Close the BLE link before Home Assistant exits."""

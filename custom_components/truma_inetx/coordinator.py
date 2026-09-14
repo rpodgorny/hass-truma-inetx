@@ -1,9 +1,9 @@
 """Coordinator for the Truma iNet X (BLE) integration.
 
-Owns the shared :class:`TrumaState` and a background session that connects to
-the panel over HA's Bluetooth stack, runs the register/subscribe/identity/
-param-discovery startup, and feeds notifications into the state. Reconnects
-with backoff on drop.
+Owns the shared :class:`Bus` and a background session that connects to the
+panel over HA's Bluetooth stack, runs the register/subscribe/identity/
+param-discovery startup, and files every notification under the device that
+sent it. Reconnects with backoff on drop.
 """
 
 from __future__ import annotations
@@ -16,9 +16,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
+from . import session
 from .ble import TrumaBleClient, device_from_bluez
 from .bt import (
     ADDR_IDENTITY,
@@ -27,32 +29,18 @@ from .bt import (
     async_resolve_device,
     async_wait_until_heard,
 )
+from .bus import Bus
 from .const import (
     DOMAIN,
     ISSUE_NO_PROXY_ROUTE_LEGACY,
     ISSUE_NO_ROUTE,
     LOGGER,
+    MANUFACTURER,
+    MODEL,
     NO_ROUTE_MISSES_BEFORE_WARNING,
 )
-from .truma.const import (
-    CTRL_MBP,
-    DEV_APP_DEFAULT,
-    DEV_BROADCAST,
-    DEV_MSG_BROKER,
-    DEVICE_SEED,
-    MBP_PARAM_DISC,
-    MEASURE_REQUEST_PARAM,
-    MEASURE_REQUEST_TOPICS,
-    TOPIC_BATCHES,
-)
-from .truma.protocol import (
-    build_identity_frames,
-    build_register_frame,
-    build_subscribe_frame,
-    build_v3_frame,
-    build_write_frame,
-)
-from .truma.state import TrumaState
+from .truma.const import DEV_PANEL
+from .truma.protocol import build_write_frame
 
 type TrumaConfigEntry = ConfigEntry[TrumaCoordinator]
 
@@ -97,37 +85,19 @@ _POLL_MAX_DWELL = 40  # seconds
 _WRITE_CONNECT_TIMEOUT = 75  # seconds
 _STORAGE_VERSION = 1
 
-# Parameter discovery is sent to each bus device separately (see DEVICE_SEED),
-# so the number of frames is a dozen or two rather than two. Nothing is waited
-# for in between -- the replies come back as ordinary notifications and are
-# handled by _on_frame whenever they land -- so the gap only exists to avoid
-# filling the transport queue faster than the panel drains it.
-_PARAM_DISC_GAP = 0.15  # seconds
-# ...but do wait once after each round, long enough for the replies to arrive,
-# because the addresses they carry are what the next round is built from.
-_PARAM_DISC_SETTLE = 3  # seconds
-
 # How often to ask the on-demand sensors for a fresh measurement while the
-# link is held open (see MEASURE_REQUEST_TOPICS for why asking is needed at
-# all). A minute is what the reporter's own build used, which is the only
+# link is held open (see session.request_measurements for why asking is needed
+# at all). A minute is what the reporter's own build used, which is the only
 # cadence anyone has run against the hardware; it is also about as often as a
 # tank level can meaningfully change, and it costs two frames.
 #
 # In poll mode this is not used: every poll re-runs startup, which asks once,
 # so the reading is as fresh as the poll it came with.
 _MEASURE_INTERVAL = 60  # seconds
-# Same reasoning as _PARAM_DISC_GAP -- do not hand the transport a second
-# frame before it has drained the first.
-_MEASURE_GAP = 0.15  # seconds
-
-# How long to wait for the panel to answer registration with an address.
-# Measured on the van: a healthy panel answers in about a second, so this is
-# already generous -- it exists to cover a busy panel, not a dead link.
-_REGISTER_TIMEOUT = 20  # seconds
 
 
-class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
-    """Hold Truma state and run the live BLE session."""
+class TrumaCoordinator(DataUpdateCoordinator[Bus]):
+    """Hold the panel's bus and run the live BLE session."""
 
     config_entry: TrumaConfigEntry
 
@@ -156,7 +126,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         # Stable identity for entity/device unique IDs. The BLE address rotates
         # (resolvable private address), so it must NOT be used as identity.
         self.unique_id = entry.unique_id or address
-        self._state = TrumaState()
+        self._bus = Bus()
         self._client: TrumaBleClient | None = None
         self._identity: dict | None = None
         # Loop-clock timestamp of the last frame received; drives the stall
@@ -206,9 +176,9 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         self._connected_event = asyncio.Event()
         self._writes_pending = 0
 
-    async def _async_update_data(self) -> TrumaState:
-        """Return the current shared state (updated by BLE notifications)."""
-        return self._state
+    async def _async_update_data(self) -> Bus:
+        """Return the shared bus (updated by BLE notifications)."""
+        return self._bus
 
     def _async_note_no_route(self) -> None:
         """Warn the user when the panel is audible but nothing can connect.
@@ -565,6 +535,63 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         """
         return self._address_kind
 
+    def device_info(self, addr: int) -> DeviceInfo:
+        """The Home Assistant device an entity at a bus address belongs to.
+
+        One HA device per bus address that has published something, hanging
+        off the panel. That is what the panel is: a gateway onto a TIN bus of
+        Truma appliances, a CI bus of vehicle electrics and third-party air
+        conditioners, a CAN bus and Bluetooth gas sensors. Folding all of it
+        into a single device -- which is what this did, with the model
+        hard-coded to "iNet X (Combi)" -- meant a roof air conditioner's fan
+        and a Combi's fan were two entities on one device with nothing saying
+        which was which.
+
+        The panel itself is that hub rather than a device below it. It is the
+        thing this integration holds a Bluetooth link to, so giving it a
+        second HA device beside the config entry's own would list the same
+        appliance twice. DEV_PANEL is assumed to be the panel's address, as it
+        is everywhere else here; if some installation numbers it differently
+        the cost is one extra device, not a broken one.
+
+        Names come from what the bus says: the panel's own name for a device
+        under Identify.Name, plus its instance where the panel is using more
+        than the first of a class (two gas-bottle sensors are 0x0603 and
+        0x0604, and "Truma LevelControl" twice would be no better than the
+        flat reading that mixed them up). A device that publishes no name is
+        named by its address rather than by a class-to-product mapping that
+        cannot be verified -- a Dometic roof air conditioner and a Schaudt
+        electrical block share a device class.
+        """
+        if addr == DEV_PANEL:
+            panel = self._bus.devices.get(addr)
+            return DeviceInfo(
+                identifiers={(DOMAIN, self.unique_id)},
+                # The advertised BLE name, not the panel's Identify.Name:
+                # two panels in one Home Assistant would otherwise be two
+                # devices with the same name.
+                name=self.unique_id,
+                manufacturer=MANUFACTURER,
+                model=(panel.name if panel else None) or MODEL,
+                serial_number=panel.serial if panel else None,
+            )
+        device = self._bus.device(addr)
+        base = device.name
+        if base is None:
+            # Already unique, and already says where it is.
+            name = f"Bus device 0x{addr:04X}"
+        elif device.instance <= 1:
+            name = base
+        else:
+            name = f"{base} {device.instance}"
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.unique_id}_{addr:04X}")},
+            name=name,
+            model=device.name,
+            serial_number=device.serial,
+            via_device=(DOMAIN, self.unique_id),
+        )
+
     @property
     def poll_interval(self) -> int:
         """Seconds between polls, or 0 to hold the connection open."""
@@ -590,9 +617,9 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         # touch with the panel", not "a link is open this instant". The link
         # coming and going every interval is an implementation detail and
         # should not flap the connectivity sensor or blank every entity.
-        self._state.connected = True
-        self._state.assigned_addr = client.assigned_addr
-        self.async_set_updated_data(self._state)
+        self._bus.connected = True
+        self._bus.assigned_addr = client.assigned_addr
+        self.async_set_updated_data(self._bus)
         LOGGER.info("Truma %s connected and subscribed", self.unique_id)
         self._connected_event.set()
 
@@ -648,279 +675,46 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         return True
 
     async def _run_startup(self, client: TrumaBleClient) -> None:
-        """Register, subscribe to all topics, send identity, discover params.
+        """Run the session's startup sequence on a connected client.
 
-        Raises if the panel never assigns us an address. That is the one point
-        in startup where the link proves it actually carries traffic, and
-        everything after it depends on the answer.
+        The sequence itself lives in ``session.py``, which imports no Home
+        Assistant, so that it can also be driven from a terminal against real
+        hardware (``tools/dump_bus.py --live``).
+        What is left here is the translation into Home Assistant's own
+        exception, so that the session loop keeps seeing one kind of failure.
         """
-        # 1. Register and wait for an assigned address.
-        await client.send(build_register_frame(client.assigned_addr))
-        for _ in range(_REGISTER_TIMEOUT):
-            await asyncio.sleep(1)
-            if client.assigned_addr != DEV_APP_DEFAULT:
-                break
-            if not client.connected:
-                # The transport gave up on this session under us (see
-                # TrumaBleClient.send). No address can arrive over a link that
-                # is already gone, so hand it back now rather than sitting out
-                # the rest of the timeout holding the adapter's slot.
-                message = (
-                    f"Truma {self.unique_id}: the link ended during "
-                    "registration; the session is being dropped and retried"
-                )
-                LOGGER.warning(message)
-                raise HomeAssistantError(message)
-        else:
-            # Every frame from here on would be sent from the default app
-            # address, which the message broker does not route, so carrying on
-            # can only produce a session that looks connected and delivers
-            # nothing. Measured on the van (2026-09-07 22:09): the link came
-            # up, notifications subscribed, and BlueZ then lost the ATT
-            # channel -- every write failed with "Service Discovery has not
-            # been performed yet", the panel never answered registration, and
-            # startup ran to completion anyway. Entities sat blank and
-            # "connected" for the full 90 s the stall watchdog takes, and 18
-            # parameter-discovery frames were spent on a dead link.
-            #
-            # Failing here instead hands the link straight back, which also
-            # frees the adapter's connection slot for the next attempt.
-            #
-            # Warn rather than leave it to the session-ended debug line: a
-            # link that connects and then carries nothing is the failure
-            # people report as "it just stopped working", and it is invisible
-            # without this.
-            message = (
-                f"Truma {self.unique_id}: the panel assigned us no address "
-                f"within {_REGISTER_TIMEOUT}s; the link is up but carries "
-                "nothing, so the session is being dropped and retried"
+        try:
+            await session.run_startup(
+                client, self._bus, self._identity, self.unique_id, self.hass.loop.time
             )
-            LOGGER.warning(message)
-            raise HomeAssistantError(message)
-
-        # 2. Subscribe to all topic batches.
-        for batch in TOPIC_BATCHES:
-            await client.send(build_subscribe_frame(client.assigned_addr, batch))
-            await asyncio.sleep(0.5)
-        await asyncio.sleep(3)
-
-        # 3. Send the identity sequence.
-        for frame in build_identity_frames(client.assigned_addr, self._identity):
-            await client.send(frame)
-            await asyncio.sleep(0.5)
-
-        # 4. Request current values from every device on the bus.
-        await self._discover_params(client)
-
-        # 5. ...and for the sensors that only measure when asked, ask. Step 4
-        # returns their last measurement, which on a tank can be hours old, so
-        # without this the first reading of every session is stale — and in
-        # poll mode, where the link is not held, it would be the only reading.
-        await self._request_measurements(client)
-
-    async def _discover_params(self, client: TrumaBleClient) -> None:
-        """Ask each bus device for its current parameter values, one by one.
-
-        Asking only the heater and the panel (what this used to do) leaves
-        every other device empty until it happens to push a change of its own,
-        so tank levels, gas-bottle levels and the mains/battery readings are
-        blank after every restart while the panel shows them on its screen.
-        A broadcast does not help: nothing but the heater and the panel answers
-        one.
-
-        The address list is the seed unioned with whoever has already spoken
-        to us, because the seed cannot be authoritative -- devices are
-        renumbered when they are re-paired. The replies to the first round
-        carry their senders' addresses, so a second round picks up anything
-        the seed missed. Each address is asked once: a device that answers
-        must not be asked again, or every startup pays for the list twice.
-        """
-        # Open with one broadcast. Only the heater and the panel answer it,
-        # and the directed rounds below cover both -- but it costs a single
-        # frame, and an answer from anything else lands its address in
-        # seen_devices, which is how a device outside every seeded class gets
-        # asked directly in the second round.
-        await client.send(
-            build_v3_frame(
-                DEV_BROADCAST, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
-            ),
-            probe=True,
-        )
-        await asyncio.sleep(_PARAM_DISC_GAP)
-
-        asked: set[int] = set()
-        acked: set[int] = set()
-        started = self.hass.loop.time()
-        for _ in range(2):
-            # Measured on the van: the panel sends frames whose src is the
-            # address it assigned *us*, so without the last term we ask
-            # ourselves for parameters. It is answered like any other address
-            # and costs only a frame, which is why it would never be noticed.
-            targets = (
-                (DEVICE_SEED | self._state.seen_devices)
-                - asked
-                - {client.assigned_addr}
-            )
-            if not targets:
-                break
-            for dev_addr in sorted(targets):
-                if await client.send(
-                    build_v3_frame(
-                        dev_addr, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
-                    ),
-                    probe=True,
-                ):
-                    acked.add(dev_addr)
-                asked.add(dev_addr)
-                await asyncio.sleep(_PARAM_DISC_GAP)
-            await asyncio.sleep(_PARAM_DISC_SETTLE)
-
-        # An address with nothing behind it should cost one frame -- but if the
-        # panel withholds the transport acknowledgement for those, each one
-        # costs a timeout instead, and the seed becomes a minute of dead time
-        # per connect. Report both numbers so that is measurable from a log
-        # rather than guessed at.
-        # Name the addresses that are not in the seed separately: those are the
-        # ones this installation taught us, and seeing them is how a bus the
-        # seed does not describe gets reported without asking for a capture.
-        LOGGER.debug(
-            "Truma %s: parameter discovery asked %d device(s), %d acknowledged, "
-            "in %.1fs (learned here: %s) (no ack: %s)",
-            self.unique_id,
-            len(asked),
-            len(acked),
-            self.hass.loop.time() - started,
-            ", ".join(f"0x{a:04X}" for a in sorted(asked - DEVICE_SEED)) or "none",
-            ", ".join(f"0x{a:04X}" for a in sorted(asked - acked)) or "none",
-        )
+        except session.StartupFailed as exc:
+            raise HomeAssistantError(str(exc)) from exc
 
     async def _request_measurements(self, client: TrumaBleClient) -> None:
-        """Ask the on-demand sensors to take a fresh reading.
-
-        A tank sensor reports the level it last measured and nothing else, so
-        its value only moves when someone asks it to measure — which the panel
-        does when its water screen is opened, and nothing else on the bus does.
-        That is the whole of issue #4: the sensor was right, it was answering a
-        question asked hours ago.
-
-        A topic is asked only once its own parameter has been reported, which
-        is the same evidence the entities are created on (see
-        ``async_add_when_reported``). Most vehicles have no tanks at all, and
-        every one of them subscribes to these topics regardless, so asking
-        unconditionally would put two writes a minute on every bus to answer a
-        question nobody had.
-
-        The destination is whoever reported the topic. The tanks hang off an
-        electrical block whose address differs per vehicle and is renumbered
-        when it is re-paired, so there is no address to hard-code — 0x0405 was
-        this reporter's, not anybody's.
-        """
-        for topic, evidence in MEASURE_REQUEST_TOPICS.items():
-            if f"{topic}.{evidence}" not in self._state.raw_params:
-                continue
-            dest = self._state.get_command_dest(topic)
-            LOGGER.debug(
-                "Truma %s: asking 0x%04X for a fresh %s measurement",
-                self.unique_id,
-                dest,
-                topic,
-            )
-            await client.send(
-                build_write_frame(
-                    client.assigned_addr, dest, topic, MEASURE_REQUEST_PARAM, 1
-                )
-            )
-            await asyncio.sleep(_MEASURE_GAP)
+        """Ask the on-demand sensors for a fresh reading; see session.py."""
+        await session.request_measurements(client, self._bus, self.unique_id)
 
     @callback
     def _on_frame(self, parsed: dict) -> None:
-        """Handle a decoded V3 frame and update state."""
+        """Handle a decoded V3 frame and update state.
+
+        The decoding itself is in ``session.handle_frame``, which imports no
+        Home Assistant, so the same frames can be filed into a bus from a
+        terminal. What is left here is the two things only Home Assistant
+        cares about: the stall watchdog, and telling the entities.
+        """
         # Any frame proves the link is alive; feed the stall watchdog.
         self._last_frame = self.hass.loop.time()
 
-        # ...and proves its sender exists at that address, which is how
-        # parameter discovery reaches devices no seed could have predicted.
-        # Neither pseudo-address is a device, and nor are we: the panel puts
-        # our own assigned address in src on some frames.
-        src = parsed.get("src")
-        if isinstance(src, int) and src not in (
-            DEV_BROADCAST,
-            DEV_MSG_BROKER,
-            self._state.assigned_addr,
-        ):
-            self._state.seen_devices.add(src)
-
-        control = parsed.get("control_raw")
-        sub_type = parsed.get("sub_type")
-        cbor = parsed.get("cbor")
-        if not isinstance(cbor, dict):
-            return
-
-        # Registration response -> assigned address.
-        if control == 0x01 and sub_type == 0x02:
-            addr = cbor.get("addr")
-            if addr and self._client is not None:
-                self._client.assigned_addr = addr
-                self._state.assigned_addr = addr
-            return
-
-        # Info message -> single parameter update.
-        if control == 0x03 and sub_type == 0x00:
-            tn, pn, v = cbor.get("tn"), cbor.get("pn"), cbor.get("v")
-            if tn and pn:
-                self._learn_param(tn, pn, cbor, parsed.get("src"))
-            if tn and pn and v is not None:
-                self._state.update(tn, pn, v, parsed.get("src"))
-                self.async_set_updated_data(self._state)
-            return
-
-        # Parameter-discovery response -> nested current values.
-        if control == 0x03 and sub_type == 0x84:
-            for topic in cbor.get("topics", []) or []:
-                if not isinstance(topic, dict):
-                    continue
-                tn = topic.get("tn", "")
-                for param in topic.get("parameters", []) or []:
-                    if not isinstance(param, dict):
-                        continue
-                    pn, v = param.get("pn"), param.get("v")
-                    if tn and pn:
-                        self._learn_param(tn, pn, param, parsed.get("src"))
-                    if tn and pn and v is not None:
-                        self._state.update(tn, pn, v, parsed.get("src"))
-            self.async_set_updated_data(self._state)
-            return
-
-    def _learn_param(
-        self, topic: str, param: str, entry: dict, src: int | None = None
-    ) -> None:
-        """Keep the panel's description of a parameter, and log it once.
-
-        The panel names its own enum values (see TrumaState.learn_param), so a
-        question like issue #15 -- what does System.FlameStatus == 2 mean on a
-        Combi 6 E, when the integration models it as on/off -- is answered by a
-        debug log or a diagnostics download rather than by asking somebody to
-        watch their panel while their heater ignites.
-
-        Logged only when the description changes, which in practice means once
-        per parameter per installation: the state object outlives a reconnect,
-        and a panel describes a parameter the same way every time.
-        """
-        if self._state.learn_param(topic, param, entry, src):
-            LOGGER.debug(
-                "Truma %s: panel describes %s.%s as %s",
-                self.unique_id,
-                topic,
-                param,
-                self._state.param_meta.get(f"{topic}.{param}"),
-            )
+        if session.handle_frame(self._bus, parsed, self._client, self.unique_id):
+            self.async_set_updated_data(self._bus)
 
     @callback
     def _mark_disconnected(self) -> None:
         """Flag the link as down and notify entities."""
-        if self._state.connected:
-            self._state.connected = False
-            self.async_set_updated_data(self._state)
+        if self._bus.connected:
+            self._bus.connected = False
+            self.async_set_updated_data(self._bus)
 
     async def _client_for_write(self) -> TrumaBleClient:
         """A connected client to write through, waking a poll if need be.
@@ -952,13 +746,23 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
             raise HomeAssistantError("Truma panel is not connected")
         return client
 
-    async def async_write(self, topic: str, param: str, value: int) -> None:
-        """Validate and send a parameter write to the panel/heater.
+    async def async_write(
+        self, addr: int, topic: str, param: str, value: int
+    ) -> None:
+        """Validate and send a parameter write to the device that owns it.
 
-        The panel confirms by pushing an updated value, which flows back through
-        the normal notification path and updates the entity.
+        ``addr`` is the bus address of the entity's own device, which is where
+        the write goes -- the sole exception being the handful of topics the
+        panel relays for the bus (see ``COMMAND_DEST``). Addressing a write to
+        a device named in the source used to be the bug class of #10: a write
+        of AirCooling.TgtTemp to the Combi was acknowledged by the transport
+        and then silently dropped, because on that vehicle the thing that
+        cools is a roof unit at its own address.
+
+        The device confirms by pushing an updated value, which flows back
+        through the normal notification path and updates the entity.
         """
-        ok, msg = self._state.validate_write(topic, param, value)
+        ok, msg = self._bus.validate_write(addr, topic, param, value)
         if not ok:
             raise HomeAssistantError(f"Invalid Truma command: {msg}")
 
@@ -969,7 +773,7 @@ class TrumaCoordinator(DataUpdateCoordinator[TrumaState]):
         try:
             client = await self._client_for_write()
 
-            dest = self._state.get_command_dest(topic)
+            dest = self._bus.command_dest(addr, topic)
             frame = build_write_frame(client.assigned_addr, dest, topic, param, value)
             LOGGER.debug(
                 "Truma write %s.%s = %s -> 0x%04X", topic, param, value, dest

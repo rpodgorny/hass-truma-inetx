@@ -4,88 +4,170 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from homeassistant.const import Platform
 from homeassistant.core import callback
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, MODEL
+from .bus import Bus, Device
 from .coordinator import TrumaCoordinator
-from .truma.state import TrumaState
+from .profiles import Row, rows_for
 
 
 class TrumaEntity(CoordinatorEntity[TrumaCoordinator]):
-    """Common base tying entities to the coordinator and the device registry."""
+    """Common base tying an entity to one device on the panel's bus."""
 
     _attr_has_entity_name = True
     # When False the entity stays available even while the BLE link is down
     # (used by the connectivity sensor, which reports that link state itself).
     _gate_on_connected = True
 
-    def __init__(self, coordinator: TrumaCoordinator, key: str) -> None:
-        """Initialize the base entity."""
+    def __init__(self, coordinator: TrumaCoordinator, addr: int, key: str) -> None:
+        """Initialize an entity belonging to the device at ``addr``."""
         super().__init__(coordinator)
-        # Identity is the stable device name, never the rotating BLE address.
-        self._attr_unique_id = f"{coordinator.unique_id}_{key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, coordinator.unique_id)},
-            name=coordinator.unique_id,
-            manufacturer=MANUFACTURER,
-            model=MODEL,
-        )
+        self._addr = addr
+        # The bus address, not the device's serial number.
+        #
+        # The serial would survive a re-pairing, which renumbers addresses, and
+        # that is the argument for it. But it is not always there when an
+        # entity is created: a device that first speaks through a plain change
+        # notification rather than through a discovery answer has published one
+        # parameter and no Identify, so its identity would be the address that
+        # time and the serial the next -- and a unique_id that differs between
+        # restarts orphans the entity and takes its history with it. A restart
+        # happens daily; a re-pairing is a deliberate act, and the serial is on
+        # the device page either way.
+        self._attr_unique_id = f"{coordinator.unique_id}_{addr:04X}_{key}"
+        self._attr_device_info = coordinator.device_info(addr)
 
     @property
-    def data(self) -> TrumaState:
-        """Shortcut to the current Truma state."""
+    def bus(self) -> Bus:
+        """Shortcut to the current bus state."""
         return self.coordinator.data
+
+    @property
+    def device(self) -> Device:
+        """The bus device this entity belongs to."""
+        return self.bus.device(self._addr)
 
     @property
     def available(self) -> bool:
         """Entity is available only while the BLE link reports connected."""
         if not self._gate_on_connected:
             return super().available
-        return super().available and self.coordinator.data.connected
+        return super().available and self.bus.connected
+
+
+class TrumaParamEntity(TrumaEntity):
+    """An entity built from one presentation row for one bus parameter."""
+
+    def __init__(
+        self,
+        coordinator: TrumaCoordinator,
+        addr: int,
+        topic: str,
+        param: str,
+        row: Row,
+    ) -> None:
+        """Initialize from the row the parameter is presented as."""
+        super().__init__(coordinator, addr, f"{topic}.{param}_{row.translation_key}")
+        self._topic = topic
+        self._param = param
+        self.row = row
+        self._attr_translation_key = row.translation_key
+        self._attr_entity_category = row.entity_category
+        self._attr_entity_registry_enabled_default = row.enabled_default
+
+    @property
+    def value(self) -> object:
+        """The raw wire value this device last published for the parameter."""
+        return self.device.get(self._topic, self._param)
+
+    async def async_write(self, param: str, value: int) -> None:
+        """Write a parameter of this entity's own topic, to its own device."""
+        await self.coordinator.async_write(self._addr, self._topic, param, value)
 
 
 @callback
-def async_add_when_reported(
+def async_add_rows(
     coordinator: TrumaCoordinator,
     async_add_entities: Callable[[list[Entity]], None],
-    pending: dict[str, Callable[[], Entity]],
+    platform: Platform,
+    build: Callable[[int, str, str, Row], Entity],
 ) -> None:
-    """Create each entity the first time its parameter is reported.
+    """Create an entity for every device × parameter the table has a row for.
 
-    Vehicles differ. A Combi and a panel are always there, but fresh and grey
-    water tanks, a pump, gas-bottle sensors and a roof air conditioner are
-    each present on some installations and absent on most. Creating their
-    entities up front would give everyone else a row of permanently unknown
-    values, and a value that is unknown because the hardware does not exist
-    looks exactly like one that is unknown because the integration is broken.
+    Vehicles differ, and so do buses. A Combi and a panel are always there,
+    but fresh and grey water tanks, a pump, gas-bottle sensors, an electrical
+    block and a roof air conditioner are each present on some installations
+    and absent on most. Creating their entities up front would give everyone
+    else a row of permanently unknown values, and a value that is unknown
+    because the hardware does not exist looks exactly like one that is unknown
+    because the integration is broken.
 
-    So the parameter arriving *is* the evidence the hardware exists. Since
-    startup now asks every device on the bus for its values, that evidence
-    lands within seconds of connecting rather than whenever the tank next
-    happens to move.
+    So the parameter arriving *is* the evidence the hardware exists -- and
+    which device published it is the evidence of where it lives. Since startup
+    asks every device on the bus for its values, that evidence lands within
+    seconds of connecting rather than whenever the tank next happens to move.
 
-    ``pending`` maps a ``Topic.Param`` key to a factory for the entity it
-    justifies. Entities are added once and never removed: hardware that has
-    answered once but is quiet now is still hardware, and deleting the entity
-    would take its history with it.
+    Entities are added once and never removed: hardware that has answered once
+    but is quiet now is still hardware, and deleting the entity would take its
+    history with it. A device that appears later simply gets its entities
+    then, which is how a battery-powered gas sensor that takes minutes to wake
+    up is handled without waiting for it at startup.
     """
+    made: set[tuple[int, str, str, str]] = set()
 
     @callback
     def _check() -> None:
-        if not pending:
-            return
-        seen = coordinator.data.raw_params
-        ready = [key for key in pending if key in seen]
-        if not ready:
-            return
-        async_add_entities([pending.pop(key)() for key in ready])
+        new: list[Entity] = []
+        for addr, device in list(coordinator.data.devices.items()):
+            for key in list(device.params):
+                topic, _, param = key.partition(".")
+                for row in rows_for(topic, param, platform):
+                    ident = (addr, topic, param, row.translation_key)
+                    if ident in made:
+                        continue
+                    made.add(ident)
+                    new.append(build(addr, topic, param, row))
+        if new:
+            async_add_entities(new)
 
     # Data may already be in hand -- a reload of the config entry re-runs
     # platform setup against a coordinator that is already connected.
     _check()
-    if pending:
-        unsub = coordinator.async_add_listener(_check)
-        coordinator.config_entry.async_on_unload(unsub)
+    unsub = coordinator.async_add_listener(_check)
+    coordinator.config_entry.async_on_unload(unsub)
+
+
+@callback
+def async_add_per_device(
+    coordinator: TrumaCoordinator,
+    async_add_entities: Callable[[list[Entity]], None],
+    topic: str,
+    param: str,
+    build: Callable[[int], Entity],
+) -> None:
+    """Create one entity per device that publishes a given parameter.
+
+    For the entities the table cannot describe because they are not one
+    parameter: the climate entity is a mode, a setpoint, a reading and a fan
+    speed at once, and which device owns it is still answered the same way --
+    by which one publishes its defining parameter.
+    """
+    made: set[int] = set()
+
+    @callback
+    def _check() -> None:
+        new: list[Entity] = []
+        for addr, device in list(coordinator.data.devices.items()):
+            if addr in made or not device.reports(topic, param):
+                continue
+            made.add(addr)
+            new.append(build(addr))
+        if new:
+            async_add_entities(new)
+
+    _check()
+    unsub = coordinator.async_add_listener(_check)
+    coordinator.config_entry.async_on_unload(unsub)

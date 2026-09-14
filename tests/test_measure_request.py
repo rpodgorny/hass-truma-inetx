@@ -32,13 +32,13 @@ Run: ``python3 tests/test_measure_request.py`` (needs ``cbor2``).
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import sys
 import types
 from itertools import pairwise
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "custom_components" / "truma_inetx"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import stubs  # noqa: E402
 
 # The electrical block that owns the tanks on the reporting vehicle. Named
 # here only to prove that nothing in the source needs to name it -- which is
@@ -49,63 +49,14 @@ PANEL = 0x0101
 APP_ADDR = 0x0501
 
 
-def _mod(name: str, **attrs):
-    module = types.ModuleType(name)
-    module.__dict__.update(attrs)
-    sys.modules[name] = module
-    return module
-
-
-def _load():
-    """Import the real coordinator + truma protocol with externals stubbed."""
-    _mod("homeassistant", __path__=[])
-    _mod("homeassistant.core", HomeAssistant=object, callback=lambda f: f)
-    _mod("homeassistant.config_entries", ConfigEntry=dict)
-    _mod("homeassistant.exceptions", HomeAssistantError=RuntimeError)
-    _mod("homeassistant.helpers", __path__=[], issue_registry=types.SimpleNamespace(
-        async_create_issue=lambda *a, **kw: None,
-        async_delete_issue=lambda *a, **kw: None,
-        IssueSeverity=types.SimpleNamespace(WARNING="warning"),
-    ))
-    _mod("homeassistant.helpers.storage", Store=object)
-    _mod("bleak_retry_connector", BleakClientWithServiceCache=object,
-         establish_connection=None)
-
-    class _Coordinator:
-        """DataUpdateCoordinator stand-in that tolerates [TrumaState]."""
-
-        def __class_getitem__(cls, _item):
-            return cls
-
-    _mod("homeassistant.helpers.update_coordinator", DataUpdateCoordinator=_Coordinator)
-
-    _mod("truma_pkg", __path__=[str(SRC)])
-    _mod("truma_pkg.truma", __path__=[str(SRC / "truma")])
-    _mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None)
-    _mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
-         async_resolve_device=None, async_wait_until_heard=None,
-         ADDR_IDENTITY="identity", ADDR_RPA="rpa",
-         address_kind=lambda _name, _address: "rpa")
-
-    def _real(name: str, package: str = "truma_pkg", path: Path = SRC):
-        spec = importlib.util.spec_from_file_location(
-            f"{package}.{name}", path / f"{name}.py"
-        )
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[f"{package}.{name}"] = module
-        spec.loader.exec_module(module)
-        return module
-
-    truma_const = _real("const", "truma_pkg.truma", SRC / "truma")
-    protocol = _real("protocol", "truma_pkg.truma", SRC / "truma")
-    state = _real("state", "truma_pkg.truma", SRC / "truma")
-    _real("const")
-    coordinator = _real("coordinator")
-    return truma_const, protocol, state, coordinator
-
-
-TC, PROTO, STATE, COORD = _load()
+stubs.install_homeassistant()
+stubs.stub_transport()
+TC = stubs.load_truma("const")
+PROTO = stubs.load_truma("protocol")
+BUS = stubs.load("bus")
+stubs.load("const")
+SESSION = stubs.load("session")
+COORD = stubs.load("coordinator")
 
 
 class _Clock:
@@ -206,12 +157,13 @@ class _Coord:
 
     unique_id = "Truma iNetX-FFB4D1"
     poll_interval = 0
+    _client = None
 
     def __init__(self, clock: _Clock) -> None:
         self.hass = types.SimpleNamespace(
             loop=types.SimpleNamespace(time=clock.time)
         )
-        self._state = STATE.TrumaState()
+        self._bus = BUS.Bus()
         self._last_frame = 0.0
         self._stop = False
         # A session that reaches startup records which address kind carried it;
@@ -233,26 +185,25 @@ class _Coord:
     _request_measurements = COORD.TrumaCoordinator._request_measurements
     _finish_startup = COORD.TrumaCoordinator._finish_startup
     _on_frame = COORD.TrumaCoordinator._on_frame
-    # _on_frame keeps whatever the panel says a parameter is, beside its
-    # value; nothing here reads it, but the frames still travel through it.
-    _learn_param = COORD.TrumaCoordinator._learn_param
 
 
 class _StartupCoord(_Coord):
     """As above, but running the real startup sequence end to end."""
 
     _run_startup = COORD.TrumaCoordinator._run_startup
-    _discover_params = COORD.TrumaCoordinator._discover_params
 
 
 def _run(coro, clock: _Clock):
     """Run a coroutine with sleeps that advance the virtual clock."""
-    real = getattr(COORD, "asyncio")
-    setattr(COORD, "asyncio", _FastForward(clock))
+    shim = _FastForward(clock)
+    real = {mod: getattr(mod, "asyncio") for mod in (COORD, SESSION)}
+    for mod in real:
+        setattr(mod, "asyncio", shim)
     try:
         asyncio.run(coro)
     finally:
-        setattr(COORD, "asyncio", real)
+        for mod, value in real.items():
+            setattr(mod, "asyncio", value)
 
 
 def _requests(client: _Client) -> list[tuple[float, int, str]]:
@@ -272,8 +223,8 @@ def _requests(client: _Client) -> list[tuple[float, int, str]]:
 
 def _seen_tanks(coord: _Coord, src: int = BOARD, level: int = 25) -> None:
     """Report a level for both tanks, as parameter discovery would."""
-    coord._state.update("FreshWater", "Level", level, src)
-    coord._state.update("GreyWater", "Level", level, src)
+    coord._bus.update("FreshWater", "Level", level, src)
+    coord._bus.update("GreyWater", "Level", level, src)
 
 
 def test_both_tanks_are_asked_and_addressed_to_their_owner() -> None:
@@ -298,21 +249,46 @@ def test_both_tanks_are_asked_and_addressed_to_their_owner() -> None:
             )
 
 
-def test_a_topic_falls_back_to_the_panel_when_nobody_owns_it() -> None:
-    """The broker is not a device, so it must not become a destination."""
+def test_a_level_nobody_claims_is_asked_of_nobody() -> None:
+    """The broker is not a device, so it cannot become a destination.
+
+    This used to fall back to the panel, on the grounds that the level itself
+    proved the hardware existed. It does not prove *where* it is, and the
+    panel is no more the owner of a tank than the heater was the owner of the
+    roof air conditioner it was being sent cooling commands (#10). Every real
+    frame carries a source address; a value that carries none is parked where
+    a diagnostics download shows it and nothing acts on it.
+    """
     clock = _Clock()
     coord = _Coord(clock)
     client = _Client(coord, clock)
-    # A level relayed with no usable source: the level is proof the hardware
-    # exists, but nothing has claimed the topic.
     _seen_tanks(coord, src=TC.DEV_MSG_BROKER)
 
     _run(coord._request_measurements(client), clock)
 
-    asked = _requests(client)
-    assert len(asked) == 2, "a reported tank must still be asked"
-    for _when, dest, topic in asked:
-        assert dest == PANEL, f"{topic} asked at 0x{dest:04X}, not the panel"
+    assert _requests(client) == [], "asked an address nothing is behind"
+    assert "FreshWater.Level" in coord._bus.unattributed
+
+
+def test_two_sensors_are_both_asked_rather_than_whoever_spoke_last() -> None:
+    """A bus can carry two of anything, and the panel numbers them apart.
+
+    The destination used to be "whichever device reported the topic last", so
+    on a vehicle with two tank sensors one of them was never asked and its
+    reading stayed as old as the last time somebody opened the panel's water
+    screen.
+    """
+    clock = _Clock()
+    coord = _Coord(clock)
+    client = _Client(coord, clock)
+    coord._bus.update("FreshWater", "Level", 25, BOARD)
+    coord._bus.update("FreshWater", "Level", 75, RENUMBERED)
+
+    _run(coord._request_measurements(client), clock)
+
+    asked = {dest for _when, dest, topic in _requests(client)
+             if topic == "FreshWater"}
+    assert asked == {BOARD, RENUMBERED}, asked
 
 
 def test_a_vehicle_with_no_tanks_is_never_asked() -> None:
@@ -350,7 +326,7 @@ def test_an_emptied_tank_actually_moves() -> None:
     coord = _Coord(clock)
     client = _Client(coord, clock, disconnect_at=70.0)
     _seen_tanks(coord)
-    assert coord._state.grey_water_level == 25
+    assert coord._bus.device(BOARD).get("GreyWater", "Level") == 25
 
     # The tank is emptied by hand. Nothing tells the sensor; it still holds
     # the measurement it took when the panel last asked.
@@ -358,7 +334,7 @@ def test_an_emptied_tank_actually_moves() -> None:
 
     _run(coord._finish_startup(client), clock)
 
-    assert coord._state.grey_water_level == 0, (
+    assert coord._bus.device(BOARD).get("GreyWater", "Level") == 0, (
         "the tank was emptied and the sensor never noticed"
     )
 

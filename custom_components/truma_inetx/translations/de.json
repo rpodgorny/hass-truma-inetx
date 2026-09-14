@@ -82,6 +82,9 @@
       "fresh_water_level": {
         "name": "Frischwasser"
       },
+      "gas_bottle_level": {
+        "name": "Gasflaschenfüllstand"
+      },
       "grey_water_level": {
         "name": "Grauwasser"
       },

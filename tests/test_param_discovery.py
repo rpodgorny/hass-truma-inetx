@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Offline checks for the startup sequence: registration, then discovery.
 
-No hardware, no Home Assistant install: the HA/bleak imports are stubbed so the
-real ``coordinator._run_startup``, ``coordinator._discover_params`` and
+No hardware, no Home Assistant install: the HA imports are stubbed so the
+real ``session.run_startup``, ``session.discover_params`` and
 ``coordinator._on_frame`` run, and the frames they emit are parsed back with
 the real ``truma.protocol``.
 
@@ -36,12 +36,12 @@ Run: ``python3 tests/test_param_discovery.py`` (needs ``cbor2``).
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import sys
 import types
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "custom_components" / "truma_inetx"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import stubs  # noqa: E402
 
 # Addresses measured on the reporter's vehicle. They are what the seed has to
 # cover; the point of naming them here is that a seed narrowed back to the
@@ -57,66 +57,16 @@ UNSEEDED = 0x0801
 APP_ADDR = 0x0501
 
 
-def _mod(name: str, **attrs):
-    module = types.ModuleType(name)
-    module.__dict__.update(attrs)
-    sys.modules[name] = module
-    return module
-
-
-def _load():
-    """Import the real coordinator + truma protocol with externals stubbed."""
-    _mod("homeassistant", __path__=[])
-    _mod("homeassistant.core", HomeAssistant=object, callback=lambda f: f)
-    _mod("homeassistant.config_entries", ConfigEntry=dict)
-    _mod("homeassistant.exceptions", HomeAssistantError=RuntimeError)
-    _mod("homeassistant.helpers", __path__=[], issue_registry=types.SimpleNamespace(
-        async_create_issue=lambda *a, **kw: None,
-        async_delete_issue=lambda *a, **kw: None,
-        IssueSeverity=types.SimpleNamespace(WARNING="warning"),
-    ))
-    _mod("homeassistant.helpers.storage", Store=object)
-    _mod("bleak_retry_connector", BleakClientWithServiceCache=object,
-         establish_connection=None)
-
-    class _Coordinator:
-        """DataUpdateCoordinator stand-in that tolerates [TrumaState]."""
-
-        def __class_getitem__(cls, _item):
-            return cls
-
-    _mod("homeassistant.helpers.update_coordinator", DataUpdateCoordinator=_Coordinator)
-
-    _mod("truma_pkg", __path__=[str(SRC)])
-    _mod("truma_pkg.truma", __path__=[str(SRC / "truma")])
-    # The transport is not exercised here -- the fake client below stands in
-    # for it -- but bt.py drags in HA's bluetooth component, so stub it whole.
-    _mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None)
-    _mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
-         async_resolve_device=None, async_wait_until_heard=None,
-         ADDR_IDENTITY="identity", ADDR_RPA="rpa",
-         address_kind=lambda _name, _address: "rpa")
-
-    def _real(name: str, package: str = "truma_pkg", path: Path = SRC):
-        spec = importlib.util.spec_from_file_location(
-            f"{package}.{name}", path / f"{name}.py"
-        )
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[f"{package}.{name}"] = module
-        spec.loader.exec_module(module)
-        return module
-
-    # Real, in dependency order: protocol.py does `from .const import ...`.
-    truma_const = _real("const", "truma_pkg.truma", SRC / "truma")
-    protocol = _real("protocol", "truma_pkg.truma", SRC / "truma")
-    state = _real("state", "truma_pkg.truma", SRC / "truma")
-    _real("const")
-    coordinator = _real("coordinator")
-    return truma_const, protocol, state, coordinator
-
-
-TC, PROTO, STATE, COORD = _load()
+stubs.install_homeassistant()
+# The transport is not exercised here -- the fake client below stands in for
+# it -- but bt.py drags in HA's bluetooth component, so stub it whole.
+stubs.stub_transport()
+TC = stubs.load_truma("const")
+PROTO = stubs.load_truma("protocol")
+BUS = stubs.load("bus")
+stubs.load("const")
+SESSION = stubs.load("session")
+COORD = stubs.load("coordinator")
 
 
 class _NoSleep:
@@ -169,9 +119,12 @@ class _Coord:
 
     hass = types.SimpleNamespace(loop=types.SimpleNamespace(time=lambda: 0.0))
     unique_id = "Truma iNetX-FFB4D1"
+    # The registration response is handed the transport so it can record the
+    # address the panel assigned; the fake client below is created per test.
+    _client = None
 
     def __init__(self) -> None:
-        self._state = STATE.TrumaState()
+        self._bus = BUS.Bus()
         self._last_frame = 0.0
         self._identity = {
             "muid": "MUID",
@@ -182,28 +135,34 @@ class _Coord:
     def async_set_updated_data(self, _data) -> None:
         pass
 
-    _discover_params = COORD.TrumaCoordinator._discover_params
     _run_startup = COORD.TrumaCoordinator._run_startup
     _on_frame = COORD.TrumaCoordinator._on_frame
-    # _on_frame keeps whatever the panel says a parameter is, beside its
-    # value; nothing here reads it, but the frames still travel through it.
-    _learn_param = COORD.TrumaCoordinator._learn_param
     # Startup ends by asking the on-demand sensors to measure. Nothing here
     # reports a tank, so it sends nothing -- which is the point: this file is
     # about discovery, and tests/test_measure_request.py owns that step.
     _request_measurements = COORD.TrumaCoordinator._request_measurements
 
 
+def _discover(coord, client):
+    """The real discovery pass, which is HA-free and takes its bus directly."""
+    return SESSION.discover_params(
+        client, coord._bus, coord.unique_id, coord.hass.loop.time
+    )
+
+
 def _run(coro):
     """Run a coroutine with instant sleeps, returning the recorded delays."""
-    # setattr/getattr rather than attribute syntax: COORD is built by
-    # importlib, so a type checker has no idea what is on it.
-    real, shim = getattr(COORD, "asyncio"), _NoSleep()
-    setattr(COORD, "asyncio", shim)
+    # setattr/getattr rather than attribute syntax: both modules are built by
+    # importlib, so a type checker has no idea what is on them.
+    shim = _NoSleep()
+    real = {mod: getattr(mod, "asyncio") for mod in (COORD, SESSION)}
+    for mod in real:
+        setattr(mod, "asyncio", shim)
     try:
         asyncio.run(coro)
     finally:
-        setattr(COORD, "asyncio", real)
+        for mod, value in real.items():
+            setattr(mod, "asyncio", value)
     return shim.slept
 
 
@@ -223,7 +182,7 @@ def _discovery_dests(client: _Client) -> list[int]:
 def test_every_seeded_device_is_asked() -> None:
     coord = _Coord()
     client = _Client(coord)
-    _run(coord._discover_params(client))
+    _run(_discover(coord, client))
     dests = _discovery_dests(client)
 
     # The two that already worked must not be lost in the widening.
@@ -256,7 +215,7 @@ def test_a_device_that_speaks_is_asked_even_when_unseeded() -> None:
     client = _Client(coord, answers={TC.DEV_PANEL: UNSEEDED})
     assert UNSEEDED not in TC.DEVICE_SEED, "pick an address the seed misses"
 
-    _run(coord._discover_params(client))
+    _run(_discover(coord, client))
     assert UNSEEDED in _discovery_dests(client), (
         "a device that spoke to us was never asked for its parameters"
     )
@@ -267,7 +226,7 @@ def test_no_device_is_asked_twice() -> None:
     coord = _Coord()
     # Every seeded device answers for itself, the way a populated bus would.
     client = _Client(coord, answers={a: a for a in TC.DEVICE_SEED})
-    _run(coord._discover_params(client))
+    _run(_discover(coord, client))
 
     dests = _discovery_dests(client)
     assert len(dests) == len(set(dests)), (
@@ -280,12 +239,12 @@ def test_pseudo_addresses_are_not_devices() -> None:
     coord = _Coord()
     for src in (TC.DEV_BROADCAST, TC.DEV_MSG_BROKER):
         coord._on_frame({"src": src, "dest": APP_ADDR})
-    assert not coord._state.seen_devices, (
-        f"pseudo-addresses recorded as devices: {coord._state.seen_devices}"
+    assert not coord._bus.addresses, (
+        f"pseudo-addresses recorded as devices: {coord._bus.addresses}"
     )
 
     client = _Client(coord)
-    _run(coord._discover_params(client))
+    _run(_discover(coord, client))
     dests = _discovery_dests(client)
 
     assert TC.DEV_MSG_BROKER not in dests, "the message broker was asked"
@@ -296,7 +255,7 @@ def test_pseudo_addresses_are_not_devices() -> None:
 
     # A real device on the same path still gets recorded.
     coord._on_frame({"src": SCHAUDT_BLOCK, "dest": APP_ADDR})
-    assert coord._state.seen_devices == {SCHAUDT_BLOCK}
+    assert coord._bus.addresses == {SCHAUDT_BLOCK}
 
 
 def test_we_never_ask_ourselves() -> None:
@@ -307,16 +266,16 @@ def test_we_never_ask_ourselves() -> None:
     not a device.
     """
     coord = _Coord()
-    coord._state.assigned_addr = APP_ADDR
+    coord._bus.assigned_addr = APP_ADDR
     # A frame arriving from our own assigned address, exactly as measured.
     coord._on_frame({"src": APP_ADDR, "dest": APP_ADDR})
-    assert APP_ADDR not in coord._state.seen_devices, "recorded ourselves"
+    assert APP_ADDR not in coord._bus.addresses, "recorded ourselves"
 
     # ...and even if one slipped into the set before registration completed,
     # it must not survive as far as a discovery frame.
-    coord._state.seen_devices.add(APP_ADDR)
+    coord._bus.note_seen(APP_ADDR)
     client = _Client(coord)
-    _run(coord._discover_params(client))
+    _run(_discover(coord, client))
     assert APP_ADDR not in _discovery_dests(client), "asked ourselves"
 
 
@@ -324,7 +283,7 @@ def test_broadcast_answer_reaches_an_unseeded_device() -> None:
     """The opener earns its frame only if its answers feed the next round."""
     coord = _Coord()
     client = _Client(coord, answers={TC.DEV_BROADCAST: UNSEEDED})
-    _run(coord._discover_params(client))
+    _run(_discover(coord, client))
     assert UNSEEDED in _discovery_dests(client), (
         "a device that answered the broadcast was never asked directly"
     )
@@ -418,11 +377,7 @@ def test_a_registered_link_still_runs_startup() -> None:
 
 
 def _main() -> None:
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-            print(f"ok  {name}")
-    print("parameter discovery: all checks OK")
+    stubs.run_tests(globals(), "parameter discovery")
 
 
 if __name__ == "__main__":
