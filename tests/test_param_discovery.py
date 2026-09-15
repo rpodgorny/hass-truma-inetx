@@ -27,8 +27,10 @@ What it pins:
    feeding the directed round,
 5. discovery is reached from ``_run_startup``, and asking a dozen devices does
    not cost a dozen multi-second waits,
-6. and a link that connects but never answers registration is dropped at once
-   rather than carrying on into a startup that cannot work.
+6. a link that connects but never answers registration is dropped at once
+   rather than carrying on into a startup that cannot work,
+7. and a discovery that not one address acknowledges is dropped too -- the
+   same failure one step later, and the one the registration gate cannot see.
 
 Run: ``python3 tests/test_param_discovery.py`` (needs ``cbor2``).
 """
@@ -374,6 +376,61 @@ def test_a_registered_link_still_runs_startup() -> None:
     assert client.assigned_addr != TC.DEV_APP_DEFAULT
     _run(coord._run_startup(client))
     assert set(TC.DEVICE_SEED) <= set(_discovery_dests(client))
+
+
+class _SilentClient(_Client):
+    """A link the panel has stopped taking frames from.
+
+    ``TrumaBleClient.send(probe=True)`` reports whether the panel acknowledged
+    the transport, and reports it by *returning False* rather than raising --
+    so from discovery's side a link that has stopped carrying traffic looks
+    exactly like a bus where nobody is home. ``acks`` is the set of addresses
+    that still answer, so a test can say which of the two it means.
+    """
+
+    def __init__(self, coord, acks: set[int] | None = None) -> None:
+        super().__init__(coord)
+        self._acks = acks or set()
+
+    async def send(self, frame: bytes, *, probe: bool = False) -> bool:
+        await super().send(frame, probe=probe)
+        return PROTO.parse_v3_frame(frame)["dest"] in self._acks
+
+
+def test_a_discovery_nothing_acknowledges_is_dropped() -> None:
+    """Measured on the van, 2026-09-15 11:57.
+
+    The link dropped while discovery was running. All 18 addresses went
+    unacknowledged -- and startup ran to completion anyway, logging "connected
+    and subscribed", resetting the reconnect backoff and persisting the
+    address kind, on a session that had learned nothing. The registration gate
+    above cannot catch this: registration had already succeeded.
+    """
+    coord = _Coord()
+    client = _SilentClient(coord)
+    assert client.assigned_addr != TC.DEV_APP_DEFAULT, "registration must pass"
+
+    raised = None
+    try:
+        _run(coord._run_startup(client))
+    except Exception as exc:  # noqa: BLE001 - the type is HA's, stubbed here
+        raised = exc
+    assert raised is not None, "startup completed on a discovery nothing answered"
+    assert "no device acknowledged" in str(raised)
+
+
+def test_one_acknowledgement_is_enough() -> None:
+    """A partial answer is the normal case, not a failure.
+
+    Most of the seed is addresses with nothing behind them -- no roof air
+    conditioner, no gas sensors -- and those go unacknowledged on every
+    healthy vehicle. Only *nothing at all* means the transport is gone, and
+    the panel is always there to answer.
+    """
+    coord = _Coord()
+    client = _SilentClient(coord, acks={TC.DEV_PANEL})
+    _run(coord._run_startup(client))
+    assert TC.DEV_HEATER in _discovery_dests(client), "discovery stopped early"
 
 
 def _main() -> None:

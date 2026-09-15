@@ -207,6 +207,28 @@ async def discover_params(client, bus: Bus, name: str, now) -> None:
         ", ".join(f"0x{a:04X}" for a in sorted(asked - acked)) or "none",
     )
 
+    # Not one address answered, and the panel itself is always one of them, so
+    # this is not a bus that happens to be empty -- the transport is gone,
+    # whatever the link still claims. Registration above guards the same
+    # failure one step earlier and for the same reason: a session that carries
+    # nothing must not be reported as a working one, or the reconnect backoff
+    # resets and _remember_address_kind persists an address kind that has
+    # proved nothing. Measured on the van (2026-09-15 11:57): the link dropped
+    # during discovery, all 18 addresses went unacknowledged, and startup ran
+    # to completion and logged "connected and subscribed" anyway.
+    #
+    # A *partial* answer is not a failure. An address with nothing behind it is
+    # expected to go unacknowledged, which is most of the seed on most
+    # vehicles.
+    if asked and not acked:
+        message = (
+            f"Truma {name}: no device acknowledged parameter discovery; "
+            "the link is up but carries nothing, so the session is being "
+            "dropped and retried"
+        )
+        LOGGER.warning(message)
+        raise StartupFailed(message)
+
 async def request_measurements(client, bus: Bus, name: str) -> None:
     """Ask the on-demand sensors to take a fresh reading.
 
