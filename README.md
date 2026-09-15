@@ -171,9 +171,24 @@ neither has a `BoostMode` at all, and the panel that offers a boost is sitting
 on one of them. So the switch labelled "Faster water heating" is the panel's
 boost. `BoostMode` stays in the code because the schema lists it and some other
 vehicle may yet have it; both are offered and each waits for its own parameter,
-so a heater that reports neither is given neither. What is still unpinned is the
-*write*: no download has been taken with the button on, so nothing here has
-watched the value move.
+so a heater that reports neither is given neither.
+
+The *write* is no longer unpinned. On the diesel van the switch wrote
+`WaterHeating.FasterHeatingMode = 1` to the heater at 0x0201 and the panel
+republished the parameter with its `avail` flag moved from 0 to 1, while
+`FasterHeatingModeTime` counted down from its declared maximum of 2400 at one
+per second — so the duration beside it is time remaining, not the length
+the mode was configured for. That flag is worth reading correctly: it says
+whether a value is in effect right now, not whether the appliance has the
+feature, which is why an entity is still created for a parameter the panel
+currently marks unavailable.
+
+The write is also conditional. Sent while the panel was venting it was
+acknowledged and not applied, and the panel put it into effect 226 ms after
+room climate left `Ventilating`, without being asked a second time. An
+acknowledgement from the transport says the panel took the frame, not that it
+acted on it — which is the shape of #10, and no offline test can tell the two
+apart.
 
 The "Heating mode" select is the same kind of finding, gone the other way. The
 schema listed `AirHeating.Mode` as `Fast=0, Comfort=1` with no vehicle behind
@@ -197,17 +212,36 @@ panel writes on the vehicle and the temperature says what the name means. An
 automation or script that calls `select.select_option` with one of the old
 strings has to be updated; the values on the wire are unchanged.
 
-**Unreleased, and not yet run against hardware.** The 0.9.0 betas move every
-entity onto the bus device that reports it, and every entity id changes with
-it. There is no migration: the integration is still in development, and a
-unique id that used to mean "this parameter, somewhere on this panel" cannot be
-mapped onto one that means "this parameter, on this device" without guessing
-which device. Old entities stay in the registry as unavailable until they are
-deleted from the device page, and history does not carry over. Automations and
-dashboards that name an entity have to be pointed at the new one. The checks
-behind this are offline ones against captured frames; see
-[#23](https://github.com/rpodgorny/hass-truma-inetx/issues/23) for what still
-has to be confirmed on a vehicle.
+**Run on a vehicle as of 0.9.0b2**, a diesel Combi D 4 GEN2 behind an iNet X
+Pro. The session comes up, parameter discovery reaches all 18 seeded addresses
+and every one acknowledges, and the bus resolves to three publishers: the panel
+at 0x0101 with 67 parameters, the Combi at 0x0201 with 33, and the panel's own
+BLE device management at 0x0601 with 10. The heater appears below the panel as
+its own device, named and serialled from what it reported. Writes land on the
+device that publishes the parameter — setting a fan speed sent
+`RoomClimate.Mode` to 0x0101 and `AirCirculation.FanLevel` to 0x0201 in the one
+gesture, and the panel echoed both back. Four topics on that bus have more than
+one publisher (`Identify`, `ErrorReset`, `PowerMgmt`, `DeviceManagement`),
+though all four are metadata: a vehicle carrying two appliances that publish the
+same *reading* is still unread. See
+[#23](https://github.com/rpodgorny/hass-truma-inetx/issues/23) for what is left.
+
+The 0.9.0 betas move every entity onto the bus device that reports it, and
+every entity id changes with it. There is no migration: the integration is
+still in development, and a unique id that used to mean "this parameter,
+somewhere on this panel" cannot be mapped onto one that means "this parameter,
+on this device" without guessing which device. Old entities stay in the
+registry as unavailable until they are deleted from the device page, and
+history does not carry over. Automations and dashboards that name an entity
+have to be pointed at the new one.
+
+Two further consequences, both measured on that upgrade. Because the unique id
+gains the device address, Home Assistant sees every entity as a new one: an
+entity you had switched on by hand that ships disabled by default — the
+internal temperature, the supply voltage and the raw flame status are the three
+— comes back disabled, and the choice cannot be recovered from the old entry.
+And where an old entity still holds the name the new one wants, the new one
+takes a `_2` suffix and keeps it, even after the old one is deleted.
 
 On a vehicle that already had the electric select or the diesel switch before
 they became conditional, the same applies. The integration does not remove
@@ -372,11 +406,26 @@ itself carries nothing identifying.
 
 ## Known limitations
 
-- **Reconnects can wedge.** If the link drops, reconnecting to the same address
-  sometimes fails repeatedly with `ESP_GATT_CONN_FAIL_ESTABLISH` (0x3e). The
-  integration backs off and rotates between the panel's advertised addresses,
-  which usually recovers it; occasionally a panel power-cycle is needed. Under
-  investigation.
+- **Reconnects can wedge.** If the link drops, reconnecting sometimes fails
+  repeatedly. A btsnoop of one recovery on the diesel van says what it is: 53
+  `LE Create Connection` commands inside a minute, every one to the same
+  resolvable private address, every one answered `LE Connection Complete:
+  Success` — and 52 of them dropped 250–500 ms later with `Connection Failed to
+  be Established` (0x3e), before encryption was ever started. The panel takes
+  the link and lets go of it again until it is ready for a session. Address
+  rotation cannot help: on a host whose kernel resolves the panel's RPA, the
+  address the integration picks is the identity one and the kernel substitutes
+  its own cached RPA underneath, so `avoid` only ever demotes an address that
+  never goes on air. It clears by itself — the longest seen was 15 minutes, and
+  no power-cycle has been needed.
+- **Reloading the config entry leaves it unloaded.** Anything that reloads the
+  entry while a session is live tears the integration down without bringing it
+  back, and enabling or disabling one of its entities is enough — Home
+  Assistant reloads on that by itself. The BLE client is orphaned still
+  connected, feeding a coordinator that has stopped and holding one of the
+  panel's connection slots; `disconnect()` is never called, and nothing is
+  logged after `no live BLE link to close`. Restart Home Assistant to recover.
+  Measured on the van, 2026-09-15.
 - **Duplicate entries in the panel's device list.** Each pairing can leave an
   extra record. Harmless so far, but it consumes the panel's ~4 slots.
 - Only the local name / service UUID are used for discovery; the stored address
