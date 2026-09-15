@@ -88,6 +88,34 @@ class TrumaClimateDialCard extends HTMLElement {
     this._pending = null; // value being dragged or stepped, not yet sent
   }
 
+  // What the card picker puts in a brand new card. Without this Home Assistant
+  // creates the card as bare {type: ...}: setConfig below then throws, the
+  // picker's preview is an error card, and the "add card to this device" flow
+  // cannot fill the entity in either -- it only substitutes one when the stub
+  // already HAS an entity key (hui-dialog-create-card: `"entity" in config`).
+  // So the card looked present but could not be added.
+  static getStubConfig(hass, entities, entitiesFallback) {
+    const climate = (id) => id.startsWith("climate.");
+    // hass.entities is the entity registry the frontend holds; it knows which
+    // integration an entity came from, which hass.states does not.
+    const ours = (id) =>
+      hass && hass.entities && hass.entities[id] && hass.entities[id].platform === "truma_inetx";
+    const lists = [
+      entities || [],
+      entitiesFallback || [],
+      Object.keys((hass && hass.states) || {}),
+    ];
+    for (const wanted of [(id) => climate(id) && ours(id), climate]) {
+      for (const list of lists) {
+        const found = list.find(wanted);
+        if (found) return { entity: found };
+      }
+    }
+    // No climate entity anywhere: still return the key, so the editor shows an
+    // entity to fill in rather than a config the card rejects outright.
+    return { entity: "" };
+  }
+
   setConfig(config) {
     if (!config || !config.entity) throw new Error("A climate entity is required");
     if (!config.entity.startsWith("climate.")) {
@@ -476,4 +504,9 @@ window.customCards.push({
   name: "Truma climate dial",
   description:
     "Thermostat dial that sets the temperature while heating and the fan speed while venting.",
+  // Render a live card in the picker instead of the description. Safe: the
+  // picker catches a card that refuses its stub config and falls back to the
+  // description, which is what a vehicle with no climate entity gets.
+  preview: true,
+  documentationURL: "https://github.com/rpodgorny/hass-truma-inetx#dashboard-card",
 });
