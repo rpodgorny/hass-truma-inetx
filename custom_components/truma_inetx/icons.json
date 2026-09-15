@@ -28,6 +28,15 @@
       }
     },
     "sensor": {
+      "ble_conn_state": {
+        "default": "mdi:bluetooth"
+      },
+      "ble_free_slots": {
+        "default": "mdi:bluetooth-connect"
+      },
+      "ble_mgmt_state": {
+        "default": "mdi:bluetooth-settings"
+      },
       "flame_status": {
         "default": "mdi:fire"
       },

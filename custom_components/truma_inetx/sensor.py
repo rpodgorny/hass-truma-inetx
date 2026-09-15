@@ -7,6 +7,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .const import LOGGER
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
 from .entity import TrumaParamEntity, async_add_rows
 from .profiles import Row, native
@@ -50,6 +51,7 @@ class TrumaSensor(TrumaParamEntity, SensorEntity):
         self._attr_state_class = row.state_class
         self._attr_native_unit_of_measurement = row.unit
         self._attr_suggested_display_precision = row.precision
+        self._reported_unpresentable = False
 
     @property
     def native_value(self) -> float | int | str | None:
@@ -57,4 +59,27 @@ class TrumaSensor(TrumaParamEntity, SensorEntity):
         value = self.value
         if value is None:
             return None
-        return native(self.row, value)  # type: ignore[return-value]
+        value = native(self.row, value)
+        if value is None or isinstance(value, (int, float, str)):
+            return value  # type: ignore[return-value]
+
+        # A parameter whose wire value is a structure, presented by a row that
+        # does not reduce it to one value. Home Assistant raises on that from
+        # inside the state write, which means once per coordinator update
+        # forever -- measured on the van, where NrFreeSlots turned out to be a
+        # list of per-device-kind counts and filled the log with tracebacks.
+        # The reading is missing either way; this makes it missing quietly,
+        # and says which row to go and fix.
+        if not self._reported_unpresentable:
+            self._reported_unpresentable = True
+            LOGGER.warning(
+                "Truma %s.%s at 0x%04X is %s, which the %s row presents as a "
+                "single value; the sensor will read unknown until the row "
+                "reduces it",
+                self._topic,
+                self._param,
+                self._addr,
+                type(value).__name__,
+                self.row.translation_key,
+            )
+        return None

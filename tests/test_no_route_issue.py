@@ -147,6 +147,7 @@ def _load():
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", SERVICE_UUID=SERVICE_UUID,
          DEVICE_SEED=frozenset(), MEASURE_REQUEST_TOPICS={}, DEV_PANEL=0x0101,
+         DEV_BLE_MGMT=0x0601,
          **dict.fromkeys(
         ("CTRL_MBP", "DEV_APP_DEFAULT", "DEV_BROADCAST", "DEV_MSG_BROKER",
          "MBP_PARAM_DISC", "MEASURE_REQUEST_PARAM", "TOPIC_BATCHES"), 0))
