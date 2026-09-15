@@ -112,6 +112,9 @@ and clears the issue on the next successful connect.
 | Starter battery | `sensor` | V — only where something reports `VBat.Voltage` |
 | Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
 | Flame status | `sensor` | Diagnostic, disabled by default — the raw `System.FlameStatus` value |
+| Free slots | `sensor` | Diagnostic — how many bonds the panel has left, summed over the breakdown by device kind it publishes. On its own Bluetooth management device |
+| Connection state | `sensor` | Diagnostic — the panel's own view of the link, `BleDeviceManagement.BleConnState` |
+| State | `sensor` | Diagnostic — the raw `BleDeviceManagement.State` value |
 
 The climate entity's mode list and the three selects' options are not fixed. The
 panel enumerates each parameter for the vehicle it is installed in — a van with no air conditioner

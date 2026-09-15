@@ -13,6 +13,12 @@ DEV_MSG_BROKER = 0x0000
 DEV_PANEL = 0x0101
 DEV_HEATER = 0x0201
 DEV_APP_DEFAULT = 0x0500
+# The panel's own Bluetooth side, on its own bus address: which devices are
+# bonded, how many bonds are left, and what the radio is doing. Named here
+# because it is the only address whose function is known without asking it --
+# it publishes no Identify.Name at all (measured on the van), so nothing else
+# can say what it is.
+DEV_BLE_MGMT = 0x0601
 
 # Devices to ask for current values at startup even when they have not spoken
 # to us yet.

@@ -40,6 +40,7 @@ jobs:
       - run: python3 tests/test_no_route_issue.py
       - run: python3 tests/test_water_entities.py
       - run: python3 tests/test_energy_entities.py
+      - run: python3 tests/test_ble_mgmt_entities.py
       - run: python3 tests/test_water_priority.py
       # The config flow builds its voluptuous schema at import time, and this
       # test drives the real flow rather than a stub of it.

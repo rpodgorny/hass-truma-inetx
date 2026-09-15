@@ -39,10 +39,22 @@ from .const import (
     MODEL,
     NO_ROUTE_MISSES_BEFORE_WARNING,
 )
-from .truma.const import DEV_PANEL
+from .truma.const import DEV_BLE_MGMT, DEV_PANEL
 from .truma.protocol import build_write_frame
 
 type TrumaConfigEntry = ConfigEntry[TrumaCoordinator]
+
+# Names for bus addresses whose function is known but which publish no
+# Identify.Name of their own.
+#
+# Consulted only *after* the bus's own name, so nothing that names itself can
+# be mislabelled by this -- which is the whole reason it is safe, because
+# 0x06 is a class the gas-bottle sensors share and they do name themselves.
+# It is not a class-to-product mapping: those are unverifiable (a Dometic roof
+# air conditioner and a Schaudt electrical block share a class), whereas this
+# address is the panel's own Bluetooth side and is already named in
+# DEVICE_SEED for the same reason.
+_KNOWN_NAMES = {DEV_BLE_MGMT: "Bluetooth management"}
 
 # Reconnect backoff. Start quick (a healthy link that just dropped should come
 # back fast) and grow exponentially to a cap when the panel stays unreachable,
@@ -561,7 +573,9 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         flat reading that mixed them up). A device that publishes no name is
         named by its address rather than by a class-to-product mapping that
         cannot be verified -- a Dometic roof air conditioner and a Schaudt
-        electrical block share a device class.
+        electrical block share a device class. The one exception is
+        _KNOWN_NAMES, and it is an exception only for addresses that name
+        nothing themselves.
         """
         if addr == DEV_PANEL:
             panel = self._bus.devices.get(addr)
@@ -576,7 +590,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
                 serial_number=panel.serial if panel else None,
             )
         device = self._bus.device(addr)
-        base = device.name
+        base = device.name or _KNOWN_NAMES.get(addr)
         if base is None:
             # Already unique, and already says where it is.
             name = f"Bus device 0x{addr:04X}"

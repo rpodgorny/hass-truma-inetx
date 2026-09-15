@@ -70,6 +70,15 @@
       }
     },
     "sensor": {
+      "ble_conn_state": {
+        "name": "Connection state"
+      },
+      "ble_free_slots": {
+        "name": "Free slots"
+      },
+      "ble_mgmt_state": {
+        "name": "State"
+      },
       "current_temp": {
         "name": "Room temperature"
       },

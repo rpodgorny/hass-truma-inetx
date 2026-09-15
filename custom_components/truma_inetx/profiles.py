@@ -33,7 +33,9 @@ devices publishing one row, told apart by the device they hang off -- see
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
@@ -91,6 +93,37 @@ class Row:
     # described none of its own.
     step: float = 1
     fallback_bounds: tuple[int, int] | None = None
+
+    # Turns a structured wire value into the single one the row presents,
+    # applied before `scale`. Nearly every parameter carries a scalar and
+    # leaves this None; a handful carry a list, and a sensor handed one
+    # raises inside Home Assistant on every coordinator update rather than
+    # once -- measured, with BleDeviceManagement.NrFreeSlots.
+    reduce: Callable[[Any], Any] | None = None
+
+
+def _free_slots(value: object) -> int | None:
+    """Total free bond slots, out of the panel's own breakdown by device kind.
+
+    Measured on the van, the parameter is not the count its name suggests::
+
+        [{"type": 12, "nrOfSlots": 1}, {"type": 9, "nrOfSlots": 2}]
+
+    -- a count per kind of device, and nothing the panel publishes says which
+    kind is which, so the kinds are not named here and the entity is their
+    sum: the number that answers whether the next bond will be refused. The
+    list itself arrives in a diagnostics download unchanged, which is where
+    the breakdown belongs until something explains the types.
+    """
+    if not isinstance(value, list):
+        return None
+    total = 0
+    for entry in value:
+        count = entry.get("nrOfSlots") if isinstance(entry, dict) else None
+        if not isinstance(count, int):
+            return None
+        total += count
+    return total
 
 
 # Labels. Defined beside the rows that use them so a value and its name cannot
@@ -341,6 +374,51 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             precision=0,
         ),
     ),
+    # -- the panel's own Bluetooth side ----------------------------------
+    #
+    # 0x0601 publishes nothing an appliance would -- no temperature, no mode,
+    # just the state of the radio this integration reaches the panel over.
+    # Which is exactly what is missing when a session wedges: the link is up
+    # by everything the host reports and carries nothing, and the panel that
+    # could say why has stopped answering, so it cannot be asked then. These
+    # put its own side of the link in the recorder *before* the next one.
+    #
+    # The panel describes none of them with an enum, so none is offered as a
+    # named state -- see the flame_status row above for the same reasoning.
+    ("BleDeviceManagement", "NrFreeSlots"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="ble_free_slots",
+            # The panel publishes a breakdown by device kind, not a count.
+            reduce=_free_slots,
+            # A count once reduced, so it graphs and averages meaningfully --
+            # and the shape of the graph is the question: a panel that refuses
+            # new bonds because its list is full got there gradually.
+            state_class=SensorStateClass.MEASUREMENT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    ("BleDeviceManagement", "BleConnState"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="ble_conn_state",
+            # No state class: a state code, not a quantity.
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    ("BleDeviceManagement", "State"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="ble_mgmt_state",
+            # On by default like the two above, though nothing measured says
+            # what its values mean yet -- the raw flame value is off for that
+            # reason and this is not. A value only worth having *before* the
+            # failure it explains has to be recorded before anybody knows to
+            # go and enable it, and measured on the van it moves (2 at one
+            # session, 1 at the next), so it is not a constant either.
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
 }
 
 
@@ -352,13 +430,17 @@ def rows_for(topic: str, param: str, platform: Platform) -> tuple[Row, ...]:
 
 
 def native(row: Row, value: object) -> object:
-    """Apply a row's wire scale, leaving anything non-numeric alone.
+    """Reduce a structured value, then apply a row's wire scale.
+
+    Anything non-numeric is left alone.
 
     Rounded to six places, which is far finer than any scale here and exists
     only to keep binary floating point out of the state machine: 137 tenths of
     a volt is 13.7, and ``137 * 0.1`` is 13.700000000000001, which Home
     Assistant would happily record and graph.
     """
+    if row.reduce is not None:
+        value = row.reduce(value)
     if row.scale is None or not isinstance(value, (int, float)):
         return value
     return round(value * row.scale, 6)

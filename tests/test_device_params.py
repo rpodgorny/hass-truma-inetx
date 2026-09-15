@@ -30,7 +30,8 @@ What it pins:
 6. the topics with more than one device behind them are named rather than
    left to be worked out by hand,
 7. a device's identity, class and instance come off the bus rather than out
-   of a table,
+   of a table -- and the one address named by a table is named only where the
+   bus names nothing,
 8. and a diagnostics download names the devices in the form addresses are
    read and quoted in, not as decimal.
 
@@ -57,6 +58,9 @@ COMBI = 0x0201
 ROOF_AC = 0x0406
 BOTTLE_LEFT = 0x0603
 BOTTLE_RIGHT = 0x0604
+# The panel's own Bluetooth side -- same class as the bottles, which is the
+# point: it is told apart by what it publishes, not by its class.
+BLE_MGMT = 0x0601
 BROKER = 0x0000
 
 stubs.install_homeassistant()
@@ -244,6 +248,39 @@ def test_a_device_that_names_itself_nothing_is_named_by_its_address() -> None:
     _report(coord, ROOF_AC, "AirCirculation", "FanLevel", 2)
 
     assert coord.device_info(ROOF_AC)["name"] == "Bus device 0x0406"
+
+
+def test_the_panels_bluetooth_side_is_named_though_it_names_nothing() -> None:
+    """The one address whose function is known without it saying so.
+
+    Measured on the van: 0x0601 publishes seven BleDeviceManagement
+    parameters and no Identify.Name at all, so the rule above would leave the
+    panel's own Bluetooth side reading "Bus device 0x0601". It is not a guess
+    at a class the way a roof unit would be -- DEVICE_SEED already names this
+    address for the same reason.
+    """
+    coord = _Coord()
+    _report(coord, BLE_MGMT, "BleDeviceManagement", "NrFreeSlots", 2)
+
+    assert coord.device_info(BLE_MGMT)["name"] == "Bluetooth management"
+    assert coord.device_info(BLE_MGMT)["via_device"] == (
+        "truma_inetx",
+        coord.unique_id,
+    )
+
+
+def test_a_device_that_names_itself_there_keeps_its_own_name() -> None:
+    """Which is what makes naming an address safe at all.
+
+    0x06 is the class the gas-bottle sensors are on -- 0x0603 and 0x0604 on
+    the vehicle in #9 -- and they do name themselves. The address table is
+    consulted only after the bus's own name, so it can never overwrite one.
+    """
+    coord = _Coord()
+    _report(coord, BLE_MGMT, "Identify", "Name", "Truma LevelControl")
+    _report(coord, BLE_MGMT, "GasBtl", "FillLevelP", 49)
+
+    assert coord.device_info(BLE_MGMT)["name"] == "Truma LevelControl"
 
 
 def test_neither_pseudo_address_is_a_device() -> None:

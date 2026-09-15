@@ -70,6 +70,15 @@
       }
     },
     "sensor": {
+      "ble_conn_state": {
+        "name": "Verbindungsstatus"
+      },
+      "ble_free_slots": {
+        "name": "Freie Plätze"
+      },
+      "ble_mgmt_state": {
+        "name": "Status"
+      },
       "current_temp": {
         "name": "Raumtemperatur"
       },
