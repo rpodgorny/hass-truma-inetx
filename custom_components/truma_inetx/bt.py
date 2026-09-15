@@ -238,7 +238,8 @@ def async_resolve_device(
         ),
     )
     LOGGER.debug(
-        "Truma %s candidates (best→worst): %s | avoid: %s | first choice: %s",
+        "Truma %s candidates (best→worst): %s | demoted after a failure: %s "
+        "| prefers the %s address",
         name,
         [
             (i.address, address_kind(name, i.address), round(i.time, 1), i.rssi)
