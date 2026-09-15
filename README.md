@@ -276,7 +276,16 @@ numeric range, so core cannot put fan speed on an arc.
 
 **There is nothing to install.** The integration serves the card at
 `/truma_inetx/truma-climate-dial-card.js` and registers it with the frontend,
-so it arrives and updates with the integration. Just add it to a dashboard:
+so it arrives and updates with the integration. Add it the ordinary way: edit a
+dashboard, **+ Add card**, search for *Truma*, and pick it. The picker shows a
+live dial, and the editor opens with this integration's climate entity already
+filled in — the card carries a `getStubConfig` and a `getConfigForm` so that
+Home Assistant can do both. Only a name is left to set, and that is optional.
+
+The **By entity** tab will not offer it. Home Assistant builds those
+suggestions from core card types alone, and a custom card has no way in.
+
+In YAML, if you would rather:
 
 ```yaml
 type: custom:truma-climate-dial-card
