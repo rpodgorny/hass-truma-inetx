@@ -116,6 +116,28 @@ class TrumaClimateDialCard extends HTMLElement {
     return { entity: "" };
   }
 
+  // The visual editor. Without a getConfigElement OR a getConfigForm, Home
+  // Assistant has nothing to render and the card edit dialog says "Visual
+  // configuration is not available", leaving only YAML.
+  //
+  // A schema is the cheap half of that deal: Home Assistant renders it itself
+  // (hui-form-editor -> ha-form), and the labels come from its own
+  // translations -- "entity" and "name" are both in
+  // ui.panel.lovelace.editor.card.generic -- so this ships no editor element
+  // and no strings of its own.
+  static getConfigForm() {
+    return {
+      schema: [
+        {
+          name: "entity",
+          required: true,
+          selector: { entity: { domain: "climate" } },
+        },
+        { name: "name", selector: { text: {} } },
+      ],
+    };
+  }
+
   setConfig(config) {
     if (!config || !config.entity) throw new Error("A climate entity is required");
     if (!config.entity.startsWith("climate.")) {
