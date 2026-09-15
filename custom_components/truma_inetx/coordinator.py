@@ -72,6 +72,15 @@ _RECONNECT_DELAY_MAX = 45  # seconds
 # noticed): drop it and reconnect rather than sit "connected" forever with
 # stale data. This is what recovers the session without a manual power-cycle.
 _DATA_STALL_TIMEOUT = 90  # seconds
+# ...and the same question for the startup that runs before that watchdog does.
+# Startup is the only part of a session with no deadline of its own: every step
+# in it waits on the panel, and the watchdog above only starts once all of them
+# have finished. Measured on the van, a healthy startup takes about 25 s from
+# the link coming up to parameter discovery finishing, so this is four times
+# the longest one seen and is not a latency budget -- it is the backstop for a
+# step that hangs in a way its own timeout does not cover, so that the session
+# ends and is retried instead of sitting "connected" and delivering nothing.
+_STARTUP_TIMEOUT = 120  # seconds
 
 # Poll mode: 0 keeps the link open (the default and what most people want --
 # state arrives the instant the panel changes it). A non-zero interval connects,
@@ -698,9 +707,23 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         exception, so that the session loop keeps seeing one kind of failure.
         """
         try:
-            await session.run_startup(
-                client, self._bus, self._identity, self.unique_id, self.hass.loop.time
+            await asyncio.wait_for(
+                session.run_startup(
+                    client,
+                    self._bus,
+                    self._identity,
+                    self.unique_id,
+                    self.hass.loop.time,
+                ),
+                _STARTUP_TIMEOUT,
             )
+        except TimeoutError as exc:
+            message = (
+                f"Truma {self.unique_id}: startup did not finish within "
+                f"{_STARTUP_TIMEOUT}s; the session is being dropped and retried"
+            )
+            LOGGER.warning(message)
+            raise HomeAssistantError(message) from exc
         except session.StartupFailed as exc:
             raise HomeAssistantError(str(exc)) from exc
 

@@ -49,6 +49,30 @@ class _Link:
         self.is_connected = False
 
 
+class _DeafLink(_Link):
+    """A link that takes a write and never answers it.
+
+    What the van looked like on 2026-09-15 at 22:45: connected by everything
+    the host could see, the panel re-announcing an incoming message every five
+    seconds, and the first write of the session outstanding for four minutes
+    until the link was forced down from outside.
+    """
+
+    def __init__(self) -> None:
+        self.writes = 0
+
+    async def write_gatt_char(self, char, data, response=False) -> None:
+        self.writes += 1
+        await asyncio.Event().wait()
+
+
+class _StuckLink(_Link):
+    """A link whose disconnect never returns, the way BlueZ's can not."""
+
+    async def disconnect(self) -> None:
+        await asyncio.Event().wait()
+
+
 async def test_late_ready_does_not_hide_the_ack() -> None:
     """A second Ready after the payload must not be read as the DataAck."""
     client = BLE.TrumaBleClient({})
@@ -291,6 +315,45 @@ async def test_an_unanswered_probe_leaves_the_session_alone() -> None:
         BLE._ACK_TIMEOUT = ack_timeout
 
 
+async def test_a_write_that_is_never_answered_gives_the_session_up() -> None:
+    """The wedge, and the whole of why _WRITE_TIMEOUT exists.
+
+    BlueZ's Write Request has no timeout of its own, so an unanswered one
+    waits for as long as the process runs -- and nothing else was watching:
+    the stall watchdog only starts once startup has finished, and startup was
+    what this was stuck in. Ending the session here is what turns four
+    minutes of "connected" into a reconnect.
+    """
+    client = BLE.TrumaBleClient({})
+    link = _DeafLink()
+    client._client = link
+    write_timeout = BLE._WRITE_TIMEOUT
+    BLE._WRITE_TIMEOUT = 0.05
+    try:
+        assert not await client.send(b"register"), "a hung write reported success"
+        assert link.writes == 1, "the payload was written to a link that took nothing"
+        assert not client.connected, "the session survived a link that takes nothing"
+    finally:
+        BLE._WRITE_TIMEOUT = write_timeout
+
+
+async def test_a_disconnect_that_never_returns_is_let_go() -> None:
+    """Measured on the van: BlueZ's Device1.Disconnect can hang.
+
+    It is awaited from the send lock's own cleanup, so waiting on it forever
+    holds the lock, the session, and the adapter's connection slot with it.
+    """
+    client = BLE.TrumaBleClient({})
+    client._client = _StuckLink()
+    disconnect_timeout = BLE._DISCONNECT_TIMEOUT
+    BLE._DISCONNECT_TIMEOUT = 0.05
+    try:
+        await asyncio.wait_for(client.disconnect(), 2)
+    finally:
+        BLE._DISCONNECT_TIMEOUT = disconnect_timeout
+    assert client._client is None
+
+
 if __name__ == "__main__":
     asyncio.run(test_late_ready_does_not_hide_the_ack())
     asyncio.run(test_no_payload_without_ready())
@@ -301,6 +364,8 @@ if __name__ == "__main__":
     asyncio.run(test_a_cancelled_transfer_cannot_acknowledge_the_next_one())
     asyncio.run(test_cancelling_a_queued_send_leaves_the_active_one_alone())
     asyncio.run(test_an_unanswered_probe_leaves_the_session_alone())
+    asyncio.run(test_a_write_that_is_never_answered_gives_the_session_up())
+    asyncio.run(test_a_disconnect_that_never_returns_is_let_go())
     for _failure in (
         "ready_timeout",
         "ack_timeout",

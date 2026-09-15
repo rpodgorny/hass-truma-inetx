@@ -87,6 +87,29 @@ _CONNECT_ATTEMPTS = 3
 _READY_TIMEOUT = 3.0
 _ACK_TIMEOUT = 3.0
 
+# A GATT write on a live link completes in milliseconds. This is not a latency
+# budget, it is the line between "slow" and "never": a Write Request the panel
+# never answers leaves BlueZ's D-Bus call outstanding with no timeout of its
+# own, and nothing else in the session is watching yet, because the stall
+# watchdog only starts once startup has finished.
+#
+# Measured on the van 2026-09-15 22:45:33: the link came up, the panel sent two
+# frames and went quiet, and the first write of the session hung. It was still
+# hanging four minutes later, when the link was forced down from outside --
+# whereupon the session reported the link ending "during registration" within
+# a second and reconnected cleanly. Left alone it would have hung for as long
+# as Home Assistant ran, "connected" the whole time. The panel meanwhile
+# re-announced an incoming message every five seconds, so the link was neither
+# gone nor idle; it simply took nothing.
+_WRITE_TIMEOUT = 5.0
+
+# The same, on the way out. BlueZ's Device1.Disconnect can return without
+# reaching the radio -- measured on the van, a disconnect through it left the
+# controller's connection up, while btmgmt dropped it at once -- and it can
+# also not return at all. This one is awaited from the send lock's cleanup, so
+# a hang there holds the lock as well as the session.
+_DISCONNECT_TIMEOUT = 5.0
+
 
 
 
@@ -269,7 +292,16 @@ class TrumaBleClient:
         self._client = None
         if client is not None:
             try:
-                await client.disconnect()
+                await asyncio.wait_for(client.disconnect(), _DISCONNECT_TIMEOUT)
+            except TimeoutError:
+                # See _DISCONNECT_TIMEOUT. Nothing here can make the link go
+                # away if BlueZ will not; what this does is stop the wait from
+                # outliving the session that started it.
+                _LOGGER.warning(
+                    "Truma: the BLE disconnect did not return within %ss; "
+                    "letting the link go and carrying on",
+                    _DISCONNECT_TIMEOUT,
+                )
             except Exception as exc:  # noqa: BLE001 - best effort
                 _LOGGER.debug("Truma BLE disconnect error: %s", exc)
 
@@ -388,16 +420,52 @@ class TrumaBleClient:
     def _fire_write(self, char_uuid: str, data: bytes) -> None:
         """Schedule a fire-and-forget GATT write from a notification handler."""
         if self._loop is not None:
-            self._loop.create_task(self._write(char_uuid, data))
+            self._loop.create_task(self._fire_and_forget(char_uuid, data))
+
+    async def _fire_and_forget(self, char_uuid: str, data: bytes) -> None:
+        """Run a scheduled write with nobody waiting on the result.
+
+        These are the transport's own replies -- the confirm for a message the
+        panel announced, the ack for one it delivered -- and no caller awaits
+        the task, so an exception would otherwise surface as Home Assistant's
+        "Task exception was never retrieved" and nothing more. A write that
+        times out has already given the session up (see :meth:`_write`), which
+        is the part that matters; this only keeps the log honest about it.
+        """
+        try:
+            await self._write(char_uuid, data)
+        except Exception as exc:  # noqa: BLE001 - nothing awaits this
+            _LOGGER.debug("Truma transport reply to %s failed: %s", char_uuid, exc)
 
     # -- sending ---------------------------------------------------------
 
     async def _write(self, char_uuid: str, data: bytes) -> None:
+        """Write to a characteristic, giving the session up if it hangs."""
         if self._client is None:
             return
         # CMD uses Write Request (with response); DATA_W uses Write Command.
         response = char_uuid == CHAR_CMD
-        await self._client.write_gatt_char(char_uuid, data, response=response)
+        try:
+            await asyncio.wait_for(
+                self._client.write_gatt_char(char_uuid, data, response=response),
+                _WRITE_TIMEOUT,
+            )
+        except TimeoutError:
+            # See _WRITE_TIMEOUT. A link that does not take this write will
+            # not take the next one either, and every later wait on it would
+            # hang the same way -- so end the session here rather than one
+            # timeout at a time. `connected` reads False from this instant,
+            # which is what the startup and hold loops watch.
+            self._transport_invalidated = True
+            _LOGGER.warning(
+                "Truma: a %d-byte write to %s went unanswered for %ss; the "
+                "link is up and takes nothing, so the session is being given "
+                "up and retried",
+                len(data),
+                "CMD" if char_uuid == CHAR_CMD else "DATA",
+                _WRITE_TIMEOUT,
+            )
+            raise
 
     async def send(self, packet: bytes, *, probe: bool = False) -> bool:
         """Send a V3 packet through the transport FSM. Returns True on DataAck.

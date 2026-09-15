@@ -421,6 +421,17 @@ itself carries nothing identifying.
   its own cached RPA underneath, so `avoid` only ever demotes an address that
   never goes on air. It clears by itself — the longest seen was 15 minutes, and
   no power-cycle has been needed.
+
+  A second failure used to wear the same face, one layer up, and that one is
+  fixed. The link would come up, the panel would send a frame or two and then
+  answer nothing while still announcing an incoming message every five
+  seconds, and the session would hang inside its first write: BlueZ's Write
+  Request has no timeout of its own, and the stall watchdog does not start
+  until startup has finished. Measured on the van on 2026-09-15 it sat there
+  for four minutes, "connected" and carrying nothing, until the link was
+  forced down from outside — and would have sat there for as long as Home
+  Assistant ran. Writes, the disconnect and startup as a whole are each
+  bounded now, so that link is given up after five seconds and retried.
 - **Reloading the config entry leaves it unloaded.** Anything that reloads the
   entry while a session is live tears the integration down without bringing it
   back, and enabling or disabling one of its entities is enough — Home

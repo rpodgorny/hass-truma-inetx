@@ -29,8 +29,11 @@ What it pins:
    not cost a dozen multi-second waits,
 6. a link that connects but never answers registration is dropped at once
    rather than carrying on into a startup that cannot work,
-7. and a discovery that not one address acknowledges is dropped too -- the
-   same failure one step later, and the one the registration gate cannot see.
+7. a discovery that not one address acknowledges is dropped too -- the same
+   failure one step later, and the one the registration gate cannot see,
+8. and a startup that hangs somewhere none of those gates can see is dropped
+   on a deadline of its own, because the stall watchdog does not start until
+   startup has finished.
 
 Run: ``python3 tests/test_param_discovery.py`` (needs ``cbor2``).
 """
@@ -431,6 +434,40 @@ def test_one_acknowledgement_is_enough() -> None:
     client = _SilentClient(coord, acks={TC.DEV_PANEL})
     _run(coord._run_startup(client))
     assert TC.DEV_HEATER in _discovery_dests(client), "discovery stopped early"
+
+
+def test_a_startup_that_hangs_is_not_waited_on_forever() -> None:
+    """Measured on the van 2026-09-15 22:45, and it is not a slow panel.
+
+    The link came up, the panel sent two frames and went quiet, and startup
+    stopped inside its first write -- BlueZ's Write Request has no timeout of
+    its own. Every gate above is a gate on an *answer*: the registration one
+    counts seconds of not being assigned an address, the discovery one counts
+    acknowledgements. None of them runs while a step is still awaiting, and
+    the stall watchdog that would have caught it only starts once startup has
+    returned. So startup is bounded as a whole as well, and the session is
+    dropped and retried rather than staying "connected" and carrying nothing.
+    """
+    coord = _Coord()
+    client = _Client(coord)
+
+    async def _never(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    real_startup, real_timeout = SESSION.run_startup, COORD._STARTUP_TIMEOUT
+    SESSION.run_startup = _never
+    COORD._STARTUP_TIMEOUT = 0.05
+    raised = None
+    try:
+        _run(coord._run_startup(client))
+    except Exception as exc:  # noqa: BLE001 - the type is Home Assistant's
+        raised = exc
+    finally:
+        SESSION.run_startup = real_startup
+        COORD._STARTUP_TIMEOUT = real_timeout
+
+    assert raised is not None, "a startup that never finishes was waited on"
+    assert "did not finish within" in str(raised), raised
 
 
 def _main() -> None:
