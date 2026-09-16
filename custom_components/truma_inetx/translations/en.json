@@ -49,6 +49,9 @@
       "cooling_active": {
         "name": "Cooling"
       },
+      "demo_mode": {
+        "name": "Demo mode"
+      },
       "error": {
         "name": "Fault"
       },
@@ -60,6 +63,9 @@
       },
       "line_power": {
         "name": "Shore power"
+      },
+      "needs_energy": {
+        "name": "Requesting energy"
       }
     },
     "button": {
@@ -108,6 +114,9 @@
       "ble_mgmt_state": {
         "name": "State"
       },
+      "climate_state": {
+        "name": "Climate state (raw)"
+      },
       "cooling_temp": {
         "name": "Cooling temperature"
       },
@@ -119,6 +128,9 @@
       },
       "faster_water_heating_time": {
         "name": "Faster water heating time"
+      },
+      "fault_reset_window": {
+        "name": "Fault reset window"
       },
       "flame_status": {
         "name": "Flame status"
@@ -147,8 +159,23 @@
       "leisure_battery_voltage": {
         "name": "Leisure battery"
       },
+      "logic_supply": {
+        "name": "Logic supply"
+      },
+      "panel_clock": {
+        "name": "Panel clock"
+      },
+      "panel_idle": {
+        "name": "Time since last touched"
+      },
+      "power_mode": {
+        "name": "Power mode (raw)"
+      },
       "starter_battery_voltage": {
         "name": "Starter battery"
+      },
+      "temperature_source": {
+        "name": "Temperature source (raw)"
       },
       "timer_schedule": {
         "name": "Timer {slot} schedule"

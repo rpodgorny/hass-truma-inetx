@@ -145,6 +145,7 @@ def install_homeassistant() -> None:
             TEMPERATURE="temperature",
             VOLTAGE="voltage",
             DURATION="duration",
+            TIMESTAMP="timestamp",
             WEIGHT="weight",
             BATTERY="battery",
         ),

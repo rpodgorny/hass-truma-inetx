@@ -1,11 +1,17 @@
 {
   "entity": {
     "binary_sensor": {
+      "demo_mode": {
+        "default": "mdi:store-outline"
+      },
       "flame": {
         "default": "mdi:fire"
       },
       "gas": {
         "default": "mdi:gas-cylinder"
+      },
+      "needs_energy": {
+        "default": "mdi:lightning-bolt-outline"
       }
     },
     "button": {
@@ -42,8 +48,14 @@
       "ble_mgmt_state": {
         "default": "mdi:bluetooth-settings"
       },
+      "climate_state": {
+        "default": "mdi:home-thermometer-outline"
+      },
       "error_code": {
         "default": "mdi:alert-circle-outline"
+      },
+      "fault_reset_window": {
+        "default": "mdi:timer-sand"
       },
       "flame_status": {
         "default": "mdi:fire"
@@ -59,6 +71,21 @@
       },
       "grey_water_level": {
         "default": "mdi:water-opacity"
+      },
+      "logic_supply": {
+        "default": "mdi:flash-outline"
+      },
+      "panel_clock": {
+        "default": "mdi:clock-outline"
+      },
+      "panel_idle": {
+        "default": "mdi:gesture-tap"
+      },
+      "power_mode": {
+        "default": "mdi:power-settings"
+      },
+      "temperature_source": {
+        "default": "mdi:thermometer-lines"
       },
       "timer_schedule": {
         "default": "mdi:calendar-clock"

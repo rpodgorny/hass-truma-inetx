@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -72,13 +74,17 @@ class TrumaSensor(TrumaParamEntity, SensorEntity):
     # which shape it got.
 
     @property
-    def native_value(self) -> float | int | str | None:
+    def native_value(self) -> float | int | str | datetime | None:
         """The device's own value for the parameter, in the row's unit."""
         value = self.value
         if value is None:
             return None
         value = native(self.row, value)
-        if value is None or isinstance(value, (int, float, str)):
+        # datetime among them for the TIMESTAMP device class, which is the
+        # one that wants an object rather than a number: a row carrying a
+        # wire epoch reduces it to an aware datetime and Home Assistant
+        # renders it in the user's own timezone.
+        if value is None or isinstance(value, (int, float, str, datetime)):
             return value  # type: ignore[return-value]
 
         # A parameter whose wire value is a structure, presented by a row that
