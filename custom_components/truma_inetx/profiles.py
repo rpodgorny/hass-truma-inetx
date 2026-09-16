@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
@@ -220,6 +221,23 @@ def _error_attrs(value: object) -> dict:
     if first.get("resettable") is not None:
         attrs["resettable"] = bool(first["resettable"])
     return attrs
+
+
+def _epoch(value: object) -> datetime | None:
+    """A wire epoch as an aware datetime, or None if it is not a time.
+
+    The parameters that carry one describe themselves as 0 to 4294967295,
+    which is the width of the field rather than a range: 0 is a panel that
+    has never been told the time, not midnight in 1970, and either end of
+    that field would be graphed as a real reading. So anything before 2001 is
+    read as "no time", and the rest is UTC -- measured on the van, where
+    SystemTime 1789574460 stood against a panel displaying 18:01 in Prague.
+    """
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    if value < 1_000_000_000:
+        return None
+    return datetime.fromtimestamp(value, UTC)
 
 
 # The panel's timers. Measured on the van, where one is configured::
@@ -801,6 +819,126 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             # failure it explains has to be recorded before anybody knows to
             # go and enable it, and measured on the van it moves (2 at one
             # session, 1 at the next), so it is not a constant either.
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # -- what is left of the panel ---------------------------------------
+    #
+    # The panel's own clock, which is what its timers fire off. Measured on
+    # the van: TimeAndDate.SystemTime 1789574460 while the panel displayed
+    # 18:01 in Prague, so the parameter is a plain UTC epoch and the panel
+    # does the timezone itself. Worth seeing because the integration writes
+    # this clock at every connect (see ``build_identity_frames``) and a timer
+    # firing an hour out is otherwise a mystery with nothing to look at.
+    ("TimeAndDate", "SystemTime"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="panel_clock",
+            device_class=SensorDeviceClass.TIMESTAMP,
+            reduce=_epoch,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # The panel's 5 V logic rail, beside the 12 V supply above. Off by
+    # default for the same reason: it is a number to read when something
+    # else has already gone wrong.
+    ("Eol", "Vcc5"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="logic_supply",
+            device_class=SensorDeviceClass.VOLTAGE,
+            state_class=SensorStateClass.MEASUREMENT,
+            unit=UnitOfElectricPotential.VOLT,
+            scale=0.001,
+            precision=2,
+            enabled_default=False,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # Showroom mode. The panel names its own values -- Off / On / On and
+    # configured -- and in either "on" the readings are staged rather than
+    # measured. Read, never written: a vehicle in demo mode reports a
+    # plausible temperature from a heater that is not running, and somebody
+    # has to be able to see that from here. Turning it *on* from Home
+    # Assistant serves nobody.
+    ("System", "DemoMode"): (
+        Row(
+            platform=Platform.BINARY_SENSOR,
+            translation_key="demo_mode",
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # How long since anybody touched the panel, in seconds. Off by default:
+    # it counts up on every update, so enabling it writes a state every poll
+    # forever, and what it answers -- is somebody at the panel right now --
+    # is worth that only to whoever asks for it.
+    ("Panel", "UserInactiveSince"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="panel_idle",
+            device_class=SensorDeviceClass.DURATION,
+            unit=UnitOfTime.SECONDS,
+            enabled_default=False,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # Published by the panel and by the heater, read 3 on both. Nothing
+    # measured says what the values mean, so it is the raw number, off by
+    # default, recorded for whoever next has a power question.
+    ("PowerMgmt", "PwrMode"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="power_mode",
+            enabled_default=False,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # Which sensor the panel is taking its room temperature from. Read 1 on
+    # the van, and the panel offers external and internal probes -- so this
+    # is the parameter that answers "why does the room temperature not match
+    # the room", and the raw value is what there is until one is measured
+    # against the other.
+    ("Temperature", "InternalSource"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="temperature_source",
+            enabled_default=False,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # The panel's own climate state, in the family the Active parameters
+    # belong to. Read 4 on the van while heating, which is a value none of
+    # the appliance-level Active parameters has been seen at -- so it is the
+    # raw number rather than a flag, off by default, the same treatment the
+    # raw flame value gets.
+    ("RoomClimate", "Active"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="climate_state",
+            enabled_default=False,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # Whether the appliance is asking for energy right now -- measured 1 on
+    # the van with the heater running on diesel. On the appliance, not the
+    # panel: it is the appliance that wants the gas or the diesel.
+    ("EnergySrc", "NeedsEnergySrc"): (
+        Row(
+            platform=Platform.BINARY_SENSOR,
+            translation_key="needs_energy",
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # How long the appliance will keep accepting a fault reset, in seconds:
+    # 60 on the van, against a WaitTime of 900 it publishes as unavailable.
+    # Off by default -- it is only ever read beside the reset button.
+    ("ErrorReset", "ResetTime"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="fault_reset_window",
+            device_class=SensorDeviceClass.DURATION,
+            unit=UnitOfTime.SECONDS,
+            enabled_default=False,
             entity_category=EntityCategory.DIAGNOSTIC,
         ),
     ),

@@ -124,6 +124,15 @@ and clears the issue on the next successful connect.
 | Timer *n* | `switch` | Arms or disarms one of the panel's six timer slots. Only the filled slots appear: a panel publishes all six whether or not it has six timers, and marks the empty ones unavailable. Filling one at the panel makes its pair appear within seconds |
 | Timer *n* schedule | `sensor` | What arming it does — the state is the start time, and the attributes carry `timer_name` (the panel's own label for it, "23 °C" on the van), `start`, `end`, `weekdays` and `symbol`. Read-only: the panel describes the timer itself with `perm` 0, the way it describes its serial number, so timers are edited, added and deleted at the panel |
 | Timers enabled | `sensor` | Diagnostic — how many slots are armed, in one reading |
+| Panel clock | `sensor` | Diagnostic — the clock the timers fire off, as the panel keeps it. The integration sets it at every connect, so a timer an hour out has something to look at |
+| Demo mode | `binary_sensor` | Diagnostic — whether the panel is staging its readings instead of measuring them. Read here, never written |
+| Requesting energy | `binary_sensor` | Diagnostic — whether the appliance is asking for gas, diesel or electricity right now, on the appliance asking |
+| Logic supply | `sensor` | Diagnostic, disabled by default — V, the panel's 5 V rail beside its 12 V supply |
+| Time since last touched | `sensor` | Diagnostic, disabled by default — seconds since anybody used the panel. Off because it counts up on every update |
+| Fault reset window | `sensor` | Diagnostic, disabled by default — seconds the appliance will keep accepting a reset |
+| Power mode (raw) | `sensor` | Diagnostic, disabled by default — `PowerMgmt.PwrMode`, unlabelled: nothing measured says what its values mean |
+| Temperature source (raw) | `sensor` | Diagnostic, disabled by default — which probe the panel takes the room temperature from |
+| Climate state (raw) | `sensor` | Diagnostic, disabled by default — `RoomClimate.Active`, which reads 4 while heating, a value no appliance-level `Active` has been seen at |
 | Display brightness | `number` | Config, % — the panel's daytime brightness |
 | Night brightness | `number` | Config — the panel's dark-mode step, 1–10 on the panel measured |
 | Display timeout | `number` | Config, seconds |
@@ -160,6 +169,29 @@ would present as a timer at midnight every day of the week. The weekday flags
 are passed through as the panel's own seven: the only timer measured so far
 repeats daily, which says nothing about which end of the list is Monday, and a
 day guessed wrong would reach an automation without ever looking wrong.
+
+### What the panel offers and this does not
+
+A panel publishes rather more than it shows, and four of those are left alone
+on purpose.
+
+`System.FactoryReset` and `Install.InstallNow` are writable, and are a factory
+reset with no undo and a firmware flash over a link that drops when the van is
+driven. Neither is worth one tap in a dashboard.
+
+`System.DemoMode` is writable too, and is read here without being offered: in
+demo mode the panel stages every reading in the vehicle, so being able to see
+that it is on is worth an entity and being able to switch it on is not.
+
+`Panel.Language` is writable and the panel publishes no list of what it
+accepts, unlike every other enumerated parameter it describes. Writing a
+guessed value would change the language of the panel in the vehicle, so it
+waits for somebody to change the language at the panel and read back what the
+value became.
+
+`System.Beep` is a write-only array of ten frequency-and-duration pairs, and
+nothing measured says what the units are -- so the "find the panel" button it
+would make is a tone nobody has heard yet.
 
 ### One device per device
 

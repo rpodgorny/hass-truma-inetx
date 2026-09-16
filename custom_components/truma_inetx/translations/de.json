@@ -49,6 +49,9 @@
       "cooling_active": {
         "name": "Kühlung"
       },
+      "demo_mode": {
+        "name": "Demomodus"
+      },
       "error": {
         "name": "Störung"
       },
@@ -60,6 +63,9 @@
       },
       "line_power": {
         "name": "Landstrom"
+      },
+      "needs_energy": {
+        "name": "Energieanforderung"
       }
     },
     "button": {
@@ -108,6 +114,9 @@
       "ble_mgmt_state": {
         "name": "Status"
       },
+      "climate_state": {
+        "name": "Klimastatus (roh)"
+      },
       "cooling_temp": {
         "name": "Kühltemperatur"
       },
@@ -119,6 +128,9 @@
       },
       "faster_water_heating_time": {
         "name": "Schnellaufheizzeit"
+      },
+      "fault_reset_window": {
+        "name": "Reset-Zeitfenster"
       },
       "flame_status": {
         "name": "Flammenstatus"
@@ -147,8 +159,23 @@
       "leisure_battery_voltage": {
         "name": "Aufbaubatterie"
       },
+      "logic_supply": {
+        "name": "Logikspannung"
+      },
+      "panel_clock": {
+        "name": "Uhrzeit im Bedienteil"
+      },
+      "panel_idle": {
+        "name": "Zeit seit letzter Bedienung"
+      },
+      "power_mode": {
+        "name": "Energiemodus (roh)"
+      },
       "starter_battery_voltage": {
         "name": "Starterbatterie"
+      },
+      "temperature_source": {
+        "name": "Temperaturquelle (roh)"
       },
       "timer_schedule": {
         "name": "Zeitplan Timer {slot}"
