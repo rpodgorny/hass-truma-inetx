@@ -179,23 +179,32 @@ def _error_code(value: object) -> int | None:
 
 
 def _error_attrs(value: object) -> dict:
-    """What the error list says beyond the code itself.
+    """Every fault the appliance is raising, and what it says about the first.
 
-    ``sev`` and ``resettable`` are the appliance's own words about the fault
-    it is raising, and ``resettable`` is what says whether the reset button
-    can do anything -- see button.py. Every entry is carried, because an
-    appliance can raise more than one and the state can only be the first.
+    An appliance can raise more than one at a time, and the state can only be
+    one of them, so the whole list is here -- always, and always in the same
+    shape. An earlier version carried it only when there was more than one
+    fault, which made an automation reading these attributes handle two
+    shapes and see neither on a healthy appliance.
+
+    ``severity`` and ``resettable`` describe the fault in the state, which is
+    the first one the appliance listed. Not the most severe: nothing measured
+    says which way ``sev`` runs, and ordering the list by a guess would put a
+    code in the state that the appliance did not put first. ``resettable`` is
+    per fault, which is why the reset button reads the list rather than this
+    (see button.py) -- one of several faults can be clearable while the one in
+    the state is not.
     """
+    if not isinstance(value, list):
+        return {}
+    attrs: dict = {"count": len(value), "errors": value}
     first = _first_error(value)
     if first is None:
-        return {}
-    attrs: dict = {}
+        return attrs
     if isinstance(first.get("sev"), int):
         attrs["severity"] = first["sev"]
     if first.get("resettable") is not None:
         attrs["resettable"] = bool(first["resettable"])
-    if isinstance(value, list) and len(value) > 1:
-        attrs["errors"] = value
     return attrs
 
 
