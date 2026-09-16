@@ -213,9 +213,14 @@ def load_truma(name: str) -> ModuleType:
     return load(name, "truma_pkg.truma", SRC / "truma")
 
 
+async def _no_link_to_close(_client, _label) -> None:
+    """Stand-in for ble.close_link: closing a stub link is a no-op."""
+
+
 def stub_transport() -> None:
     """Stub the BLE transport modules, for tests that are not about it."""
-    mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None)
+    mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None,
+        close_link=_no_link_to_close)
     mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
         async_resolve_device=None, async_wait_until_heard=None,
         ADDR_IDENTITY="identity", ADDR_RPA="rpa",

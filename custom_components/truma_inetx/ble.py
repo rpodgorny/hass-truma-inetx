@@ -111,6 +111,31 @@ _WRITE_TIMEOUT = 5.0
 _DISCONNECT_TIMEOUT = 5.0
 
 
+async def close_link(client: BleakClientWithServiceCache, label: str) -> None:
+    """Close a BLE link and never raise, whatever the stack does with it.
+
+    The bound on the wait is the point: an unbounded disconnect is awaited by
+    whoever is tearing a session down -- the send lock's cleanup, or Home
+    Assistant unloading the config entry -- and a hang there holds them, not
+    just the link. See _DISCONNECT_TIMEOUT.
+
+    ``label`` only names the link in the log; this knows nothing about who owns
+    it, which is why the coordinator can close a connection the config flow
+    made with it too.
+    """
+    try:
+        await asyncio.wait_for(client.disconnect(), _DISCONNECT_TIMEOUT)
+    except TimeoutError:
+        # Nothing here can make the link go away if BlueZ will not; what this
+        # does is stop the wait from outliving the session that started it.
+        _LOGGER.warning(
+            "Truma %s: the BLE disconnect did not return within %ss; "
+            "letting the link go and carrying on",
+            label,
+            _DISCONNECT_TIMEOUT,
+        )
+    except Exception as exc:  # noqa: BLE001 - teardown must not raise
+        _LOGGER.debug("Truma %s BLE disconnect error: %s", label, exc)
 
 
 async def device_from_bluez(address: str) -> BLEDevice | None:
@@ -306,19 +331,7 @@ class TrumaBleClient:
         client = self._client
         self._client = None
         if client is not None:
-            try:
-                await asyncio.wait_for(client.disconnect(), _DISCONNECT_TIMEOUT)
-            except TimeoutError:
-                # See _DISCONNECT_TIMEOUT. Nothing here can make the link go
-                # away if BlueZ will not; what this does is stop the wait from
-                # outliving the session that started it.
-                _LOGGER.warning(
-                    "Truma: the BLE disconnect did not return within %ss; "
-                    "letting the link go and carrying on",
-                    _DISCONNECT_TIMEOUT,
-                )
-            except Exception as exc:  # noqa: BLE001 - best effort
-                _LOGGER.debug("Truma BLE disconnect error: %s", exc)
+            await close_link(client, "session")
 
     # -- notifications ---------------------------------------------------
 

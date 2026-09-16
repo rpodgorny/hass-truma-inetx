@@ -95,6 +95,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: TrumaConfigEntry) -> boo
     await coordinator.async_start()
     entry.runtime_data = coordinator
 
+    # Everything past this point runs with a live session behind it, and Home
+    # Assistant does not call async_unload_entry for an entry whose setup
+    # raised -- so a failure here would leave the session running, holding one
+    # of the panel's ~4 connection slots, referenced by nothing. Stop it on the
+    # way out and let the failure through unchanged.
+    try:
+        await _async_finish_setup(hass, entry, coordinator, address)
+    except Exception:
+        await coordinator.async_stop()
+        raise
+    return True
+
+
+async def _async_finish_setup(
+    hass: HomeAssistant,
+    entry: TrumaConfigEntry,
+    coordinator: TrumaCoordinator,
+    address: str,
+) -> None:
+    """Register the hub, arm the shutdown hook and forward the platforms."""
     # Register the panel up front rather than letting the first entity create
     # it. The panel is the hub every other bus device hangs off, and a
     # via_device pointing at a device that does not exist yet is dropped
@@ -134,12 +154,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: TrumaConfigEntry) -> boo
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: TrumaConfigEntry) -> bool:
-    """Unload a config entry."""
+    """Unload a config entry, stopping the session whatever the platforms do.
+
+    The session is stopped even when a platform refuses to unload. A refusal
+    already costs the user the reload -- Home Assistant does not set the entry
+    up again after a failed unload -- and leaving a live BLE session attached
+    to an entry nobody is reading makes it worse: it holds one of the panel's
+    ~4 connection slots, so the entry that does not come back cannot be
+    reloaded by hand either until Home Assistant is restarted.
+    """
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        await entry.runtime_data.async_stop()
+    await entry.runtime_data.async_stop()
     return unload_ok

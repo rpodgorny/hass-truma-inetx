@@ -21,7 +21,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from . import session
-from .ble import TrumaBleClient, device_from_bluez
+from .ble import TrumaBleClient, close_link, device_from_bluez
 from .bt import (
     ADDR_IDENTITY,
     address_kind,
@@ -114,6 +114,11 @@ _POLL_MAX_DWELL = 40  # seconds
 # A write in poll mode has to wait for a whole connect plus startup handshake
 # (~20 s measured), so allow generously more than that before giving up.
 _WRITE_CONNECT_TIMEOUT = 75  # seconds
+# How long a stop waits for the session task to end before cancelling it. The
+# loop's own waits all watch the stop event, so this is only ever spent on a
+# task parked inside a connect attempt -- and it is spent by Home Assistant
+# unloading the config entry, which is why it is short rather than generous.
+_SESSION_EXIT_TIMEOUT = 5.0  # seconds
 _STORAGE_VERSION = 1
 
 # How often to ask the on-demand sensors for a fresh measurement while the
@@ -163,6 +168,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         self.hub_device_id: str | None = None
         self._bus = Bus()
         self._client: TrumaBleClient | None = None
+        self._session_task: asyncio.Task[None] | None = None
         self._identity: dict | None = None
         # Loop-clock timestamp of the last frame received; drives the stall
         # watchdog in the hold loop. Set on connect, refreshed on every frame.
@@ -276,15 +282,96 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
     async def async_start(self) -> None:
         """Load identity and launch the background BLE session."""
         await self._load_stored_state()
-        self.config_entry.async_create_background_task(
+        # Kept so async_stop can end the session itself. Home Assistant
+        # cancels an entry's background tasks on unload, but only *after*
+        # async_unload_entry has returned -- which is too late to be the thing
+        # that closes our link (see async_stop).
+        self._session_task = self.config_entry.async_create_background_task(
             self.hass, self._run(), name=f"{DOMAIN} session {self.address}"
         )
 
     async def async_stop(self) -> None:
-        """Stop the session and disconnect."""
+        """Stop the session and close every link this coordinator holds.
+
+        The order is the fix for an entry that reloads into nothing. A task
+        cancelled mid-flight cannot run its own teardown -- the first ``await``
+        in its ``finally`` raises ``CancelledError`` straight away -- so
+        anything it still held is left connected, feeding a coordinator that
+        has stopped and holding one of the panel's ~4 connection slots. Home
+        Assistant cancels the entry's background tasks itself, right after
+        async_unload_entry returns, so unless the task is ended *here* that
+        cancellation is what ends it, at the one moment we can no longer close
+        what it was holding.
+
+        So: stop the task and wait for it, and only then disconnect. Every
+        await below is bounded, because this is awaited by the unload itself
+        and a hang here is an entry that never comes back.
+        """
         self._stop = True
         self._stop_event.set()
+        await self._stop_session_task()
         await self._disconnect_client()
+        await self._release_initial_client()
+
+    async def _stop_session_task(self) -> None:
+        """End the background session, cancelling it if it will not end.
+
+        ``_stop`` and the stop event are already set, and every wait in the
+        session loop watches one of them, so the ordinary path here is a few
+        milliseconds. What needs the bound is a task parked inside a connect
+        attempt: bleak's establish_connection can sit for tens of seconds, and
+        the unload is waiting on this.
+        """
+        task = self._session_task
+        self._session_task = None
+        if task is None or task.done():
+            return
+        try:
+            await asyncio.wait_for(task, _SESSION_EXIT_TIMEOUT)
+        except TimeoutError:
+            # wait_for has cancelled it and waited for the cancellation to
+            # land. Say so: a link the task was still establishing is one
+            # nothing can close afterwards, and this line is the only way to
+            # tell that case apart later.
+            LOGGER.warning(
+                "Truma %s: the session did not stop within %ss and was "
+                "cancelled; a link it was still opening may stay up until the "
+                "panel drops it",
+                self.unique_id,
+                _SESSION_EXIT_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                # Not the session's cancellation but our own: something is
+                # cancelling the unload that called this. Swallowing it would
+                # hide that from Home Assistant, which is worse than the links
+                # this leaves behind -- and the panel drops those in its own
+                # time.
+                raise
+            LOGGER.debug("Truma %s: session task was already cancelled", self.unique_id)
+        except Exception as exc:  # noqa: BLE001 - teardown must not raise
+            LOGGER.debug("Truma %s session task ended: %s", self.unique_id, exc)
+
+    async def _release_initial_client(self) -> None:
+        """Close a handed-off pairing link that no session ever adopted.
+
+        The config flow hands its live, encrypted connection to setup instead
+        of letting the session reconnect, because reconnecting is what wedges
+        the just-bonded RPA. Between setup and the first connect attempt this
+        coordinator is the only thing holding that link, and an entry reloaded
+        in that window -- enabling or disabling one entity is enough, Home
+        Assistant reloads on that by itself -- used to drop the reference with
+        the link still up.
+        """
+        client = self._initial_client
+        self._initial_client = None
+        if client is None:
+            return
+        LOGGER.debug(
+            "Truma %s: closing the handed-off pairing link, never adopted",
+            self.unique_id,
+        )
+        await close_link(client, self.unique_id)
 
     async def _disconnect_client(self) -> None:
         """Disconnect and drop the current BLE client, best effort.

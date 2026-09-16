@@ -551,14 +551,33 @@ itself carries nothing identifying.
   forced down from outside — and would have sat there for as long as Home
   Assistant ran. Writes, the disconnect and startup as a whole are each
   bounded now, so that link is given up after five seconds and retried.
-- **Reloading the config entry leaves it unloaded.** Anything that reloads the
-  entry while a session is live tears the integration down without bringing it
-  back, and enabling or disabling one of its entities is enough — Home
-  Assistant reloads on that by itself. The BLE client is orphaned still
-  connected, feeding a coordinator that has stopped and holding one of the
-  panel's connection slots; `disconnect()` is never called, and nothing is
-  logged after `no live BLE link to close`. Restart Home Assistant to recover.
-  Measured on the van, 2026-09-15.
+- **Reloading the config entry used to leave it unloaded, and that is fixed.**
+  Anything that reloaded the entry while a session was live tore the
+  integration down without bringing it back — and enabling or disabling one of
+  its entities is enough, because Home Assistant reloads on that by itself.
+  The BLE client was orphaned still connected, feeding a coordinator that had
+  stopped and holding one of the panel's connection slots, so the entry could
+  not be reloaded by hand either; only a restart cleared it. Measured on the
+  van, 2026-09-15.
+
+  The teardown was in the wrong order. Home Assistant cancels a config entry's
+  background tasks *after* `async_unload_entry` returns, so the session task
+  outlived the unload and was killed by that cancellation — and a task
+  cancelled mid-flight cannot run its own teardown, because the first `await`
+  in its `finally` raises straight away. The stop now ends the session task and
+  waits for it (five seconds, then cancels it and says so in the log) before
+  closing anything, so the link is given up by a session that is still alive.
+  Two neighbours of the same shape went with it: the live connection a pairing
+  hands to setup is now closed if no session ever adopted it, and a setup that
+  fails after the session has launched stops it on the way out rather than
+  leaving it running behind an entry Home Assistant will never unload.
+
+  What is left is the one case that cannot be closed from here: a task
+  cancelled while `establish_connection` is still inside itself never returns
+  the link it was opening, so nothing can close it and the panel drops it in
+  its own time. The log names that case. All of this is pinned offline by
+  `tests/test_entry_teardown.py`; none of it has been measured on a vehicle
+  yet.
 - **Duplicate entries in the panel's device list.** Each pairing can leave an
   extra record. Harmless so far, but it consumes the panel's ~4 slots.
 - Only the local name / service UUID are used for discovery; the stored address
@@ -601,38 +620,32 @@ these can mean anything:
 
 The checks in `tests/` are self-contained. They stub Home Assistant, bleak and
 dbus, so they need neither an HA install nor hardware, and each file is a
-script — run one directly, or all of them:
+script — run one directly, or run the lot:
 
 ```bash
-python3 tests/test_pairing_rotation.py            # pairing address rotation
-python3 tests/test_pairing_transport_dispatch.py  # bonding uses the transport it has
-python3 tests/test_device_from_bluez.py           # BLEDevice built from BlueZ's object
-python3 tests/test_transport_ack_order.py         # fragment reassembly and acknowledgements
-python3 tests/test_no_route_issue.py              # the "nothing can connect" repair
-python3 tests/test_water_entities.py              # water entities and write addressing
-python3 tests/test_energy_entities.py             # energy sources, batteries, raw flame value
-python3 tests/test_water_priority.py              # the two water-priority modes
-python3 tests/test_panel_declared_options.py      # offering what the device says exists
+python3 tests/test_entry_teardown.py              # unload leaves nothing running
+for t in tests/test_*.py; do python3 "$t" || break; done
+```
+
+Most need nothing installed. Seven reach code that imports a library, and the
+loop above will stop on them unless it is there — `voluptuous` for the config
+flow's schema (`test_panel2_discovery.py`), `cbor2` for the six that reach the
+protocol module, whether to build real frames and parse them back or by way of
+the coordinator that imports it:
+
+```bash
+pip install voluptuous cbor2==5.6.5
 ```
 
 `tests/stubs.py` holds the Home Assistant stand-ins they share; it is not a
 test and runs nothing on its own.
 
-The rest drive real code that imports a library, so they need it installed —
-`voluptuous` for the config flow's schema, `cbor2` for the four that reach the
-protocol module, whether to build real frames and parse them back or by way of
-the coordinator that imports it:
-
-```bash
-pip install voluptuous
-python3 tests/test_panel2_discovery.py            # a renamed panel is still offered
-
-pip install cbor2==5.6.5
-python3 tests/test_device_params.py               # two devices under one topic stay apart
-python3 tests/test_param_discovery.py             # startup registration + discovery
-python3 tests/test_measure_request.py             # asking the tanks to measure
-python3 tests/test_param_meta.py                  # what a device says a value means
-```
+The CI job runs every file too, in two stages: everything that needs no library
+on a bare interpreter first, so that a test double which quietly grows an
+`import cbor2` fails there instead of passing because a later step had already
+installed it. Adding a test file is enough to have it run — there is no list to
+keep in step, which is how five of them went uncovered for the whole 0.9.0 beta
+series.
 
 ## Credits and licensing
 

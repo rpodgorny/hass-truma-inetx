@@ -168,8 +168,11 @@ def _load():
     async def _no_bluez_device(_address):
         return None
 
+    async def _no_link_to_close(_client, _label):
+        return None
+
     _mod("truma_pkg.ble", TrumaBleClient=object,
-         device_from_bluez=_no_bluez_device)
+         device_from_bluez=_no_bluez_device, close_link=_no_link_to_close)
 
     def _real(name: str):
         spec = importlib.util.spec_from_file_location(
