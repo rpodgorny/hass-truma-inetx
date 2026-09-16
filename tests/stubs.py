@@ -153,7 +153,10 @@ def install_homeassistant() -> None:
         "homeassistant.components.binary_sensor",
         BinarySensorEntity=object,
         BinarySensorDeviceClass=SimpleNamespace(
-            RUNNING="running", CONNECTIVITY="connectivity", PLUG="plug"
+            RUNNING="running",
+            CONNECTIVITY="connectivity",
+            PLUG="plug",
+            PROBLEM="problem",
         ),
     )
     mod("homeassistant.components.switch", SwitchEntity=object,

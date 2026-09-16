@@ -64,8 +64,14 @@ class TrumaBinarySensor(TrumaParamEntity, BinarySensorEntity):
         rest are plain flags where anything non-zero is on. The difference is
         the tri-state Active family, where 2 is the appliance standing by --
         see the FlameStatus row in profiles.py.
+
+        A row that reduces its wire value reduces it first, the same way a
+        sensor does: an error list is not a flag until something has counted
+        it.
         """
         value = self.value
+        if self.row.reduce is not None:
+            value = self.row.reduce(value)
         if not isinstance(value, (int, float)):
             return None
         if self.row.on_values is None:

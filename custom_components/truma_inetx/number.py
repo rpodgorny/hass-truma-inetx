@@ -60,9 +60,17 @@ class TrumaNumber(TrumaParamEntity, NumberEntity):
         it has, they win.
         """
         described = self.device.bounds(self._topic, self._param)
-        if described is not None:
+        if described is None:
+            return self.row.fallback_bounds or (0, 100)
+        limit = self.row.bounds_limit
+        if limit is None:
             return described
-        return self.row.fallback_bounds or (0, 100)
+        # A description that is the width of the field rather than a range of
+        # values -- the panel's display timeout is 0 to 4294967295 seconds --
+        # is clipped into what the row says is worth offering. It still only
+        # ever narrows: a device that describes less than the limit keeps its
+        # own answer.
+        return (max(described[0], limit[0]), min(described[1], limit[1]))
 
     @property
     def native_min_value(self) -> float:
