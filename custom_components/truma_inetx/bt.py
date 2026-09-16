@@ -35,34 +35,10 @@ from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
-from .const import LOCAL_NAME_PREFIX, LOGGER
-from .truma.const import SERVICE_UUID
+from .const import LOGGER, has_truma_uuid, looks_like_panel
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
-
-# What the panel actually puts in its advertisement. SERVICE_UUID above is the
-# GATT service, only visible after connecting, so it never matches an advert.
-# Without this the panel can only be recognised by its local name, which lives
-# in the scan response and so requires ACTIVE scanning -- under passive scanning
-# the panel is invisible even though the radio hears it perfectly.
-ADVERT_SERVICE_UUID = "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
-
-# What the iNet X Panel 2 advertises instead (issue #6). An nRF Connect capture
-# of a Panel 2 -- hardware 1.4, firmware 3.5.38.1 -- shows one advertised
-# service, fc310006, plus manufacturer data under Truma's company ID 0x0c73.
-# The GATT table behind it is the panel protocol unchanged: fc314001 write +
-# notify, fc314002 write-without-response, fc314003 and fc314004 notify, the
-# same four characteristics this integration already drives. So only the
-# advertised number moved, and matching it is the whole of Panel 2 discovery.
-ADVERT_SERVICE_UUID_PANEL2 = "fc310006-f3b2-11e8-8eb2-f2801f1b9fd1"
-
-# Everything the panel puts on air that identifies it as a Truma panel. Every
-# UUID here is proprietary to Truma, so any one matching is evidence on its
-# own -- no local name required.
-PANEL_SERVICE_UUIDS = frozenset(
-    {ADVERT_SERVICE_UUID, ADVERT_SERVICE_UUID_PANEL2, SERVICE_UUID}
-)
 
 # How recently the panel must have been heard for a connect to be worth
 # starting, and how long to wait for that to happen.
@@ -73,31 +49,24 @@ ADVERT_WAIT_TIMEOUT = 30.0
 def is_panel_advert(info: BluetoothServiceInfoBleak) -> bool:
     """Return True when this advertisement belongs to a Truma panel.
 
-    The local name is the obvious test, but it is Truma's to change. The iNet X
-    Panel 2 (issue #6) is sold as a drop-in replacement for the panel this
-    integration was written against; the manifest's service-UUID matchers still
-    route it to us, while a renamed advert no longer starts with the prefix the
-    original panel uses. Testing the name alone made such a panel invisible to
-    setup -- advertising, reachable, and never offered.
-
-    So the proprietary service UUIDs match in their own right, and the name is
-    only a convenience for the panel this was written against. Whether the
-    advert can *key* a config entry is a separate question -- see
-    :func:`advert_name`.
+    The rule itself is :func:`~.const.looks_like_panel`, shared with the
+    Home-Assistant-free ``bus`` scan. Whether an advert that passes it can also
+    *key* a config entry is a separate question -- see :func:`advert_name`.
     """
-    if info.name and info.name.startswith(LOCAL_NAME_PREFIX):
-        return True
-    return not PANEL_SERVICE_UUIDS.isdisjoint(info.service_uuids)
+    return looks_like_panel(info.name, info.service_uuids)
 
 
 def advert_name(info: BluetoothServiceInfoBleak) -> str | None:
     """The panel's stable advertised name, or ``None`` if it has not given one.
 
     Home Assistant substitutes the address when an advertisement carries no
-    local name -- which the panel's add-device adverts do not. That address is
-    a rotating RPA, so keying anything on it produces a fresh, MAC-titled
-    discovery every rotation instead of one correctly-named panel. Callers that
-    need a key must wait for a named advert; one follows shortly.
+    local name, which happens whenever the scan response does not arrive --
+    under passive scanning always, and on the panel this was written against in
+    add-device mode as well. (Not universal: a Panel 2 keeps its name in
+    add-device mode, measured in issue #6.) That address is a rotating RPA, so
+    keying anything on it produces a fresh, MAC-titled discovery every rotation
+    instead of one correctly-named panel. Callers that need a key must wait for
+    a named advert; one follows shortly.
     """
     if not info.name or info.name.upper() == info.address.upper():
         return None
@@ -121,13 +90,16 @@ def is_remote_scanner(scanner: object) -> bool:
 def _panel_infos(hass: HomeAssistant, name: str) -> list:
     """Every advert that looks like this panel, seen by any scanner.
 
-    The local name is absent from add-device/pairing adverts, so the service
-    UUID is an equal-standing match rather than a fallback.
+    The name test is exact rather than the prefix :func:`is_panel_advert`
+    accepts -- this asks about *this* panel, not any panel. The service UUID is
+    an equal-standing match rather than a fallback: the panel this integration
+    was written against drops its local name in add-device mode, and under
+    passive scanning no panel gives one at all.
     """
     return [
         info
         for info in bluetooth.async_discovered_service_info(hass, connectable=False)
-        if info.name == name or not PANEL_SERVICE_UUIDS.isdisjoint(info.service_uuids)
+        if info.name == name or has_truma_uuid(info.service_uuids)
     ]
 
 

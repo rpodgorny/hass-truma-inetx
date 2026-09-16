@@ -680,15 +680,15 @@ async def _live(name: str | None, identity: dict, settle: float) -> Bus:
 
     from . import session
     from .ble import TrumaBleClient
-    from .const import LOCAL_NAME_PREFIX
-    from .truma.const import SERVICE_UUID
+    from .const import LOCAL_NAME_PREFIX, looks_like_panel
 
     def _is_panel(device, advert) -> bool:
-        # The service UUID is advertised even in add-device mode, when the
-        # local name may be absent, so it is the more reliable of the two.
-        if SERVICE_UUID.lower() in {uuid.lower() for uuid in advert.service_uuids}:
-            return name is None or device.name == name
-        return bool(device.name) and device.name == name
+        # Same rule the integration's discovery uses. It used to be a narrower
+        # one written here -- a single GATT service UUID -- which no iNet X
+        # Panel 2 advertises, so this tool could not see one at all (issue #6).
+        if not looks_like_panel(device.name, advert.service_uuids):
+            return False
+        return name is None or device.name == name
 
     print("scanning...", file=sys.stderr)
     device = await BleakScanner.find_device_by_filter(_is_panel, timeout=20)

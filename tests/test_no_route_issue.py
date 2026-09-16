@@ -35,6 +35,8 @@ SRC = Path(__file__).resolve().parents[1] / "custom_components" / "truma_inetx"
 
 PANEL = "Truma iNetX-FFB4D1"
 SERVICE_UUID = "fc310002-f3b2-11e8-8eb2-f2801f1b9fd1"
+# What the panel puts in the advertisement itself, as opposed to its GATT table.
+ADVERT_SERVICE_UUID = "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
 
 
 def _mod(name: str, **attrs):
@@ -500,7 +502,7 @@ def test_advert_uuid_matches() -> None:
     ``SERVICE_UUID`` is the GATT service and never appears in an advert, so
     matching on it alone leaves the panel invisible under passive scanning.
     """
-    _set_adverts(_Info(uuids=(BT.ADVERT_SERVICE_UUID,), address=RPA))
+    _set_adverts(_Info(uuids=(ADVERT_SERVICE_UUID,), address=RPA))
     _set_route(_ScannerDevice(RPA, remote=True))
     assert BT.async_resolve_device(None, PANEL) == f"proxy:{RPA}"
 

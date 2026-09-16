@@ -153,7 +153,6 @@ def _load():
     # check reads the client's backend module and needs bleak; every test here
     # overrides it to say what HA is pretending to have chosen.
     _mod("truma_pkg.ble", client_is_proxy=lambda _client: True)
-    _mod("truma_pkg.const", LOGGER=_Logger(), LOCAL_NAME_PREFIX="Truma iNetX")
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", SERVICE_UUID=SERVICE_UUID, CHAR_CMD="cmd-char")
 
@@ -166,6 +165,11 @@ def _load():
         sys.modules[f"truma_pkg.{name}"] = module
         spec.loader.exec_module(module)
         return module
+
+    # The real const: it holds the advert-matching rule now, and a stub of it
+    # would be a second copy of that rule, free to drift from the one shipped.
+    const = _real("const")
+    const.LOGGER = _Logger()
 
     bt = _real("bt")
     pairing = _real("pairing")

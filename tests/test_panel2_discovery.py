@@ -1,35 +1,45 @@
 #!/usr/bin/env python3
-"""Offline check that a panel Truma renames is still offered for setup.
+"""Offline check that a panel Truma renumbers is still offered for setup.
 
 No hardware, no Home Assistant install: the HA imports are stubbed so the real
 ``bt`` helpers and the real ``config_flow`` steps run.
 
-Why this exists: the config flow identified a panel by its advertised local
-name, ``Truma iNetX...``. The manifest also matches on two Truma-proprietary
-service UUIDs, and those matches route to ``async_step_bluetooth`` -- which then
-threw the advert away because the name did not start with the expected prefix.
-A panel whose name Truma changes is therefore heard, reachable and never
-offered, with no discovery card and nothing in the UI to say why. The iNet X
-Panel 2 in issue #6 is the live case; the reporter's panel is visible to the
-proxy and invisible to the integration.
+Why this exists: an iNet X Panel 2 was heard by its owner's proxy, reachable,
+and never offered -- no discovery card, nothing in the UI to say why, which
+from outside is indistinguishable from the integration not hearing it at all
+(issue #6). Two separate gates did that. The config flow threw away any advert
+whose name did not start with ``Truma iNetX``, even when a Truma service UUID
+had routed it there; and the matching itself listed the two service UUIDs the
+original panel puts on air, while a Panel 2 advertises a third, fc310006.
 
-The fix cannot simply drop the name test, because Home Assistant substitutes
-the (rotating) address when an advert carries no local name, and the panel's
-add-device adverts carry none. Keying on that would spawn a new MAC-titled
-discovery card every RPA rotation. So identification and keying were split:
-service UUID *or* known prefix identifies a panel, a real name keys it.
+Both are now settled by an nRF Connect capture of a Panel 2 (hardware 1.4,
+firmware 3.5.38.1). It advertises one service, fc310006, manufacturer data
+under Truma's company ID 0x0c73 -- and the name ``Truma iNetX-5770EB``, which
+does still carry the prefix. So the renamed-panel case is hypothetical rather
+than live; it is kept below because nothing guarantees the next generation
+keeps the prefix, and the first word of the UUID has already moved once. What
+does not move is the UUID base, ``-f3b2-11e8-8eb2-f2801f1b9fd1``, so that is
+what matching keys on.
+
+Identification cannot simply drop the name test either, because Home Assistant
+substitutes the (rotating) address when an advert carries no local name, which
+is what passive scanning and the original panel's add-device mode both give.
+Keying on that would spawn a new MAC-titled discovery card every RPA rotation.
+So identification and keying are split: a Truma UUID *or* the known prefix
+identifies a panel, and only a real name keys it.
 
 What it pins:
 
-1. a renamed panel carrying the service UUID is identified and keyed by the
-   name it does advertise,
-2. an advert whose "name" is really just the address never keys anything, in
+1. the advert a real Panel 2 sends is identified and keyed by its own name,
+2. any UUID in Truma's space identifies a panel, including numbers nobody has
+   seen yet -- no release needed for the next renumbering,
+3. a renamed panel carrying a Truma UUID is identified and keyed by the name it
+   does advertise,
+4. an advert whose "name" is really just the address never keys anything, in
    either flow step,
-3. the original panel still works by name alone, with no service UUID in the
+5. the original panel still works by name alone, with no service UUID in the
    advert (passive scanning shows no scan response),
-4. an unrelated BLE device is not picked up by the manual step,
-5. the service UUID a real Panel 2 advertises, fc310006, is one of the ones
-   matched.
+6. an unrelated BLE device is not picked up by the manual step.
 
 Run: ``python3 tests/test_panel2_discovery.py``
 """
@@ -46,16 +56,20 @@ SRC = Path(__file__).resolve().parents[1] / "custom_components" / "truma_inetx"
 
 # The panel this integration was written against.
 PANEL_1 = "Truma iNetX-FFB4D1"
-# A plausible Panel 2 advert: same proprietary service UUID, a name that no
-# longer starts with the prefix above. The exact string is a guess -- the point
-# of the test is that discovery must not depend on guessing it right.
-PANEL_2 = "Truma iNet X Panel 2-A1B2C3"
+# What a Panel 2 actually calls itself, from the nRF Connect capture in issue
+# #6: the prefix survived the hardware generation, the UUID did not.
+PANEL_2 = "Truma iNetX-5770EB"
+# A panel that drops the prefix. Hypothetical -- no such panel has been seen --
+# and the point is that discovery must not depend on guessing this string.
+PANEL_RENAMED = "Truma iNet X Panel 2-A1B2C3"
 
 ADVERT_SERVICE_UUID = "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
 SERVICE_UUID = "fc310002-f3b2-11e8-8eb2-f2801f1b9fd1"
-# What a Panel 2 actually advertises, from the nRF Connect capture in issue #6
-# (hardware 1.4, firmware 3.5.38.1). Not a guess, unlike PANEL_2 above.
+# What a Panel 2 advertises instead of either of the above (same capture).
 PANEL2_ADVERT_SERVICE_UUID = "fc310006-f3b2-11e8-8eb2-f2801f1b9fd1"
+# A number nobody has advertised yet, in Truma's space. Stands for the next
+# renumbering: matching keys on the base, so this must work untouched.
+UNSEEN_TRUMA_UUID = "fc31beef-f3b2-11e8-8eb2-f2801f1b9fd1"
 
 RPA = "62:4A:BD:AD:73:5D"
 
@@ -166,8 +180,6 @@ def _load():
         async_scanner_devices_by_address=lambda *a, **kw: [],
     )
     _mod("truma_pkg", __path__=[str(SRC)])
-    _mod("truma_pkg.truma", __path__=[])
-    _mod("truma_pkg.truma.const", SERVICE_UUID=SERVICE_UUID)
     # config_flow only reads two names off the coordinator, and pairing is
     # never reached by the steps under test.
     _mod("truma_pkg.coordinator", CONF_POLL_INTERVAL="poll", DEFAULT_POLL_INTERVAL=0)
@@ -219,22 +231,36 @@ def _manual_choices(*infos: _Info) -> list[str]:
 
 
 def test_the_service_uuid_identifies_a_panel_on_its_own() -> None:
-    assert BT.is_panel_advert(_Info(name=PANEL_2, uuids=(ADVERT_SERVICE_UUID,)))
+    assert BT.is_panel_advert(_Info(name=PANEL_RENAMED, uuids=(ADVERT_SERVICE_UUID,)))
     assert BT.is_panel_advert(_Info(name=PANEL_1))
     assert BT.is_panel_advert(_Info(uuids=(SERVICE_UUID,)))
     assert not BT.is_panel_advert(_Info(name="Some Sensor", uuids=("180f",)))
 
 
-def test_the_panel_2_advert_uuid_is_recognised() -> None:
+def test_the_panel_2_advert_is_recognised() -> None:
     """The captured Panel 2 advert: fc310006, which nothing matched before."""
-    assert BT.is_panel_advert(_Info(name=PANEL_2, uuids=(PANEL2_ADVERT_SERVICE_UUID,)))
+    panel_2 = _Info(name=PANEL_2, uuids=(PANEL2_ADVERT_SERVICE_UUID,))
+    assert BT.is_panel_advert(panel_2)
     assert BT.is_panel_advert(_Info(uuids=(PANEL2_ADVERT_SERVICE_UUID,)))
-    result = _discover(_Info(name=PANEL_2, uuids=(PANEL2_ADVERT_SERVICE_UUID,)))
+    result = _discover(panel_2)
     assert not isinstance(result, _Aborted), f"aborted: {result}"
     assert result.unique_id == PANEL_2
-    assert _manual_choices(
-        _Info(name=PANEL_2, uuids=(PANEL2_ADVERT_SERVICE_UUID,))
-    ) == [PANEL_2]
+    assert _manual_choices(panel_2) == [PANEL_2]
+
+
+def test_a_uuid_nobody_has_seen_yet_identifies_a_panel() -> None:
+    """Matching keys on Truma's UUID base, so the next renumber costs nothing.
+
+    Listing exact numbers is what hid a Panel 2 for weeks: it advertises
+    fc310006, the list held fc310000 and fc310002, and nothing said so.
+    """
+    assert BT.is_panel_advert(_Info(uuids=(UNSEEN_TRUMA_UUID,)))
+    assert BT.is_panel_advert(_Info(uuids=(UNSEEN_TRUMA_UUID.upper(),)))
+    assert BT.is_panel_advert(_Info(name=PANEL_RENAMED, uuids=(UNSEEN_TRUMA_UUID,)))
+    # Same first word, somebody else's base: not ours.
+    assert not BT.is_panel_advert(
+        _Info(uuids=("fc31beef-0000-1000-8000-00805f9b34fb",))
+    )
 
 
 def test_an_address_is_not_a_name() -> None:
@@ -246,11 +272,15 @@ def test_an_address_is_not_a_name() -> None:
 
 
 def test_a_renamed_panel_is_discovered_and_keyed_by_its_own_name() -> None:
-    """The regression from issue #6: this used to abort, showing no card."""
-    result = _discover(_Info(name=PANEL_2, uuids=(ADVERT_SERVICE_UUID,)))
+    """Half the regression in issue #6: this used to abort, showing no card.
+
+    Hypothetical as of the Panel 2 capture, which kept the prefix -- but the
+    name is Truma's to change, and nothing warns us when they do.
+    """
+    result = _discover(_Info(name=PANEL_RENAMED, uuids=(ADVERT_SERVICE_UUID,)))
     assert not isinstance(result, _Aborted), f"aborted: {result}"
-    assert result.unique_id == PANEL_2
-    assert result.context["title_placeholders"] == {"name": PANEL_2}
+    assert result.unique_id == PANEL_RENAMED
+    assert result.context["title_placeholders"] == {"name": PANEL_RENAMED}
 
 
 def test_the_original_panel_still_discovers_by_name_alone() -> None:
@@ -267,14 +297,14 @@ def test_a_nameless_pairing_advert_still_waits_for_a_name() -> None:
 
 
 def test_the_manual_step_lists_a_renamed_panel() -> None:
-    assert _manual_choices(_Info(name=PANEL_2, uuids=(ADVERT_SERVICE_UUID,))) == [
-        PANEL_2
+    assert _manual_choices(_Info(name=PANEL_RENAMED, uuids=(ADVERT_SERVICE_UUID,))) == [
+        PANEL_RENAMED
     ]
     assert _manual_choices(_Info(name=PANEL_1)) == [PANEL_1]
     assert _manual_choices(
         _Info(name=PANEL_1),
-        _Info(name=PANEL_2, uuids=(SERVICE_UUID,), address="AA:BB:CC:DD:EE:FF"),
-    ) == sorted((PANEL_1, PANEL_2))
+        _Info(name=PANEL_RENAMED, uuids=(SERVICE_UUID,), address="AA:BB:CC:DD:EE:FF"),
+    ) == sorted((PANEL_1, PANEL_RENAMED))
 
 
 def test_the_manual_step_skips_nameless_and_unrelated_adverts() -> None:
