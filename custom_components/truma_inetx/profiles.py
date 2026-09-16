@@ -76,6 +76,20 @@ class Row:
     entity_category: EntityCategory | None = None
     enabled_default: bool = True
 
+    # Whether the parameter arriving is enough on its own. Normally it is --
+    # see ``async_add_rows``. A panel is the exception: it publishes all six
+    # of its timer slots whether or not anything is in them, and says which
+    # are filled in the `avail` flag of each one. A row that opts in here is
+    # created only once its device stops saying the parameter is unavailable,
+    # which for the timers means a slot appears when a timer is put in it.
+    requires_avail: bool = False
+
+    # The values a translated name interpolates, given the parameter's own
+    # name. For a row that a device publishes several numbered copies of: one
+    # row, one translation key, one name per copy ("Timer 3"), and the number
+    # comes from the wire name rather than from six near-identical rows.
+    placeholders: Callable[[str], dict[str, str]] | None = None
+
     # select: the label shown for each value. Ours, never the panel's -- its
     # names arrive in its display language, and an option string an automation
     # matches on must not change with the panel's language (#12). Which of
@@ -206,6 +220,62 @@ def _error_attrs(value: object) -> dict:
     if first.get("resettable") is not None:
         attrs["resettable"] = bool(first["resettable"])
     return attrs
+
+
+# The panel's timers. Measured on the van, where one is configured::
+#
+#     TimerConfig.Timer1      {"id": 1, "name": "23 °C", "symbol": 1,
+#                              "start": "06:30", "end": "",
+#                              "wd": [1, 1, 1, 1, 1, 1, 1]}   type 206 perm 0
+#     TimerConfig.Timer1State 1                               type 119
+#     TimerConfig.Timer2..6   the same shape, all zeros, avail 0
+#
+# So: six fixed slots, each a structure the panel fills in and a flag saying
+# whether that slot is armed. The flag carries no ``perm`` and is therefore
+# writable (see ``Device.writable``), which is what the switch writes. The
+# structure carries ``perm`` 0 -- the panel describes the timer itself as
+# read-only, the way it describes its serial number and its clock -- so what
+# a timer *does* is shown here and set on the panel.
+TIMER_SLOTS = range(1, 7)
+
+
+def _timer_slot(param: str) -> dict[str, str]:
+    """The slot number out of ``Timer3`` or ``Timer3State``, to name it."""
+    return {"slot": param.removeprefix("Timer").removesuffix("State")}
+
+
+def _timer_start(value: object) -> str | None:
+    """When the timer starts, which is the one thing worth a state.
+
+    An unfilled slot carries ``""`` and reads unknown rather than an empty
+    string that looks like a reading. The end time is often empty on a filled
+    slot too -- the measured one starts at 06:30 and never ends -- so it is an
+    attribute beside the rest, not the state.
+    """
+    if not isinstance(value, dict):
+        return None
+    start = value.get("start")
+    return start if isinstance(start, str) and start else None
+
+
+def _timer_attrs(value: object) -> dict:
+    """Everything else the panel said about the timer.
+
+    The same keys every time, so what reads them never has to ask which shape
+    it got. ``weekdays`` is passed through as the panel's own seven flags: the
+    only timer measured so far repeats on all seven days, which tells nothing
+    about which end of the list is Monday, and naming the days on a guess
+    would put a wrong day into an automation invisibly.
+    """
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "timer_name": value.get("name"),
+        "start": value.get("start"),
+        "end": value.get("end"),
+        "weekdays": value.get("wd"),
+        "symbol": value.get("symbol"),
+    }
 
 
 # Labels. Defined beside the rows that use them so a value and its name cannot
@@ -530,19 +600,19 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             entity_category=EntityCategory.CONFIG,
         ),
     ),
-    # The panel's timer, as something that can be switched off from here --
-    # asked for by somebody who kept driving away with it still armed (#22).
-    # Timer1State read 1 with a timer configured and enabled; the other five
-    # slots on that panel carry avail=0, so this appears where a panel has a
-    # timer and nowhere else. The type is an enum this has never seen more
-    # than 0 and 1 of, so it is read as a flag and written as one.
-    ("TimerConfig", "Timer1State"): (
+    # How many of the six slots are armed, in one reading -- the one an
+    # automation asks rather than adding up six switches. Measured on the van
+    # at 1, with one timer configured and enabled, min 0 max 255.
+    ("TimerConfig", "TimerEnableCount"): (
         Row(
-            platform=Platform.SWITCH,
-            translation_key="timer",
-            device_class=SwitchDeviceClass.SWITCH,
+            platform=Platform.SENSOR,
+            translation_key="timers_enabled",
+            state_class=SensorStateClass.MEASUREMENT,
+            entity_category=EntityCategory.DIAGNOSTIC,
         ),
     ),
+    # The six timer slots themselves are generated below, being six copies of
+    # two rows.
     ("System", "FlameStatus"): (
         Row(
             platform=Platform.BINARY_SENSOR,
@@ -735,6 +805,39 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
         ),
     ),
 }
+
+
+# Six slots, two rows each: the switch that arms the timer, and the sensor
+# that says what arming it does. Written as a loop rather than as twelve
+# entries because they differ only in the number, which is also how they are
+# named -- see ``placeholders``.
+#
+# Both opt into ``requires_avail``: the panel publishes all six slots always,
+# and a vehicle with one timer would otherwise get five switches that arm
+# nothing and five schedules reading unknown. Filling a slot at the panel
+# makes its pair appear at the next update. Emptying one leaves them behind,
+# because entities are never removed -- the switch then reads off and the
+# schedule keeps the times it last had.
+for _slot in TIMER_SLOTS:
+    ROWS[("TimerConfig", f"Timer{_slot}State")] = (
+        Row(
+            platform=Platform.SWITCH,
+            translation_key="timer",
+            device_class=SwitchDeviceClass.SWITCH,
+            placeholders=_timer_slot,
+            requires_avail=True,
+        ),
+    )
+    ROWS[("TimerConfig", f"Timer{_slot}")] = (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="timer_schedule",
+            reduce=_timer_start,
+            attrs=_timer_attrs,
+            placeholders=_timer_slot,
+            requires_avail=True,
+        ),
+    )
 
 
 def rows_for(topic: str, param: str, platform: Platform) -> tuple[Row, ...]:

@@ -150,6 +150,12 @@
       "starter_battery_voltage": {
         "name": "Starter battery"
       },
+      "timer_schedule": {
+        "name": "Timer {slot} schedule"
+      },
+      "timers_enabled": {
+        "name": "Timers enabled"
+      },
       "voltage": {
         "name": "Supply voltage"
       },
@@ -168,7 +174,7 @@
         "name": "Screensaver"
       },
       "timer": {
-        "name": "Timer"
+        "name": "Timer {slot}"
       },
       "water_autofill": {
         "name": "Refill mode"

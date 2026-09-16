@@ -121,7 +121,9 @@ and clears the issue on the next successful connect.
 | Fault | `binary_sensor` | Whether the appliance is reporting an error at all, on the appliance raising it |
 | Fault code | `sensor` | Diagnostic — the code itself, to look up in the manual. An appliance can raise several at once, so the state is the one it listed first and the attributes carry `count` and the whole `errors` list, plus the `severity` and `resettable` of the one in the state. Unknown while there is no fault: 0 would be a code nobody can look up |
 | Reset fault | `button` | Clears the fault, the way the panel's own reset does. Offered only while the appliance is raising something it calls resettable — a window left open above the heater is not |
-| Timer | `switch` | The panel's timer, on or off. Only where the panel has one configured |
+| Timer *n* | `switch` | Arms or disarms one of the panel's six timer slots. Only the filled slots appear: a panel publishes all six whether or not it has six timers, and marks the empty ones unavailable. Filling one at the panel makes its pair appear within seconds |
+| Timer *n* schedule | `sensor` | What arming it does — the state is the start time, and the attributes carry `timer_name` (the panel's own label for it, "23 °C" on the van), `start`, `end`, `weekdays` and `symbol`. Read-only: the panel describes the timer itself with `perm` 0, the way it describes its serial number, so timers are edited, added and deleted at the panel |
+| Timers enabled | `sensor` | Diagnostic — how many slots are armed, in one reading |
 | Display brightness | `number` | Config, % — the panel's daytime brightness |
 | Night brightness | `number` | Config — the panel's dark-mode step, 1–10 on the panel measured |
 | Display timeout | `number` | Config, seconds |
@@ -148,6 +150,16 @@ the parameter, a gas/electric Combi has no diesel burner, most vans have no
 tanks and no electrical block — and an entity that is permanently unknown
 because the hardware does not exist looks exactly like one that is unknown
 because the integration is broken.
+
+The timers are the one place where "only where" is not the parameter arriving
+but a flag beside it. A panel has six fixed slots and publishes all six always,
+each an `id`, a label, a start, an end and seven weekday flags, with `avail` 0
+on the ones nothing is in. So the slots are read through that flag rather than
+through the values, which on an empty slot are a full structure of zeros that
+would present as a timer at midnight every day of the week. The weekday flags
+are passed through as the panel's own seven: the only timer measured so far
+repeats daily, which says nothing about which end of the list is Monday, and a
+day guessed wrong would reach an automation without ever looking wrong.
 
 ### One device per device
 

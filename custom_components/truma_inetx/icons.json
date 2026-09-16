@@ -59,6 +59,12 @@
       },
       "grey_water_level": {
         "default": "mdi:water-opacity"
+      },
+      "timer_schedule": {
+        "default": "mdi:calendar-clock"
+      },
+      "timers_enabled": {
+        "default": "mdi:timer-check-outline"
       }
     },
     "switch": {
