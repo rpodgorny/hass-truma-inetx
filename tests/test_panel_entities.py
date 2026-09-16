@@ -113,20 +113,37 @@ def test_the_fault_code_carries_what_the_appliance_said() -> None:
     code = _by_key(sensors, "error_code")
 
     assert code.native_value == 412, "the code somebody looks up in the manual"
-    assert code.extra_state_attributes == {"severity": 1, "resettable": False}
+    assert code.extra_state_attributes == {
+        "count": 1,
+        "errors": WINDOW_OPEN,
+        "severity": 1,
+        "resettable": False,
+    }
     assert code._addr == HEATER
 
-    # A second fault cannot be the state as well, so the whole list goes
-    # beside it rather than being dropped.
+    # An appliance can raise more than one, and the state can only be one of
+    # them: the list is carried whole, in the same shape it had for one.
     both = WINDOW_OPEN + [{"sev": 2, "code": 500, "resettable": 1}]
     coordinator.report("ErrorReset", "ErrCode", both, HEATER)
-    assert code.native_value == 412
-    assert code.extra_state_attributes["errors"] == both
+    assert code.native_value == 412, "the state is the one the appliance listed first"
+    assert code.extra_state_attributes == {
+        "count": 2,
+        "errors": both,
+        "severity": 1,
+        "resettable": False,
+    }
 
-    # Healthy is no code at all: 0 would be a code nobody can look up.
+    # Healthy is no code at all -- 0 would be a code nobody can look up -- and
+    # the attributes still say so rather than disappearing.
     coordinator.report("ErrorReset", "ErrCode", [], HEATER)
     assert code.native_value is None
-    assert code.extra_state_attributes is None
+    assert code.extra_state_attributes == {"count": 0, "errors": []}
+
+    # A fault that is not the one in the state can still be the clearable one,
+    # which is why the button reads the list and not these attributes.
+    coordinator.report("ErrorReset", "ErrCode", both, HEATER)
+    assert code.extra_state_attributes["resettable"] is False
+    assert any(e["resettable"] for e in code.extra_state_attributes["errors"])
 
 
 def test_the_reset_button_waits_for_a_fault_that_can_be_reset() -> None:

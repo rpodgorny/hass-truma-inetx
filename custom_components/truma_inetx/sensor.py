@@ -66,6 +66,11 @@ class TrumaSensor(TrumaParamEntity, SensorEntity):
             return None
         return self.row.attrs(self.value) or None
 
+    # Deliberately not a property that hides an empty result: a row that
+    # builds attributes at all returns the same keys every time it has a
+    # value to build them from, so that what reads them never has to ask
+    # which shape it got.
+
     @property
     def native_value(self) -> float | int | str | None:
         """The device's own value for the parameter, in the row's unit."""

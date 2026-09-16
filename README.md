@@ -119,7 +119,7 @@ and clears the issue on the next successful connect.
 | Refill mode | `switch` | The panel's "refill" button: while it is on the tank sensor measures continuously and the panel sounds a tone at full. Only where the vehicle has a tank sensor |
 | Shore power | `binary_sensor` | Whether 230 V is connected. The panel publishes it (`System.Plugged`) and so does an electrical block (`LinePower.Plugged`); a vehicle with both gets one on each device, which is two sources rather than one reading |
 | Fault | `binary_sensor` | Whether the appliance is reporting an error at all, on the appliance raising it |
-| Fault code | `sensor` | Diagnostic — the code itself, to look up in the manual, with the appliance's own severity and whether it says the fault can be reset. Unknown while there is no fault: 0 would be a code nobody can look up |
+| Fault code | `sensor` | Diagnostic — the code itself, to look up in the manual. An appliance can raise several at once, so the state is the one it listed first and the attributes carry `count` and the whole `errors` list, plus the `severity` and `resettable` of the one in the state. Unknown while there is no fault: 0 would be a code nobody can look up |
 | Reset fault | `button` | Clears the fault, the way the panel's own reset does. Offered only while the appliance is raising something it calls resettable — a window left open above the heater is not |
 | Timer | `switch` | The panel's timer, on or off. Only where the panel has one configured |
 | Display brightness | `number` | Config, % — the panel's daytime brightness |
