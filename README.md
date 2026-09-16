@@ -139,7 +139,7 @@ and clears the issue on the next successful connect.
 | Screensaver | `switch` | Config |
 | Starter battery | `sensor` | V — only where something reports `VBat.Voltage` |
 | Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
-| Flame status | `sensor` | Diagnostic, disabled by default — the raw `System.FlameStatus` value |
+| Flame status | `sensor` | Diagnostic — off / running / idle. Measured twice, on a Combi 6 E against a shore-power meter (#15) and on a Combi 4 gas at the panel (#24): *idle* is the appliance on with the room already above its target, which the flame flag beside it cannot say. The number it was named from stays in the `raw` attribute, and a value nobody has named yet reads unknown rather than being folded into a state it does not belong in |
 | Free slots | `sensor` | Diagnostic — how many bonds the panel has left, summed over the breakdown by device kind it publishes. On its own Bluetooth management device |
 | Connection state | `sensor` | Diagnostic — the panel's own view of the link, `BleDeviceManagement.BleConnState` |
 | State | `sensor` | Diagnostic — the raw `BleDeviceManagement.State` value |

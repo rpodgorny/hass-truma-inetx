@@ -236,6 +236,11 @@ def _error_attrs(value: object) -> dict:
     return attrs
 
 
+def _raw(value: object) -> dict:
+    """The wire value itself, beside a state that names it."""
+    return {"raw": value}
+
+
 def _epoch(value: object) -> datetime | None:
     """A wire epoch as an aware datetime, or None if it is not a time.
 
@@ -323,6 +328,27 @@ _AIR_MODE_LABELS = {0: "Fast", 1: "Comfort"}
 # switching all six at the panel one at a time (2026-09-02). Not a thermostat
 # mode: it is how hard the unit runs, which is why "Auto" sits inside it.
 _COOLING_LABELS = {0: "Min", 1: "Mid", 2: "High", 3: "Max", 4: "Night", 5: "Auto"}
+# The type-105 triple, under the names two vehicles have now measured it at.
+#
+# A Combi 6 E with gas and an 1800 W element, watched against an independent
+# shore-power meter (#15): 1 with the burner firing, still 1 with the gas off
+# and the element drawing 1775 W -- which ruled out the reading that had it
+# track the energy source -- and 1 -> 2 in the second the draw fell to 105 W
+# when the target was set below the room.
+#
+# A Combi 4 gas, independently and on different hardware (#24): "0 = heater
+# completely off, 1 = actively running with the room below the configured
+# temperature, 2 = on with the room above it". The same three, and it says
+# plainly what the idle state is *for*.
+#
+# Lower case, because these are the states an automation matches on and not
+# the words anybody reads: the words are in strings.json, per language, and
+# the state under them does not move when the translation does.
+_FLAME_LABELS: dict[int, str] = {
+    ActiveState.OFF: "off",
+    ActiveState.ACTIVE: "running",
+    ActiveState.IDLE: "idle",
+}
 
 ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # -- temperatures ----------------------------------------------------
@@ -662,12 +688,21 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
         Row(
             platform=Platform.SENSOR,
             translation_key="flame_status",
-            # No state class on purpose: 0, 1 and 2 are states, not a
-            # quantity, so long-term statistics would average a code into a
-            # number that means nothing. It exists so somebody standing next
-            # to a running heater can watch the raw value in a history graph.
+            # The three states by name, now that two vehicles have measured
+            # the same three. No state class, then or now: these are states
+            # and not a quantity, and long-term statistics would have handed
+            # somebody a daily mean of 1.4.
+            device_class=SensorDeviceClass.ENUM,
+            labels=_FLAME_LABELS,
+            # And the number underneath, always. This entity exists because
+            # somebody standing next to a running heater could watch the raw
+            # value in a history graph, which is how the meaning was found in
+            # the first place -- and a fourth value, if one shows up, has to
+            # stay visible rather than being swallowed by a state it does not
+            # have a name for. Cold ignition and the fan run-on are still
+            # unobserved (#15).
+            attrs=_raw,
             entity_category=EntityCategory.DIAGNOSTIC,
-            enabled_default=False,
         ),
     ),
     # -- the panel's display ---------------------------------------------

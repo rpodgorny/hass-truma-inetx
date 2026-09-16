@@ -133,7 +133,12 @@
         "name": "Fault reset window"
       },
       "flame_status": {
-        "name": "Flame status"
+        "name": "Flame status",
+        "state": {
+          "off": "Off",
+          "running": "Running",
+          "idle": "Idle"
+        }
       },
       "fresh_water_level": {
         "name": "Fresh water"
