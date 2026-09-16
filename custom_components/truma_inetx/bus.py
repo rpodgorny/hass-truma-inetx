@@ -610,8 +610,25 @@ def from_diagnostics(payload: dict) -> Bus:
     read one back into the same object the integration runs on is the
     difference between "paste the JSON and let me squint at it" and looking at
     somebody's bus the way they see it.
+
+    Three shapes are read, because all three are in the issue tracker:
+
+    * what this integration returns today, and the file a user downloads --
+      which is the same thing wrapped in ``data`` by Home Assistant. Reading
+      only the unwrapped one meant every real download came back as an empty
+      bus and printed nothing at all.
+    * a pre-0.9 download, which kept a per-device store beside its flat one
+      (``device_params`` / ``device_param_meta``, keyed by hex address).
+    * a pre-0.7 download, which had only the flat store. Nothing in it says
+      which device published what, so all of it lands in
+      :attr:`Bus.unattributed` rather than under a device that would be a
+      guess -- the same place a frame that names no source goes.
+
+    Every dump anybody has attached to an issue so far is one of the last two.
     """
     bus = Bus()
+    # A downloaded file wraps the integration's own return value in "data".
+    payload = payload.get("data") or payload
     section = payload.get("bus") or payload
     for key, record in (section.get("devices") or {}).items():
         addr = int(str(record.get("addr", key)), 16)
@@ -623,7 +640,33 @@ def from_diagnostics(payload: dict) -> Bus:
     assigned = section.get("assigned_addr")
     if isinstance(assigned, str):
         bus.assigned_addr = int(assigned, 16)
+    if not bus.devices:
+        _from_pre_bus_model(bus, section.get("state") or section)
     return bus
+
+
+def _from_pre_bus_model(bus: Bus, state: dict) -> None:
+    """Fill a bus from a download taken before the bus model existed."""
+    for key, params in (state.get("device_params") or {}).items():
+        bus.device(int(str(key), 16)).params.update(params or {})
+    for key, metas in (state.get("device_param_meta") or {}).items():
+        device = bus.device(int(str(key), 16))
+        for name, meta in (metas or {}).items():
+            device.param_meta.setdefault(name, {}).update(meta or {})
+    # Addresses that answered but whose values all arrived flat still say what
+    # was on that bus, which is half of what a reader is looking for.
+    for key in state.get("seen_devices") or ():
+        bus.device(int(str(key), 16))
+    # Whatever the flat store holds that no device claims. On a pre-0.7
+    # download that is all of it; on a later one it is the handful that
+    # arrived without a source.
+    claimed = {key for device in bus.devices.values() for key in device.params}
+    for key, value in (state.get("raw_params") or {}).items():
+        if key not in claimed:
+            bus.unattributed[key] = value
+    assigned = state.get("assigned_addr")
+    if isinstance(assigned, int) and assigned:
+        bus.assigned_addr = assigned
 
 
 async def _live(name: str | None, identity: dict, settle: float) -> Bus:
@@ -741,6 +784,15 @@ def _main(argv: list[str] | None = None) -> int:
         bus = asyncio.run(_live(args.name, identity, args.settle))
     elif args.download:
         bus = from_diagnostics(json.loads(Path(args.download).read_text("utf-8")))
+        if not bus.devices and not bus.unattributed:
+            # Printing nothing at all reads as "this bus is empty", which is
+            # not the same as "this file is not one I can read".
+            print(
+                f"{args.download}: no bus in this file -- is it a Truma "
+                "diagnostics download?",
+                file=sys.stderr,
+            )
+            return 1
     else:
         parser.error("give a diagnostics download to read, or --live")
         return 2
