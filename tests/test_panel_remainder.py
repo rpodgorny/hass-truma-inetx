@@ -193,6 +193,33 @@ def test_none_of_it_clutters_the_device_page() -> None:
         assert entity._attr_entity_registry_enabled_default is want, key
 
 
+def test_a_duration_in_seconds_is_shown_in_whole_seconds() -> None:
+    coordinator = _coordinator()
+    sensors = stubs.setup_platform(SENSOR, coordinator)
+    coordinator.report("Panel", "UserInactiveSince", 2850, PANEL)
+
+    idle = _by_key(sensors, "panel_idle")
+    # Left to itself Home Assistant infers a precision from the device class
+    # and lands on two decimals, so this read "2850.00" -- two digits of
+    # resolution the parameter has not got. It moves in steps of ten.
+    assert idle._attr_suggested_display_precision == 0
+
+    # Every one of them, not just the one that was noticed: the same device
+    # class and the same unit get the same inference.
+    import truma_pkg.profiles as profiles  # noqa: PLC0415
+
+    durations = [
+        (key, row)
+        for key, rows in profiles.ROWS.items()
+        for row in rows
+        if row.device_class == "duration"
+    ]
+    assert len(durations) == 3, durations
+    for key, row in durations:
+        assert row.unit == "s", key
+        assert row.precision == 0, key
+
+
 def test_every_new_key_is_named_and_iconed() -> None:
     strings = json.loads((SRC / "strings.json").read_text())["entity"]
     icons = json.loads((SRC / "icons.json").read_text())["entity"]

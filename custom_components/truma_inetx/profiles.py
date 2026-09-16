@@ -56,6 +56,19 @@ from .bus import ActiveState
 # Wire scale for a temperature: the protocol carries tenths of a degree.
 TENTHS = 0.1
 
+# Display precision for a duration the wire carries as whole seconds.
+#
+# Stated rather than left to Home Assistant, which infers a precision from the
+# device class when a sensor offers none and lands on two decimals for a
+# duration in seconds -- so a panel that had been untouched for 2850 seconds
+# read "2850.00", which is two digits of resolution the parameter does not
+# have. It has rather less than one: measured on the van, the idle counter
+# moves in steps of ten seconds, so the honest precision is -1. Home Assistant
+# does not take one -- it clamps its own inferred precisions at 0 (see
+# ``_calculate_precision_from_ratio``) -- and 0 shows every one of these
+# parameters exactly as the device sent it, which is the point.
+_WHOLE_SECONDS = 0
+
 
 @dataclass(frozen=True, kw_only=True)
 class Row:
@@ -490,6 +503,7 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             translation_key="faster_water_heating_time",
             device_class=SensorDeviceClass.DURATION,
             unit=UnitOfTime.SECONDS,
+            precision=_WHOLE_SECONDS,
             # No state class: until it is known whether this counts down or
             # states how long the mode was configured for, a long-term
             # statistic of it would mean nothing.
@@ -878,6 +892,7 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             translation_key="panel_idle",
             device_class=SensorDeviceClass.DURATION,
             unit=UnitOfTime.SECONDS,
+            precision=_WHOLE_SECONDS,
             enabled_default=False,
             entity_category=EntityCategory.DIAGNOSTIC,
         ),
@@ -938,6 +953,7 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             translation_key="fault_reset_window",
             device_class=SensorDeviceClass.DURATION,
             unit=UnitOfTime.SECONDS,
+            precision=_WHOLE_SECONDS,
             enabled_default=False,
             entity_category=EntityCategory.DIAGNOSTIC,
         ),
