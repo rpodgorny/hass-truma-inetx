@@ -188,6 +188,11 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # kind -- see _prefer_identity).
         self._last_kind: str | None = None
         self._kind_stale = False
+        # Which transport carried the last session that came up ("proxy" or
+        # "local"), for diagnostics only. Not persisted and never dialled on:
+        # HA re-scores the paths at every connect, so last session's transport
+        # predicts nothing about the next one (issue #13).
+        self._session_transport: str | None = None
         # Whether the current attempt ever reached "connected and subscribed".
         # A link that dropped after hours of good service says nothing about
         # which address kind is right, so only failures before that flip the
@@ -570,6 +575,16 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         """
         return self._address_kind
 
+    @property
+    def session_transport(self) -> str | None:
+        """Which transport carried the last session that came up, if any.
+
+        Exposed for diagnostics beside :attr:`address_kind`: the address kind
+        says which address answered, this says which adapter it answered on.
+        Neither is dialled on (see ble.TrumaBleClient.transport).
+        """
+        return self._session_transport
+
     def device_info(self, addr: int) -> DeviceInfo:
         """The Home Assistant device an entity at a bus address belongs to.
 
@@ -659,6 +674,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         """
         await self._run_startup(client)
         self._session_ok = True
+        self._session_transport = client.transport
         if self._last_kind is not None:
             # The panel answered, encrypted and subscribed on this address, so
             # this is the kind that works here. Connecting alone would not have

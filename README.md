@@ -60,7 +60,10 @@ on a rotating address or on its identity address here, and later connects
 start there. A host whose answer changes — a kernel upgrade, a proxy that
 moved — falls back to the other kind by itself, costing one attempt rather
 than the connection. The learned answer is in the diagnostics download as
-`address_kind`.
+`address_kind`, beside `session_transport` — `proxy` or `local`, the adapter
+the last session that came up actually ran over. Nothing dials on that; it is
+there because a host can bond over one adapter and then run every session over
+the other, and a download that names only the address cannot say so.
 
 **If you do run a proxy, stock firmware is enough** — nothing custom is
 needed. A plain
@@ -114,7 +117,7 @@ and clears the issue on the next successful connect.
 | Gas bottle remaining (raw) | `sensor` | Diagnostic, disabled by default — `GasBtl.RemTime`, unitless on purpose: the name says time, the panel shows neither, and nothing measured says what it counts |
 | Sensor battery | `sensor` | Diagnostic, % — a Bluetooth sensor's own battery, on that sensor's device |
 | Cooling temperature | `sensor` | °C — what the air conditioner measures. Only where the vehicle has one |
-| Cooling level | `select` | `AirCooling.Mode`: Min / Mid / High / Max / Night / Auto — how hard the unit runs, on its own device |
+| Cooling level | `select` | `AirCooling.Mode`: Low / Mid / High / Max / Night / Auto — the unit's own names for the stages, and how hard it runs, on its own device |
 | Cooling | `binary_sensor` | Whether the air conditioner is running, as opposed to standing by |
 | Refill mode | `switch` | The panel's "refill" button: while it is on the tank sensor measures continuously and the panel sounds a tone at full. Only where the vehicle has a tank sensor |
 | Shore power | `binary_sensor` | Whether 230 V is connected. The panel publishes it (`System.Plugged`) and so does an electrical block (`LinePower.Plugged`); a vehicle with both gets one on each device, which is two sources rather than one reading |

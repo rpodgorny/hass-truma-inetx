@@ -84,6 +84,8 @@ class _Coord:
     # Which kind of address this host connects on; the download reports it, so
     # a coordinator that never ran a session has to answer "not known yet".
     address_kind = None
+    # Which adapter carried the last session, likewise unknown until one has.
+    session_transport = None
     _client = None
     poll_interval = 0
     # What setup fills in once it has registered the panel with the device
@@ -472,6 +474,29 @@ def test_the_terminal_dump_shows_the_bus_per_device() -> None:
     assert "instance 3" in text and "instance 4" in text
     assert "0..100" in text
     assert "GasBtl" in text.split("more than one publisher")[1]
+
+
+def test_a_download_says_how_this_host_reached_the_panel() -> None:
+    """Both halves of it: which address answered, and over which adapter.
+
+    The address kind alone cannot tell a host that bonded over one transport
+    and runs every session over another from one that is simply slow, which is
+    the open question in #13.
+    """
+    coord = _Coord()
+    coord.address_kind = "identity"
+    coord.session_transport = "proxy"
+    _report(coord, BOTTLE_LEFT, "GasBtl", "FillLevelP", 49)
+
+    entry = types.SimpleNamespace(
+        runtime_data=coord, as_dict=lambda: {"title": "Truma"}
+    )
+    dumped = json.loads(json.dumps(
+        asyncio.run(DIAG.async_get_config_entry_diagnostics(None, entry))
+    ))
+
+    assert dumped["address_kind"] == "identity"
+    assert dumped["session_transport"] == "proxy"
 
 
 def test_a_download_reads_back_into_the_same_bus() -> None:

@@ -183,6 +183,21 @@ class TrumaBleClient:
             and self._client.is_connected
         )
 
+    @property
+    def transport(self) -> str | None:
+        """Which adapter this link runs over: proxy, local, or None if down.
+
+        Which path Home Assistant picked is not ours to choose and nothing in
+        the session reads it (see bt.py). It is recorded because issue #13
+        turns on whether the bond and the session live on the same adapter --
+        a host with both a local adapter and a proxy in earshot can bond over
+        one and then run every session over the other -- and a download that
+        does not say which one carried the session cannot answer that.
+        """
+        if self._client is None:
+            return None
+        return "proxy" if client_is_proxy(self._client) else "local"
+
     async def connect(
         self,
         ble_device: BLEDevice,

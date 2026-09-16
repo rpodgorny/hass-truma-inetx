@@ -262,10 +262,18 @@ class Device:
         """Whether this device says the parameter may be written.
 
         ``perm`` is documented by the reverse-engineered protocol reference as
-        "permission, Integer" and nothing more: 1 is the only value seen in a
-        capture. So this answers ``None`` -- "the device did not say" --
-        wherever there is no ``perm`` at all, and reads 0 as a refusal on the
-        strength of the field's name.
+        "permission, Integer" and nothing more, but two panels have now been
+        read and they agree. ``perm: 0`` sits on parameters that are plainly
+        readings -- ``Identify.Name``, ``Identify.SerialNr``,
+        ``TimeAndDate.Time`` here, and ``System.FlameStatus``, ``L1Bat.Voltage``,
+        ``GasBtl.FillLevelP`` on the vehicle of #23 -- while every parameter
+        either panel writes successfully carries no ``perm`` key at all. On the
+        second panel the value 1 never appears anywhere.
+
+        So a missing ``perm`` means writable rather than unknown, which is what
+        ``None`` is for here: "the device did not say", and the caller goes
+        ahead. Only an explicit 0 is a refusal, and nothing is gated on ``perm``
+        being present.
 
         That inference is deliberately used only to refuse a write with a
         message naming the claim, never to withhold a control. Withholding one

@@ -78,5 +78,9 @@ async def async_get_config_entry_diagnostics(
         # names a kind, not an address -- and it is what explains a host's
         # connect times (issue #13).
         "address_kind": coordinator.address_kind,
+        # And which adapter the last session that came up ran over ("proxy" or
+        # "local"). The pair is what tells a bond on one transport from a
+        # session on the other, which is the open question in issue #13.
+        "session_transport": coordinator.session_transport,
         "bus": bus_dict,
     }

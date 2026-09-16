@@ -27,6 +27,13 @@ PARALLEL_UPDATES = 0
 # independent decoding of the protocol, and cost nothing to name here -- a
 # vehicle whose panel does not enumerate them never reaches them.
 #
+# A third panel, on a vehicle that does have a roof air conditioner,
+# enumerates {0: Off, 1: ACC, 2: Cooling, 3: Heating, 5: Ventilating} (#23).
+# It spells 1 "ACC" rather than automatic -- HVACMode.AUTO is still the
+# closest thing HA has -- and 4 and 6 are absent even there, on the vehicle
+# that would have been the one to show them. Both are still named from
+# decoding alone.
+#
 # 4 is heating with air-conditioner assistance, which is still heating as far
 # as Home Assistant's model goes; it shares HVACMode.HEAT and the reverse
 # table below deliberately sends plain heating instead.
@@ -56,6 +63,9 @@ _DEFAULT_HVAC_MODES = [HVACMode.OFF, HVACMode.HEAT, HVACMode.FAN_ONLY]
 # own: the heater heats from 5 °C, and a room setpoint -- cooling, or the
 # panel's own in automatic -- starts at 16, which is where the panel's slider
 # starts and below which the bus refuses the write (bus.PARAM_VALIDATION).
+# Only a fallback, and not the truth on any measured unit: the FreshJet 2200
+# of #23 describes its own cooling setpoint as 16.0-31.0, and a device's own
+# bounds always win (see _limit).
 _FALLBACK_SETPOINT_RANGE = {
     "AirHeating": (5, 30),
     "AirCooling": (16, 30),

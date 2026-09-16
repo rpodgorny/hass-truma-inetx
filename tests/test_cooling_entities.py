@@ -99,6 +99,23 @@ def test_the_air_conditioner_gets_its_own_entities() -> None:
     assert BUS.Bus().device(HEATER).params == {}
 
 
+def test_the_cooling_stages_are_named_the_way_the_unit_names_them() -> None:
+    """The panel publishes this enum with names of its own, and 0 is "Low".
+
+    Read off a FreshJet 2200, which enumerates {0: Low, 1: Mid, 2: High,
+    3: Max, 4: Night, 5: Auto} (#23). These strings are what automations match
+    on, so they follow the unit rather than this repo's word for it -- 0 was
+    "Min" here until the unit was asked.
+    """
+    coordinator = _coordinator()
+    selects = stubs.setup_platform(SELECT, coordinator)
+    coordinator.report("AirCooling", "Mode", 0, ROOF_AC)
+
+    mode = _by_key(selects, "cooling_mode")
+    assert mode.options == ["Low", "Mid", "High", "Max", "Night", "Auto"]
+    assert mode.current_option == "Low"
+
+
 def test_cooling_that_is_standing_by_reads_as_off() -> None:
     """The Active family is tri-state: 2 is the unit idle, not a second on."""
     coordinator = _coordinator()

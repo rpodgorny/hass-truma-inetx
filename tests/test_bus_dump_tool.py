@@ -93,6 +93,7 @@ def _download() -> dict:
         unique_id="Truma iNetX-FFB4D1",
         last_update_success=True,
         address_kind="identity",
+        session_transport="local",
         _client=None,
         poll_interval=0,
     )

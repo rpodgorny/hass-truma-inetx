@@ -119,6 +119,11 @@ class _Client:
             self._disconnect_at is None or self._clock.now < self._disconnect_at
         )
 
+    @property
+    def transport(self) -> str:
+        """Which adapter this link runs over; the coordinator records it."""
+        return "local"
+
     async def send(self, frame: bytes, *, probe: bool = False) -> bool:
         parsed = PROTO.parse_v3_frame(frame)
         self.sent.append((self._clock.now, parsed))

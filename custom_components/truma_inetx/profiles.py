@@ -325,9 +325,12 @@ _WATER_MODE_LABELS = {0: "Eco (40 °C)", 1: "Comfort (60 °C)", 2: "Hot (70 °C)
 _ELECTRIC_LABELS = {0: "off", 1: "900 W", 2: "1800 W"}
 _AIR_MODE_LABELS = {0: "Fast", 1: "Comfort"}
 # A roof air conditioner's own stages, measured on a Dometic FreshJet 2200 by
-# switching all six at the panel one at a time (2026-09-02). Not a thermostat
-# mode: it is how hard the unit runs, which is why "Auto" sits inside it.
-_COOLING_LABELS = {0: "Min", 1: "Mid", 2: "High", 3: "Max", 4: "Night", 5: "Auto"}
+# switching all six at the panel one at a time (2026-09-02), and since read
+# off that unit's own enum, which the panel publishes with names:
+# {0: Low, 1: Mid, 2: High, 3: Max, 4: Night, 5: Auto} (#23). "Min" was this
+# table's word for 0; the unit's own word is "Low". Not a thermostat mode: it
+# is how hard the unit runs, which is why "Auto" sits inside it.
+_COOLING_LABELS = {0: "Low", 1: "Mid", 2: "High", 3: "Max", 4: "Night", 5: "Auto"}
 # The type-105 triple, under the names two vehicles have now measured it at.
 #
 # A Combi 6 E with gas and an 1800 W element, watched against an independent
@@ -592,6 +595,13 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # own topic. Whether the room is cooled at all is still RoomClimate on the
     # panel, which is the climate entity's HVACMode.COOL; what is here is what
     # belongs to the unit itself.
+    #
+    # Measured with cooling actually running, on that vehicle (#23): the panel
+    # at RoomClimate.Mode 2 and Active 1, the roof unit at AirCooling.Active 1,
+    # Temp 210, TgtTemp 170, Mode 0 -- and 585 W on an independent shore-power
+    # meter for the 45 seconds it ran, so this is the unit and not just bus
+    # traffic. The two halves of "start cooling" live on two devices there,
+    # which is what COMMAND_DEST keeping RoomClimate is for.
     ("AirCooling", "Temp"): (
         Row(
             platform=Platform.SENSOR,
@@ -606,6 +616,10 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # and the climate entity already owns the setpoint of whichever mode is
     # running (see climate.py). Two controls over one thing would disagree --
     # the same reasoning that keeps AirHeating.TgtTemp out of this table.
+    # The roof unit describes it as 160-310 against the same vehicle's
+    # AirHeating.TgtTemp at 50-300 (#23) -- two ranges for one slider on one
+    # bus, which is why the climate entity asks the field's owner rather than
+    # carrying a range of its own.
     ("AirCooling", "Mode"): (
         Row(
             platform=Platform.SELECT,
@@ -621,7 +635,8 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             # Read the way the tri-state Active family reads, so a 2 is the
             # unit standing by rather than a second kind of "on" -- the care
             # FlameStatus needed. A plain 0/1 flag reads identically either
-            # way, so this costs nothing if it turns out to be one.
+            # way, so this costs nothing if it turns out to be one. The one
+            # running unit measured so far reported 1 and never a 2 (#23).
             on_values=(ActiveState.ACTIVE,),
         ),
     ),
