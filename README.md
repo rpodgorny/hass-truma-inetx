@@ -572,12 +572,23 @@ itself carries nothing identifying.
   fails after the session has launched stops it on the way out rather than
   leaving it running behind an entry Home Assistant will never unload.
 
+  Measured fixed on the van, 2026-09-17, on 0.9.0b14 and by the trigger that
+  found it -- toggling one entity. The session closed its own link
+  (`BLE link closed cleanly`), the stop's own disconnect found nothing left to
+  do, and the entry came back by itself: the transport was up ten seconds
+  later and startup finished at thirty-four, parameter discovery and all, with
+  no restart and no `did not stop within` warning. Under 0.9.0b13 the line
+  after that first one was `no live BLE link to close`, and nothing followed
+  it.
+
   What is left is the one case that cannot be closed from here: a task
   cancelled while `establish_connection` is still inside itself never returns
   the link it was opening, so nothing can close it and the panel drops it in
-  its own time. The log names that case. All of this is pinned offline by
-  `tests/test_entry_teardown.py`; none of it has been measured on a vehicle
-  yet.
+  its own time. The log names that case. The two neighbours -- the un-adopted
+  pairing link and a setup that fails after its session launched -- are pinned
+  by `tests/test_entry_teardown.py` alongside the rest but have not been
+  triggered on hardware, since reaching them means re-pairing or forcing a
+  setup failure.
 - **Duplicate entries in the panel's device list.** Each pairing can leave an
   extra record. Harmless so far, but it consumes the panel's ~4 slots.
 - Only the local name / service UUID are used for discovery; the stored address
