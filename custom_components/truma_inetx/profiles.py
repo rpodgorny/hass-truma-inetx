@@ -94,6 +94,12 @@ class Row:
     # described none of its own.
     step: float = 1
     fallback_bounds: tuple[int, int] | None = None
+    # number: a range to clip the device's own description into. The device is
+    # the authority on what it accepts and that does not change here -- but a
+    # panel that describes its display timeout as 0 to 4294967295 seconds is
+    # stating the width of the field, not offering a control, and a slider
+    # 136 years long is no control either.
+    bounds_limit: tuple[int, int] | None = None
 
     # Turns a structured wire value into the single one the row presents,
     # applied before `scale`. Nearly every parameter carries a scalar and
@@ -125,6 +131,20 @@ def _free_slots(value: object) -> int | None:
             return None
         total += count
     return total
+
+
+def _has_error(value: object) -> int | None:
+    """Whether anything is in the appliance's error list.
+
+    ``ErrorReset.ErrCode`` is the codes currently raised: an empty list on a
+    healthy appliance, measured on a Combi 4 (#22). That is all this reads out
+    of it. What a code means is not known here, and a number nobody can look
+    up is worse than a flag that says to go and read the panel -- the codes
+    themselves are in a diagnostics download, unchanged.
+    """
+    if not isinstance(value, list):
+        return None
+    return 1 if value else 0
 
 
 # Labels. Defined beside the rows that use them so a value and its name cannot
@@ -221,6 +241,19 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # answer to a question many vehicles already answer with a smart plug, and
     # worth having precisely because the two can disagree.
     ("LinePower", "Plugged"): (
+        Row(
+            platform=Platform.BINARY_SENSOR,
+            translation_key="line_power",
+            device_class=BinarySensorDeviceClass.PLUG,
+        ),
+    ),
+    # The panel's own answer to the same question, and the one most vehicles
+    # have: LinePower belongs to an electrical block, which most vans do not
+    # carry, while every panel publishes this. Measured on two vehicles -- 0
+    # with the van unplugged (#22) and 1 on shore power (#17) -- and named the
+    # same as the block's, because it is the same fact. Where both exist they
+    # are two entities on two devices, which is what two sources are.
+    ("System", "Plugged"): (
         Row(
             platform=Platform.BINARY_SENSOR,
             translation_key="line_power",
@@ -404,6 +437,29 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
         ),
     ),
     # -- system ----------------------------------------------------------
+    # Whether the appliance is reporting a fault at all. Empty on the healthy
+    # Combi 4 of #22, and it was mapped before the bus rewrite and lost in it.
+    ("ErrorReset", "ErrCode"): (
+        Row(
+            platform=Platform.BINARY_SENSOR,
+            translation_key="error",
+            device_class=BinarySensorDeviceClass.PROBLEM,
+            reduce=_has_error,
+        ),
+    ),
+    # The panel's timer, as something that can be switched off from here --
+    # asked for by somebody who kept driving away with it still armed (#22).
+    # Timer1State read 1 with a timer configured and enabled; the other five
+    # slots on that panel carry avail=0, so this appears where a panel has a
+    # timer and nowhere else. The type is an enum this has never seen more
+    # than 0 and 1 of, so it is read as a flag and written as one.
+    ("TimerConfig", "Timer1State"): (
+        Row(
+            platform=Platform.SWITCH,
+            translation_key="timer",
+            device_class=SwitchDeviceClass.SWITCH,
+        ),
+    ),
     ("System", "FlameStatus"): (
         Row(
             platform=Platform.BINARY_SENSOR,
@@ -427,6 +483,52 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             # to a running heater can watch the raw value in a history graph.
             entity_category=EntityCategory.DIAGNOSTIC,
             enabled_default=False,
+        ),
+    ),
+    # -- the panel's display ---------------------------------------------
+    # Configuration rather than readings: the panel describes all four as
+    # writable and gives its own range for each (#22). Dimming the panel at
+    # night is the obvious use, and it is the one thing on the bus that is
+    # about the panel rather than about the vehicle.
+    ("Panel", "Intst"): (
+        Row(
+            platform=Platform.NUMBER,
+            translation_key="panel_brightness",
+            unit=PERCENTAGE,
+            entity_category=EntityCategory.CONFIG,
+            fallback_bounds=(10, 100),
+        ),
+    ),
+    ("Panel", "DarkIntst"): (
+        Row(
+            platform=Platform.NUMBER,
+            translation_key="panel_night_brightness",
+            # 1 to 10 on the panel measured, which is not the percentage the
+            # daytime one is, so it carries no unit rather than a wrong one.
+            entity_category=EntityCategory.CONFIG,
+            fallback_bounds=(1, 10),
+        ),
+    ),
+    ("Panel", "DisplayTimeout"): (
+        Row(
+            platform=Platform.NUMBER,
+            translation_key="panel_display_timeout",
+            unit=UnitOfTime.SECONDS,
+            entity_category=EntityCategory.CONFIG,
+            step=10,
+            fallback_bounds=(0, 600),
+            # The panel describes 0 to 4294967295 here -- the width of the
+            # field, not a control. Ten minutes is past any display timeout
+            # worth setting; the panel measured sits at 120.
+            bounds_limit=(0, 600),
+        ),
+    ),
+    ("Panel", "Screensaver"): (
+        Row(
+            platform=Platform.SWITCH,
+            translation_key="panel_screensaver",
+            device_class=SwitchDeviceClass.SWITCH,
+            entity_category=EntityCategory.CONFIG,
         ),
     ),
     # -- gas bottles -----------------------------------------------------

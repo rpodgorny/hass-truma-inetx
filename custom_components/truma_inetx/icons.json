@@ -11,6 +11,15 @@
     "number": {
       "fan_level": {
         "default": "mdi:fan"
+      },
+      "panel_brightness": {
+        "default": "mdi:brightness-6"
+      },
+      "panel_display_timeout": {
+        "default": "mdi:monitor-off"
+      },
+      "panel_night_brightness": {
+        "default": "mdi:brightness-4"
       }
     },
     "switch": {
@@ -19,6 +28,12 @@
       },
       "faster_water_heating": {
         "default": "mdi:water-boiler"
+      },
+      "panel_screensaver": {
+        "default": "mdi:monitor-star"
+      },
+      "timer": {
+        "default": "mdi:timer-outline"
       },
       "water_autofill": {
         "default": "mdi:water-plus"

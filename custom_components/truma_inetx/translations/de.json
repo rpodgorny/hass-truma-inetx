@@ -49,6 +49,9 @@
       "cooling_active": {
         "name": "Kühlung"
       },
+      "error": {
+        "name": "Störung"
+      },
       "flame": {
         "name": "Flamme"
       },
@@ -62,6 +65,15 @@
     "number": {
       "fan_level": {
         "name": "Lüfterstufe"
+      },
+      "panel_brightness": {
+        "name": "Displayhelligkeit"
+      },
+      "panel_display_timeout": {
+        "name": "Display-Abschaltzeit"
+      },
+      "panel_night_brightness": {
+        "name": "Nachthelligkeit"
       }
     },
     "select": {
@@ -143,6 +155,12 @@
       },
       "faster_water_heating": {
         "name": "Schnelles Wasseraufheizen"
+      },
+      "panel_screensaver": {
+        "name": "Bildschirmschoner"
+      },
+      "timer": {
+        "name": "Timer"
       },
       "water_autofill": {
         "name": "Nachfüllmodus"

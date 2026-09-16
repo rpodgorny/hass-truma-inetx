@@ -117,7 +117,13 @@ and clears the issue on the next successful connect.
 | Cooling level | `select` | `AirCooling.Mode`: Min / Mid / High / Max / Night / Auto — how hard the unit runs, on its own device |
 | Cooling | `binary_sensor` | Whether the air conditioner is running, as opposed to standing by |
 | Refill mode | `switch` | The panel's "refill" button: while it is on the tank sensor measures continuously and the panel sounds a tone at full. Only where the vehicle has a tank sensor |
-| Shore power | `binary_sensor` | Whether the electrical block sees mains. Only where the vehicle reports it |
+| Shore power | `binary_sensor` | Whether 230 V is connected. The panel publishes it (`System.Plugged`) and so does an electrical block (`LinePower.Plugged`); a vehicle with both gets one on each device, which is two sources rather than one reading |
+| Fault | `binary_sensor` | Whether the appliance is reporting an error at all. The codes themselves are not named here — they are in a diagnostics download |
+| Timer | `switch` | The panel's timer, on or off. Only where the panel has one configured |
+| Display brightness | `number` | Config, % — the panel's daytime brightness |
+| Night brightness | `number` | Config — the panel's dark-mode step, 1–10 on the panel measured |
+| Display timeout | `number` | Config, seconds |
+| Screensaver | `switch` | Config |
 | Starter battery | `sensor` | V — only where something reports `VBat.Voltage` |
 | Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
 | Flame status | `sensor` | Diagnostic, disabled by default — the raw `System.FlameStatus` value |
@@ -242,7 +248,7 @@ same *reading* is still unread. See
 [#23](https://github.com/rpodgorny/hass-truma-inetx/issues/23) for what is left.
 
 **Not run here:** the air conditioner, the gas bottle's weight and temperature,
-the sensor battery, the refill mode and the shore-power sensor come from a
+the sensor battery and the refill mode come from a
 second vehicle — a Weinsberg with a Combi 6 E, a Dometic FreshJet 2200 at
 0x0406, an electrical block and two Truma LevelControl bottles — measured
 between 2026-09-02 and 2026-09-04 in
@@ -253,7 +259,18 @@ conditioner's own `AirCooling.TgtTemp` and not the heater's field, which is
 measured; the setpoint automatic uses is `RoomClimate.TgtTemp`, which is *not*
 — it is the field left over, and the panel is what decides in automatic. And
 `GasBtl.RemTime` is carried without a unit on purpose: the name says time and
-the panel shows a percentage and a weight, so nothing here says what it counts.
+the panel shows a percentage and a weight, so nothing here says what it counts —
+and on that vehicle both bottles read 250 while one was 51 % full and the other
+100 %, which is not a remaining anything.
+
+The panel's own entities — shore power, the fault flag, the timer and the four
+display controls — come from a third vehicle again, a Combi 4 gas behind an
+iNet X, from the parameter dump attached to
+[#22](https://github.com/rpodgorny/hass-truma-inetx/issues/22). That dump is
+also where each of their ranges comes from: the panel describes its own
+brightness as 10–100 and its night step as 1–10. Its display timeout it
+describes as 0 to 4294967295 seconds, which is the width of the field rather
+than a control, and is the one range this integration clips.
 
 The 0.9.0 betas move every entity onto the bus device that reports it, and
 every entity id changes with it. There is no migration: the integration is
