@@ -19,11 +19,11 @@ Why this exists:
 - **#17.** The starter and leisure battery voltages ride on the electrical
   block, in tenths of a volt -- a different scale from ``Eol.Vcc12``, which is
   millivolts.
-- **#15.** ``System.FlameStatus`` takes 0, 1 and 2, and nothing published says
-  what they mean. The binary sensor must answer on/off, so the raw value needs
-  somewhere to be seen -- and the on/off question turned out to be answerable:
-  measured on a Combi 6 E against a shore-power meter, 2 is the appliance
-  standing by, not a second kind of firing.
+- **#15 and #24.** ``System.FlameStatus`` takes 0, 1 and 2, and nothing the
+  panel publishes says what they mean. Two vehicles have now measured the same
+  three: a Combi 6 E against a shore-power meter, where 2 is the appliance
+  standing by rather than a second kind of firing, and a Combi 4 gas watched at
+  the panel. So the sensor names them instead of showing a code.
 
 What it pins:
 
@@ -33,7 +33,9 @@ What it pins:
    platform writes ``EnergySrc.GasLevel``,
 3. each of them is created when, and only when, its parameter is reported,
 4. the batteries are scaled by ten, not by a thousand,
-5. the raw flame value is exposed unrounded, as a disabled diagnostic,
+5. the flame status is named -- off, running, idle -- and keeps the number it
+   was named from, and a value nobody has named reads unknown rather than
+   being folded into a state it does not belong in,
 6. and the flame binary sensor is on while the burner runs and off while it
    merely stands by.
 
@@ -169,16 +171,59 @@ def test_the_batteries_are_tenths_of_a_volt_not_millivolts() -> None:
     assert _by_key(made, "voltage").native_value == 13.7
 
 
-def test_the_raw_flame_value_is_visible_and_unrounded() -> None:
-    """#15: the binary sensor has to say on/off; the number says what it saw."""
+def test_the_three_flame_states_are_named() -> None:
+    """#15 and #24: two vehicles measured the same three, so name them.
+
+    A Combi 6 E against a shore-power meter (#15) and a Combi 4 gas watched at
+    the panel (#24). The second reporter put the idle state plainly: "heater is
+    on but room temperature measured is above configured temperature".
+    """
     coordinator = _coordinator()
     made = stubs.setup_platform(SENSOR, coordinator)
     coordinator.report("System", "FlameStatus", 2, HEATER)
-    raw = _by_key(made, "flame_status")
+    status = _by_key(made, "flame_status")
 
-    assert raw._attr_entity_registry_enabled_default is False
-    assert raw._attr_entity_category is stubs.EntityCategory.DIAGNOSTIC
-    assert raw.native_value == 2, "the third state was folded away again"
+    assert status._attr_entity_category is stubs.EntityCategory.DIAGNOSTIC
+    assert status._attr_device_class == "enum"
+    assert status._attr_options == ["off", "running", "idle"]
+
+    for value, state in ((0, "off"), (1, "running"), (2, "idle")):
+        coordinator.report("System", "FlameStatus", value, HEATER)
+        assert status.native_value == state
+        # The number underneath stays visible: it is what made the meaning
+        # findable in the first place.
+        assert status.extra_state_attributes == {"raw": value}
+
+
+def test_a_state_nobody_has_named_reads_unknown() -> None:
+    """An ENUM sensor may only be in a state it declared.
+
+    Home Assistant rejects anything else from inside the state write, once per
+    update forever. Cold ignition and the fan run-on are still unobserved
+    (#15), so a fourth value is a thing that can happen -- and when it does it
+    has to be visible, not swallowed.
+    """
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SENSOR, coordinator)
+    coordinator.report("System", "FlameStatus", 3, HEATER)
+    status = _by_key(made, "flame_status")
+
+    assert status.native_value is None
+    assert status.extra_state_attributes == {"raw": 3}
+
+    # And it recovers: the unnamed value is reported once, not latched.
+    coordinator.report("System", "FlameStatus", 1, HEATER)
+    assert status.native_value == "running"
+
+
+def test_the_flame_states_are_named_in_every_language() -> None:
+    import json  # noqa: PLC0415
+
+    for path in [SRC / "strings.json", *sorted((SRC / "translations").glob("*.json"))]:
+        entry = json.loads(path.read_text())["entity"]["sensor"]["flame_status"]
+        # The state under the word is the one automations match on, so it is
+        # the same in every language and only the word moves.
+        assert set(entry["state"]) == {"off", "running", "idle"}, path.name
 
 
 def test_the_flame_sensor_is_on_only_while_it_is_firing() -> None:

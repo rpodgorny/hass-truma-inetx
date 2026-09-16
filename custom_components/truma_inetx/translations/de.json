@@ -133,7 +133,12 @@
         "name": "Reset-Zeitfenster"
       },
       "flame_status": {
-        "name": "Flammenstatus"
+        "name": "Flammenstatus",
+        "state": {
+          "off": "Aus",
+          "running": "Heizt",
+          "idle": "Bereit"
+        }
       },
       "fresh_water_level": {
         "name": "Frischwasser"

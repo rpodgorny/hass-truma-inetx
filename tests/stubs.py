@@ -146,6 +146,7 @@ def install_homeassistant() -> None:
             VOLTAGE="voltage",
             DURATION="duration",
             TIMESTAMP="timestamp",
+            ENUM="enum",
             WEIGHT="weight",
             BATTERY="battery",
         ),

@@ -53,7 +53,10 @@ class TrumaSensor(TrumaParamEntity, SensorEntity):
         self._attr_state_class = row.state_class
         self._attr_native_unit_of_measurement = row.unit
         self._attr_suggested_display_precision = row.precision
+        if row.labels is not None:
+            self._attr_options = list(row.labels.values())
         self._reported_unpresentable = False
+        self._reported_unnamed: set[str] = set()
 
     @property
     def extra_state_attributes(self) -> dict | None:
@@ -73,6 +76,40 @@ class TrumaSensor(TrumaParamEntity, SensorEntity):
     # value to build them from, so that what reads them never has to ask
     # which shape it got.
 
+    def _named(self, value: object) -> str | None:
+        """The row's name for a value the device sent, or nothing.
+
+        An ENUM sensor may only ever be in one of the states it declared:
+        Home Assistant rejects anything else from inside the state write,
+        which is once per coordinator update forever. So a value the row has
+        no name for reads unknown -- and it is still in the attributes, where
+        whoever goes looking for the fourth state can see the number that
+        produced it.
+        """
+        assert self.row.labels is not None
+        if isinstance(value, int) and not isinstance(value, bool):
+            named = self.row.labels.get(value)
+            if named is not None:
+                return named
+        # Keyed by repr, because the value that turns up unnamed is not
+        # necessarily one a set will take -- the parameter that taught us to
+        # expect the unexpected here was a list.
+        seen = repr(value)
+        if value is not None and seen not in self._reported_unnamed:
+            self._reported_unnamed.add(seen)
+            LOGGER.warning(
+                "Truma %s.%s at 0x%04X reported %r, which the %s row has no "
+                "name for; the sensor reads unknown and carries the value in "
+                "its attributes. Please report it -- named values are %s",
+                self._topic,
+                self._param,
+                self._addr,
+                value,
+                self.row.translation_key,
+                sorted(int(key) for key in self.row.labels),
+            )
+        return None
+
     @property
     def native_value(self) -> float | int | str | datetime | None:
         """The device's own value for the parameter, in the row's unit."""
@@ -80,6 +117,8 @@ class TrumaSensor(TrumaParamEntity, SensorEntity):
         if value is None:
             return None
         value = native(self.row, value)
+        if self.row.labels is not None:
+            return self._named(value)
         # datetime among them for the TIMESTAMP device class, which is the
         # one that wants an object rather than a number: a row carrying a
         # wire epoch reduces it to an aware datetime and Home Assistant
