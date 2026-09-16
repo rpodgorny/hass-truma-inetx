@@ -189,6 +189,46 @@ def test_a_record_is_not_assembled_out_of_two_devices() -> None:
         )
 
 
+def test_the_owners_label_names_the_bottle_it_is_on() -> None:
+    """Links and Rechts are the owner's words, and they outlive a re-pairing.
+
+    The instance is part of the address, and a re-paired device is renumbered:
+    the bottle that was 0x0603 can come back as 0x0604, and two devices named
+    after the address then swap contents with nothing saying so. The label is
+    stored in the sensor, so it comes back with it -- and on a vehicle with
+    two identical bottles it is the only thing that says which is which
+    (#9, #23).
+    """
+    coord = _Coord()
+    for addr, label in ((BOTTLE_LEFT, "Links"), (BOTTLE_RIGHT, "Rechts")):
+        _report(coord, addr, "Identify", "Name", "Truma LevelControl")
+        _report(coord, addr, "GasBtl", "Name", label)
+
+    assert coord.device_info(BOTTLE_LEFT)["name"] == "Truma LevelControl Links"
+    assert coord.device_info(BOTTLE_RIGHT)["name"] == "Truma LevelControl Rechts"
+    # And the label is the device's, not the bus's: it never leaks sideways.
+    assert coord._bus.device(BOTTLE_LEFT).label == "Links"
+
+
+def test_two_devices_labelled_the_same_keep_the_instance() -> None:
+    """One name for two devices is the flat reading again; the address is not."""
+    coord = _Coord()
+    for addr in (BOTTLE_LEFT, BOTTLE_RIGHT):
+        _report(coord, addr, "Identify", "Name", "Truma LevelControl")
+        _report(coord, addr, "GasBtl", "Name", "Gas")
+
+    assert coord.device_info(BOTTLE_LEFT)["name"] == "Truma LevelControl 3"
+    assert coord.device_info(BOTTLE_RIGHT)["name"] == "Truma LevelControl 4"
+
+
+def test_a_label_alone_names_a_device_that_publishes_no_identity() -> None:
+    """A device that says what it is called but not what it is."""
+    coord = _Coord()
+    _report(coord, BOTTLE_LEFT, "GasBtl", "Name", "Rechts")
+
+    assert coord.device_info(BOTTLE_LEFT)["name"] == "Rechts"
+
+
 def test_the_panel_keeps_its_own_identity() -> None:
     """Every device describes itself under Identify, so a flat one is a race.
 

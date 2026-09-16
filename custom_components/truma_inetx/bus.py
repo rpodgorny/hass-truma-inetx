@@ -201,6 +201,31 @@ class Device:
         return str(value) if value not in (None, "") else None
 
     @property
+    def label(self) -> str | None:
+        """The owner's own label for this device, if it published one.
+
+        Not ``Identify.Name``, which is the product and reads "Truma
+        LevelControl" on both bottles of a vehicle with two: the label is the
+        word the owner typed at the panel, published as the topic's own
+        ``Name`` -- ``GasBtl.Name`` is "Links" on one bottle and "Rechts" on
+        the other (#9).
+
+        It matters beyond being nicer to read. The instance is part of the
+        address, which is reassigned when a device is re-paired, so the two
+        bottles can come back the other way round and nothing in the address
+        says so. The label is stored in the device, and comes back with it.
+        """
+        for key, value in self.params.items():
+            topic, _, param = key.partition(".")
+            if (
+                param == IDENTIFY_NAME
+                and topic != IDENTIFY_TOPIC
+                and value not in (None, "")
+            ):
+                return str(value)
+        return None
+
+    @property
     def serial(self) -> str | None:
         """This device's serial number, if it publishes one."""
         for key, value in self.params.items():
@@ -447,6 +472,18 @@ class Bus:
                 key == prefix if exact else key.startswith(prefix)
                 for key in device.params
             )
+        )
+
+    def label_is_unique(self, addr: int, label: str) -> bool:
+        """Whether ``label`` belongs to this device alone.
+
+        Two devices carrying one label would be two of everything under one
+        name, which is the flat reading again from the other end. A caller
+        that names devices falls back to the address for those.
+        """
+        return not any(
+            other != addr and device.label == label
+            for other, device in self.devices.items()
         )
 
     def contested_topics(self) -> dict[str, list[int]]:

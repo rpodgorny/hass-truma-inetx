@@ -605,10 +605,15 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         the cost is one extra device, not a broken one.
 
         Names come from what the bus says: the panel's own name for a device
-        under Identify.Name, plus its instance where the panel is using more
-        than the first of a class (two gas-bottle sensors are 0x0603 and
-        0x0604, and "Truma LevelControl" twice would be no better than the
-        flat reading that mixed them up). A device that publishes no name is
+        under Identify.Name, plus the owner's own label for it where there is
+        one -- GasBtl.Name reads "Links" on one bottle and "Rechts" on the
+        other, so the two devices are "Truma LevelControl Links" and "Truma
+        LevelControl Rechts". That is the one identity that survives a
+        re-pairing: the instance is part of the address and is reassigned,
+        while the label is stored in the device. Where no label is published,
+        or two devices share one, the instance separates them instead (two
+        gas-bottle sensors are 0x0603 and 0x0604, and "Truma LevelControl"
+        twice would be no better than the flat reading that mixed them up). A device that publishes no name is
         named by its address rather than by a class-to-product mapping that
         cannot be verified -- a Dometic roof air conditioner and a Schaudt
         electrical block share a device class. The one exception is
@@ -629,9 +634,14 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             )
         device = self._bus.device(addr)
         base = device.name or _KNOWN_NAMES.get(addr)
-        if base is None:
+        label = device.label
+        if base is None and label is None:
             # Already unique, and already says where it is.
             name = f"Bus device 0x{addr:04X}"
+        elif base is None:
+            name = label
+        elif label and label != base and self._bus.label_is_unique(addr, label):
+            name = f"{base} {label}"
         elif device.instance <= 1:
             name = base
         else:

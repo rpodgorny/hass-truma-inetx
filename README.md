@@ -213,12 +213,22 @@ now reaches the roof unit that does it instead of the heater that silently
 dropped it (#10).
 
 Devices are named from what the bus says: the panel's own name for them
-(`Identify.Name`), plus the address instance where the panel is using more than
-the first of a class — "Truma LevelControl 3" and "Truma LevelControl 4". One
-that publishes no name is named after its address, because a device class is
-not a product: a Dometic air conditioner and a Schaudt electrical block share
-one. Bus addresses are reassigned when a device is re-paired, so a re-pairing
-gives new entities; the serial number is on each device page.
+(`Identify.Name`), plus the owner's own label for the device where there is one
+— a gas-bottle sensor publishes `GasBtl.Name`, the word you typed at the panel,
+so two bottles are "Truma LevelControl Links" and "Truma LevelControl Rechts"
+rather than two of one name. Where no label is published, or two devices share
+one, the address instance separates them instead ("Truma LevelControl 3" and
+"… 4"). One that publishes no name at all is named after its address, because a
+device class is not a product: a Dometic air conditioner and a Schaudt
+electrical block share one.
+
+Bus addresses are reassigned when a device is re-paired, so a re-pairing gives
+new Home Assistant devices and new entities. The label is what survives it: it
+is stored in the device and comes back with it, while the address is not, so
+two identical bottles that swap addresses still carry their own names. If your
+devices publish no label, take a diagnostics download *before* re-pairing —
+it lists each address with the serial number that answered on it, and the
+serial is on each device page afterwards.
 
 Gas is deliberately a sensor and not a switch. `EnergySrc.GasLevel` is
 writable and the write does go through, but the heater writes it too: on a

@@ -773,12 +773,11 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # other's level. Here they are two devices carrying one row.
     #
     # GasBtl.Name is the owner's own label for a bottle, set at the panel, and
-    # has no row: it names the device rather than being a reading. Nothing
-    # reads it today -- a bottle is named from Identify.Name plus its instance
-    # ("Truma LevelControl", "Truma LevelControl 2"), which tells two apart
-    # without being either one's name. Naming the device from it instead is a
-    # decision about device naming, not a row, and belongs in
-    # TrumaCoordinator.device_info.
+    # has no row: it names the device rather than being a reading. It is read
+    # where device naming is decided rather than here -- see Device.label and
+    # TrumaCoordinator.device_info, which name a labelled bottle "Truma
+    # LevelControl Rechts" and fall back to the instance for one that
+    # publishes no label.
     ("GasBtl", "FillLevelP"): (
         Row(
             platform=Platform.SENSOR,
