@@ -8,6 +8,11 @@
         "default": "mdi:gas-cylinder"
       }
     },
+    "button": {
+      "error_reset": {
+        "default": "mdi:restart-alert"
+      }
+    },
     "number": {
       "fan_level": {
         "default": "mdi:fan"
@@ -20,6 +25,40 @@
       },
       "panel_night_brightness": {
         "default": "mdi:brightness-4"
+      }
+    },
+    "select": {
+      "cooling_mode": {
+        "default": "mdi:snowflake"
+      }
+    },
+    "sensor": {
+      "ble_conn_state": {
+        "default": "mdi:bluetooth"
+      },
+      "ble_free_slots": {
+        "default": "mdi:bluetooth-connect"
+      },
+      "ble_mgmt_state": {
+        "default": "mdi:bluetooth-settings"
+      },
+      "error_code": {
+        "default": "mdi:alert-circle-outline"
+      },
+      "flame_status": {
+        "default": "mdi:fire"
+      },
+      "fresh_water_level": {
+        "default": "mdi:water"
+      },
+      "gas_bottle_level": {
+        "default": "mdi:gas-cylinder"
+      },
+      "gas_bottle_rem_time": {
+        "default": "mdi:gas-cylinder"
+      },
+      "grey_water_level": {
+        "default": "mdi:water-opacity"
       }
     },
     "switch": {
@@ -43,37 +82,6 @@
       },
       "water_pump": {
         "default": "mdi:water-pump"
-      }
-    },
-    "sensor": {
-      "ble_conn_state": {
-        "default": "mdi:bluetooth"
-      },
-      "ble_free_slots": {
-        "default": "mdi:bluetooth-connect"
-      },
-      "ble_mgmt_state": {
-        "default": "mdi:bluetooth-settings"
-      },
-      "flame_status": {
-        "default": "mdi:fire"
-      },
-      "fresh_water_level": {
-        "default": "mdi:water"
-      },
-      "gas_bottle_level": {
-        "default": "mdi:gas-cylinder"
-      },
-      "gas_bottle_rem_time": {
-        "default": "mdi:gas-cylinder"
-      },
-      "grey_water_level": {
-        "default": "mdi:water-opacity"
-      }
-    },
-    "select": {
-      "cooling_mode": {
-        "default": "mdi:snowflake"
       }
     }
   }

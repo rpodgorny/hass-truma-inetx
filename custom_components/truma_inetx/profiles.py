@@ -101,6 +101,12 @@ class Row:
     # 136 years long is no control either.
     bounds_limit: tuple[int, int] | None = None
 
+    # The attributes a row publishes beside its state, built from the raw wire
+    # value. For a parameter whose value is a structure the row reduces to one
+    # number: the number is the state, and what the structure also said is not
+    # worth a second entity.
+    attrs: Callable[[Any], dict] | None = None
+
     # Turns a structured wire value into the single one the row presents,
     # applied before `scale`. Nearly every parameter carries a scalar and
     # leaves this None; a handful carry a list, and a sensor handed one
@@ -145,6 +151,52 @@ def _has_error(value: object) -> int | None:
     if not isinstance(value, list):
         return None
     return 1 if value else 0
+
+
+def _first_error(value: object) -> dict | None:
+    """The first entry of an error list, or None if there is not one."""
+    if isinstance(value, list) and value and isinstance(value[0], dict):
+        return value[0]
+    return None
+
+
+def _error_code(value: object) -> int | None:
+    """The code of the fault an appliance is currently raising.
+
+    Measured on the van with the window above the heater open, which is a
+    fault it raises at once::
+
+        [{"sev": 1, "code": 412, "resettable": 0}]
+
+    The first entry, not a joined string: the state is what somebody looks up
+    in the manual, and the rest of the list is beside it in the attributes. A
+    healthy appliance reports an empty list and this reads unknown -- there is
+    no code, and 0 would be a code nobody can look up.
+    """
+    first = _first_error(value)
+    code = first.get("code") if first else None
+    return code if isinstance(code, int) else None
+
+
+def _error_attrs(value: object) -> dict:
+    """What the error list says beyond the code itself.
+
+    ``sev`` and ``resettable`` are the appliance's own words about the fault
+    it is raising, and ``resettable`` is what says whether the reset button
+    can do anything -- see button.py. Every entry is carried, because an
+    appliance can raise more than one and the state can only be the first.
+    """
+    first = _first_error(value)
+    if first is None:
+        return {}
+    attrs: dict = {}
+    if isinstance(first.get("sev"), int):
+        attrs["severity"] = first["sev"]
+    if first.get("resettable") is not None:
+        attrs["resettable"] = bool(first["resettable"])
+    if isinstance(value, list) and len(value) > 1:
+        attrs["errors"] = value
+    return attrs
 
 
 # Labels. Defined beside the rows that use them so a value and its name cannot
@@ -437,14 +489,36 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
         ),
     ),
     # -- system ----------------------------------------------------------
-    # Whether the appliance is reporting a fault at all. Empty on the healthy
-    # Combi 4 of #22, and it was mapped before the bus rewrite and lost in it.
+    # Whether the appliance is reporting a fault at all, and which fault it
+    # is. Empty on the healthy Combi 4 of #22; the flag was mapped before the
+    # bus rewrite and lost in it, and the code is what a manual is looked up
+    # with.
     ("ErrorReset", "ErrCode"): (
         Row(
             platform=Platform.BINARY_SENSOR,
             translation_key="error",
             device_class=BinarySensorDeviceClass.PROBLEM,
             reduce=_has_error,
+        ),
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="error_code",
+            # No device class and no state class: a fault code is a name, not
+            # a quantity, and averaging one would mean nothing.
+            reduce=_error_code,
+            attrs=_error_attrs,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+    ),
+    # Clearing a fault the appliance says can be cleared. ErrorReset.Req is
+    # the parameter the panel's own reset writes; the button appears on the
+    # device that publishes it and is available only while that device is
+    # raising something resettable -- see button.py.
+    ("ErrorReset", "Req"): (
+        Row(
+            platform=Platform.BUTTON,
+            translation_key="error_reset",
+            entity_category=EntityCategory.CONFIG,
         ),
     ),
     # The panel's timer, as something that can be switched off from here --

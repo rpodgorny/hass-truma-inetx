@@ -13,12 +13,15 @@ What it pins:
    where both report it they are two entities on two devices rather than one
    that overwrites the other,
 2. the fault flag reduces the appliance's error list before reading it, so an
-   empty list is healthy and a non-empty one is a problem,
-3. the timer switch writes the panel's own timer state,
-4. the panel's display controls are configuration, and their range is the
+   empty list is healthy and a non-empty one is a problem, and the fault code
+   beside it carries what the appliance said about that fault,
+3. the reset button is offered only by an appliance raising a fault it calls
+   resettable, and presses at that appliance's own address,
+4. the timer switch writes the panel's own timer state,
+5. the panel's display controls are configuration, and their range is the
    panel's own -- except where the panel describes the width of the field
    instead of a range, which is clipped rather than offered,
-5. every one of them is named and iconed.
+6. every one of them is named and iconed.
 
 Run: ``python3 tests/test_panel_entities.py``
 """
@@ -46,6 +49,8 @@ stubs.mod("truma_pkg.coordinator", TrumaCoordinator=object, TrumaConfigEntry=obj
 stubs.load("profiles")
 stubs.load("entity")
 NUMBER = stubs.load("number")
+BUTTON = stubs.load("button")
+SENSOR = stubs.load("sensor")
 SWITCH = stubs.load("switch")
 BINARY = stubs.load("binary_sensor")
 
@@ -94,6 +99,59 @@ def test_the_fault_flag_counts_the_error_list() -> None:
     # Anything that is not a list at all is unknown rather than healthy.
     coordinator.report("ErrorReset", "ErrCode", 0, HEATER)
     assert fault.is_on is None
+
+
+# What the heater raised on the van with the window above it open, read off
+# the bus at 15:23 on 2026-09-16.
+WINDOW_OPEN = [{"sev": 1, "code": 412, "resettable": 0}]
+
+
+def test_the_fault_code_carries_what_the_appliance_said() -> None:
+    coordinator = _coordinator()
+    sensors = stubs.setup_platform(SENSOR, coordinator)
+    coordinator.report("ErrorReset", "ErrCode", WINDOW_OPEN, HEATER)
+    code = _by_key(sensors, "error_code")
+
+    assert code.native_value == 412, "the code somebody looks up in the manual"
+    assert code.extra_state_attributes == {"severity": 1, "resettable": False}
+    assert code._addr == HEATER
+
+    # A second fault cannot be the state as well, so the whole list goes
+    # beside it rather than being dropped.
+    both = WINDOW_OPEN + [{"sev": 2, "code": 500, "resettable": 1}]
+    coordinator.report("ErrorReset", "ErrCode", both, HEATER)
+    assert code.native_value == 412
+    assert code.extra_state_attributes["errors"] == both
+
+    # Healthy is no code at all: 0 would be a code nobody can look up.
+    coordinator.report("ErrorReset", "ErrCode", [], HEATER)
+    assert code.native_value is None
+    assert code.extra_state_attributes is None
+
+
+def test_the_reset_button_waits_for_a_fault_that_can_be_reset() -> None:
+    coordinator = _coordinator()
+    made = stubs.setup_platform(BUTTON, coordinator)
+    # The parameter the panel's own reset writes. Measured on the van, the
+    # heater publishes it and the panel does not.
+    coordinator.report("ErrorReset", "Req", 0, HEATER)
+    button = _by_key(made, "error_reset")
+    coordinator.data.connected = True
+
+    assert button.available is False, "offered a reset with nothing to reset"
+
+    coordinator.report("ErrorReset", "ErrCode", WINDOW_OPEN, HEATER)
+    assert button.available is False, (
+        "a fault the appliance calls unresettable was offered a reset anyway"
+    )
+
+    coordinator.report(
+        "ErrorReset", "ErrCode", [{"sev": 2, "code": 500, "resettable": 1}], HEATER
+    )
+    assert button.available is True
+
+    asyncio.run(button.async_press())
+    assert coordinator.writes == [(HEATER, "ErrorReset", "Req", 1)]
 
 
 def test_the_timer_can_be_switched_off_from_here() -> None:
@@ -169,6 +227,8 @@ def test_every_new_entity_is_named_and_iconed() -> None:
         ("number", "panel_brightness", True),
         ("number", "panel_night_brightness", True),
         ("number", "panel_display_timeout", True),
+        ("sensor", "error_code", True),
+        ("button", "error_reset", True),
     ):
         assert key in strings.get(platform, {}), f"{platform}.{key} has no name"
         assert key in de.get(platform, {}), f"{platform}.{key} is not translated"
