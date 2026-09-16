@@ -103,10 +103,21 @@ COMMAND_DEST = {
 # in, so wherever it has spoken, it wins; this is only what is left when it
 # has not.
 PARAM_VALIDATION = {
+    # Still only the three this van has, though automatic and cooling are
+    # measured on a Weinsberg with a roof air conditioner (2026-09-03): a
+    # panel with those modes enumerates them, which outranks this, and the
+    # climate entity offers no mode this list would have to permit while the
+    # panel has said nothing. Widening it would only let a write through to a
+    # vehicle that has no such mode.
     "RoomClimate.Mode": [0, 3, 5],
     "RoomClimate.TgtTemp": (160, 300),  # wire values
     "AirHeating.TgtTemp": (50, 300),
     "AirHeating.Mode": [0, 1],
+    # Cooling, measured on the same vehicle. The setpoint range is the room
+    # one rather than the heater's: nothing cools to 5 °C.
+    "AirCooling.TgtTemp": (160, 300),
+    "AirCooling.Mode": [0, 1, 2, 3, 4, 5],
+    "AirCooling.Active": [0, 1],
     "AirCirculation.FanLevel": (0, 10),
     "AirCirculation.Active": [0, 1],
     "WaterHeating.Mode": [0, 1, 2],
@@ -116,6 +127,7 @@ PARAM_VALIDATION = {
     "EnergySrc.DieselLevel": [0, 1],
     "EnergySrc.ElectricLevel": [0, 1, 2],
     "Switches.FreshWaterPump": [0, 1],
+    "FreshWater.Autofill": [0, 1],
 }
 
 # The keys a parameter's own description arrives under, alongside "tn"/"pn"/

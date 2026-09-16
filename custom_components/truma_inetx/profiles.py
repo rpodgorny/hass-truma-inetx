@@ -45,6 +45,7 @@ from homeassistant.const import (
     EntityCategory,
     Platform,
     UnitOfElectricPotential,
+    UnitOfMass,
     UnitOfTemperature,
     UnitOfTime,
 )
@@ -128,9 +129,18 @@ def _free_slots(value: object) -> int | None:
 
 # Labels. Defined beside the rows that use them so a value and its name cannot
 # drift apart.
+# Eco / Comfort / Hot are the panel's own names for the three stages; the
+# temperatures say what each one means. A second vehicle's owner reads them as
+# stages only and holds that the 40/60/70 does not match a Combi 6 E
+# (2026-09-03) -- recorded here rather than acted on, because these strings are
+# what automations match on and they have already been renamed once.
 _WATER_MODE_LABELS = {0: "Eco (40 °C)", 1: "Comfort (60 °C)", 2: "Hot (70 °C)"}
 _ELECTRIC_LABELS = {0: "off", 1: "900 W", 2: "1800 W"}
 _AIR_MODE_LABELS = {0: "Fast", 1: "Comfort"}
+# A roof air conditioner's own stages, measured on a Dometic FreshJet 2200 by
+# switching all six at the panel one at a time (2026-09-02). Not a thermostat
+# mode: it is how hard the unit runs, which is why "Auto" sits inside it.
+_COOLING_LABELS = {0: "Min", 1: "Mid", 2: "High", 3: "Max", 4: "Night", 5: "Auto"}
 
 ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # -- temperatures ----------------------------------------------------
@@ -207,6 +217,16 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             precision=1,
         ),
     ),
+    # Shore power as the electrical block sees it -- a second, independent
+    # answer to a question many vehicles already answer with a smart plug, and
+    # worth having precisely because the two can disagree.
+    ("LinePower", "Plugged"): (
+        Row(
+            platform=Platform.BINARY_SENSOR,
+            translation_key="line_power",
+            device_class=BinarySensorDeviceClass.PLUG,
+        ),
+    ),
     # -- water -----------------------------------------------------------
     # There is no water device class in Home Assistant, so these carry an icon
     # instead (icons.json) and no device class at all. The sensor reports
@@ -234,6 +254,20 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
         Row(
             platform=Platform.SWITCH,
             translation_key="water_pump",
+            device_class=SwitchDeviceClass.SWITCH,
+        ),
+    ),
+    # The panel's "refill" button. While it is on, the tank sensor measures
+    # continuously and the panel sounds a long tone at full; the rest of the
+    # time it measures only now and then, which is the whole reason a level
+    # lags behind a fill (#4, and see session.request_measurements, which asks
+    # for one reading rather than leaving this on). Measured on a Weinsberg,
+    # 2026-09-04. Not a switch to leave on: outside a fill there is nothing to
+    # watch.
+    ("FreshWater", "Autofill"): (
+        Row(
+            platform=Platform.SWITCH,
+            translation_key="water_autofill",
             device_class=SwitchDeviceClass.SWITCH,
         ),
     ),
@@ -330,6 +364,45 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             fallback_bounds=(0, 10),
         ),
     ),
+    # -- cooling ---------------------------------------------------------
+    # A roof air conditioner is its own device on the bus -- a Dometic
+    # FreshJet 2200 at 0x0406 on the Weinsberg of #10 -- and it publishes its
+    # own topic. Whether the room is cooled at all is still RoomClimate on the
+    # panel, which is the climate entity's HVACMode.COOL; what is here is what
+    # belongs to the unit itself.
+    ("AirCooling", "Temp"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="cooling_temp",
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            unit=UnitOfTemperature.CELSIUS,
+            scale=TENTHS,
+        ),
+    ),
+    # AirCooling.TgtTemp deliberately has no row: it is the cooling setpoint,
+    # and the climate entity already owns the setpoint of whichever mode is
+    # running (see climate.py). Two controls over one thing would disagree --
+    # the same reasoning that keeps AirHeating.TgtTemp out of this table.
+    ("AirCooling", "Mode"): (
+        Row(
+            platform=Platform.SELECT,
+            translation_key="cooling_mode",
+            labels=_COOLING_LABELS,
+        ),
+    ),
+    ("AirCooling", "Active"): (
+        Row(
+            platform=Platform.BINARY_SENSOR,
+            translation_key="cooling_active",
+            device_class=BinarySensorDeviceClass.RUNNING,
+            # Read the way the tri-state Active family reads, so a 2 is the
+            # unit standing by rather than a second kind of "on" -- the care
+            # FlameStatus needed. A plain 0/1 flag reads identically either
+            # way, so this costs nothing if it turns out to be one.
+            on_values=(ActiveState.ACTIVE,),
+        ),
+    ),
     # -- system ----------------------------------------------------------
     ("System", "FlameStatus"): (
         Row(
@@ -362,9 +435,13 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # which is what made a flat model produce one bottle's name beside the
     # other's level. Here they are two devices carrying one row.
     #
-    # GasBtl.Name is the user's own label for a bottle ("Links", "Rechts") and
-    # has no row: it names the device rather than being a reading, and the
-    # device it names is already named after it.
+    # GasBtl.Name is the owner's own label for a bottle, set at the panel, and
+    # has no row: it names the device rather than being a reading. Nothing
+    # reads it today -- a bottle is named from Identify.Name plus its instance
+    # ("Truma LevelControl", "Truma LevelControl 2"), which tells two apart
+    # without being either one's name. Naming the device from it instead is a
+    # decision about device naming, not a row, and belongs in
+    # TrumaCoordinator.device_info.
     ("GasBtl", "FillLevelP"): (
         Row(
             platform=Platform.SENSOR,
@@ -372,6 +449,59 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             state_class=SensorStateClass.MEASUREMENT,
             unit=PERCENTAGE,
             precision=0,
+        ),
+    ),
+    ("GasBtl", "FillLevelW"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="gas_bottle_contents",
+            device_class=SensorDeviceClass.WEIGHT,
+            state_class=SensorStateClass.MEASUREMENT,
+            unit=UnitOfMass.KILOGRAMS,
+            # Kilograms times ten on the wire: 56 while the panel showed
+            # 5.6 kg for the same bottle, read off the two together.
+            scale=TENTHS,
+            precision=1,
+        ),
+    ),
+    ("GasBtl", "Temperature"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="gas_bottle_temp",
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            unit=UnitOfTemperature.CELSIUS,
+            # Whole degrees, unlike every other temperature on this bus. The
+            # bottle sensor is a Bluetooth device of its own and does not
+            # share the heater's tenths.
+        ),
+    ),
+    ("GasBtl", "RemTime"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="gas_bottle_rem_time",
+            # No unit and no device class on purpose. The name says time; the
+            # panel shows a percentage and a weight and no time at all, and
+            # nothing measured says which this is. Calling it hours would be
+            # an invention, so it is off by default and carries the raw
+            # number for whoever watches it move.
+            entity_category=EntityCategory.DIAGNOSTIC,
+            enabled_default=False,
+        ),
+    ),
+    # The bottle sensor's own battery, published under BluetoothDevice rather
+    # than under GasBtl. In a flat reading that was ambiguous -- it could as
+    # easily have been the panel's -- and filed under the device that sent it,
+    # it is the sensor's, on the same device page as the level it explains.
+    ("BluetoothDevice", "BattLevel"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="battery_level",
+            device_class=SensorDeviceClass.BATTERY,
+            state_class=SensorStateClass.MEASUREMENT,
+            unit=PERCENTAGE,
+            precision=0,
+            entity_category=EntityCategory.DIAGNOSTIC,
         ),
     ),
     # -- the panel's own Bluetooth side ----------------------------------

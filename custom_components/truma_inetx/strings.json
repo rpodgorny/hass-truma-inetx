@@ -46,11 +46,17 @@
       "connection": {
         "name": "BLE connection"
       },
+      "cooling_active": {
+        "name": "Cooling"
+      },
       "flame": {
         "name": "Flame"
       },
       "gas": {
         "name": "Gas"
+      },
+      "line_power": {
+        "name": "Shore power"
       }
     },
     "number": {
@@ -62,6 +68,9 @@
       "air_mode": {
         "name": "Heating mode"
       },
+      "cooling_mode": {
+        "name": "Cooling level"
+      },
       "electric_level": {
         "name": "Electric heating"
       },
@@ -70,6 +79,9 @@
       }
     },
     "sensor": {
+      "battery_level": {
+        "name": "Sensor battery"
+      },
       "ble_conn_state": {
         "name": "Connection state"
       },
@@ -78,6 +90,9 @@
       },
       "ble_mgmt_state": {
         "name": "State"
+      },
+      "cooling_temp": {
+        "name": "Cooling temperature"
       },
       "current_temp": {
         "name": "Room temperature"
@@ -91,8 +106,17 @@
       "fresh_water_level": {
         "name": "Fresh water"
       },
+      "gas_bottle_contents": {
+        "name": "Gas bottle contents"
+      },
       "gas_bottle_level": {
         "name": "Gas bottle level"
+      },
+      "gas_bottle_rem_time": {
+        "name": "Gas bottle remaining (raw)"
+      },
+      "gas_bottle_temp": {
+        "name": "Gas bottle temperature"
       },
       "grey_water_level": {
         "name": "Grey water"
@@ -119,6 +143,9 @@
       },
       "faster_water_heating": {
         "name": "Faster water heating"
+      },
+      "water_autofill": {
+        "name": "Refill mode"
       },
       "water_boost": {
         "name": "Water boost"

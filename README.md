@@ -89,7 +89,7 @@ and clears the issue on the next successful connect.
 
 | Entity | Platform | Notes |
 |---|---|---|
-| Truma iNet X | `climate` | Whichever modes the panel offers — Off / Heat / Fan-only everywhere, plus Auto, Cool or Dry where the vehicle has them. 5–30 °C in 1 °C steps. Offers only the control the current mode uses: the target temperature while heating, the fan speed as the fan mode (`off`, `1`–`10`) while venting |
+| Truma iNet X | `climate` | Whichever modes the panel offers — Off / Heat / Fan-only everywhere, plus Auto, Cool or Dry where the vehicle has them. Offers only the control the current mode uses: the target temperature while heating or cooling, the fan speed as the fan mode (`off`, `1`–`10`) while venting. The setpoint follows the mode, because the panel keeps a separate field behind each one: heating writes the heater's, cooling writes the air conditioner's own, and each field's range is the one its owner describes (5–30 °C heating, 16–30 °C cooling) |
 | Room temperature | `sensor` | °C |
 | Water temperature | `sensor` | °C |
 | Internal temperature | `sensor` | °C |
@@ -109,6 +109,15 @@ and clears the issue on the next successful connect.
 | Faster water heating | `switch` | `WaterHeating.FasterHeatingMode`. Only where the heater reports it |
 | Faster water heating time | `sensor` | Diagnostic, seconds — the duration beside it. Only where the heater reports it |
 | Gas bottle level | `sensor` | % — one per Truma LevelControl sensor, on the sensor's own device |
+| Gas bottle contents | `sensor` | kg — the same bottle by weight, `GasBtl.FillLevelW` |
+| Gas bottle temperature | `sensor` | °C, as the bottle sensor measures it |
+| Gas bottle remaining (raw) | `sensor` | Diagnostic, disabled by default — `GasBtl.RemTime`, unitless on purpose: the name says time, the panel shows neither, and nothing measured says what it counts |
+| Sensor battery | `sensor` | Diagnostic, % — a Bluetooth sensor's own battery, on that sensor's device |
+| Cooling temperature | `sensor` | °C — what the air conditioner measures. Only where the vehicle has one |
+| Cooling level | `select` | `AirCooling.Mode`: Min / Mid / High / Max / Night / Auto — how hard the unit runs, on its own device |
+| Cooling | `binary_sensor` | Whether the air conditioner is running, as opposed to standing by |
+| Refill mode | `switch` | The panel's "refill" button: while it is on the tank sensor measures continuously and the panel sounds a tone at full. Only where the vehicle has a tank sensor |
+| Shore power | `binary_sensor` | Whether the electrical block sees mains. Only where the vehicle reports it |
 | Starter battery | `sensor` | V — only where something reports `VBat.Voltage` |
 | Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
 | Flame status | `sensor` | Diagnostic, disabled by default — the raw `System.FlameStatus` value |
@@ -213,7 +222,10 @@ The water select's options changed in 0.7.1b4, from `40 °C / 60 °C / 70 °C` t
 `Eco (40 °C) / Comfort (60 °C) / Hot (70 °C)`, so that the name matches what the
 panel writes on the vehicle and the temperature says what the name means. An
 automation or script that calls `select.select_option` with one of the old
-strings has to be updated; the values on the wire are unchanged.
+strings has to be updated; the values on the wire are unchanged. A second
+vehicle's owner reads the three as stages with no temperature behind them and
+holds that the numbers do not match a Combi 6 E; the labels stay as they are
+until that is measured rather than read off a screen.
 
 **Run on a vehicle as of 0.9.0b2**, a diesel Combi D 4 GEN2 behind an iNet X
 Pro. The session comes up, parameter discovery reaches all 18 seeded addresses
@@ -228,6 +240,20 @@ one publisher (`Identify`, `ErrorReset`, `PowerMgmt`, `DeviceManagement`),
 though all four are metadata: a vehicle carrying two appliances that publish the
 same *reading* is still unread. See
 [#23](https://github.com/rpodgorny/hass-truma-inetx/issues/23) for what is left.
+
+**Not run here:** the air conditioner, the gas bottle's weight and temperature,
+the sensor battery, the refill mode and the shore-power sensor come from a
+second vehicle — a Weinsberg with a Combi 6 E, a Dometic FreshJet 2200 at
+0x0406, an electrical block and two Truma LevelControl bottles — measured
+between 2026-09-02 and 2026-09-04 in
+[MarioDeMonti's fork](https://github.com/MarioDeMonti/hass-truma-inetx), each
+value read off the panel beside the parameter. The vehicle here has none of
+that hardware. Two things follow. The cooling setpoint is the air
+conditioner's own `AirCooling.TgtTemp` and not the heater's field, which is
+measured; the setpoint automatic uses is `RoomClimate.TgtTemp`, which is *not*
+— it is the field left over, and the panel is what decides in automatic. And
+`GasBtl.RemTime` is carried without a unit on purpose: the name says time and
+the panel shows a percentage and a weight, so nothing here says what it counts.
 
 The 0.9.0 betas move every entity onto the bus device that reports it, and
 every entity id changes with it. There is no migration: the integration is
