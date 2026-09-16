@@ -118,7 +118,9 @@ and clears the issue on the next successful connect.
 | Cooling | `binary_sensor` | Whether the air conditioner is running, as opposed to standing by |
 | Refill mode | `switch` | The panel's "refill" button: while it is on the tank sensor measures continuously and the panel sounds a tone at full. Only where the vehicle has a tank sensor |
 | Shore power | `binary_sensor` | Whether 230 V is connected. The panel publishes it (`System.Plugged`) and so does an electrical block (`LinePower.Plugged`); a vehicle with both gets one on each device, which is two sources rather than one reading |
-| Fault | `binary_sensor` | Whether the appliance is reporting an error at all. The codes themselves are not named here — they are in a diagnostics download |
+| Fault | `binary_sensor` | Whether the appliance is reporting an error at all, on the appliance raising it |
+| Fault code | `sensor` | Diagnostic — the code itself, to look up in the manual, with the appliance's own severity and whether it says the fault can be reset. Unknown while there is no fault: 0 would be a code nobody can look up |
+| Reset fault | `button` | Clears the fault, the way the panel's own reset does. Offered only while the appliance is raising something it calls resettable — a window left open above the heater is not |
 | Timer | `switch` | The panel's timer, on or off. Only where the panel has one configured |
 | Display brightness | `number` | Config, % — the panel's daytime brightness |
 | Night brightness | `number` | Config — the panel's dark-mode step, 1–10 on the panel measured |
@@ -262,6 +264,14 @@ measured; the setpoint automatic uses is `RoomClimate.TgtTemp`, which is *not*
 the panel shows a percentage and a weight, so nothing here says what it counts —
 and on that vehicle both bottles read 250 while one was 51 % full and the other
 100 %, which is not a remaining anything.
+
+The fault code and the reset button are the one part of this measured here, on
+the van, by opening a window above the heater: it raises
+`[{"sev": 1, "code": 412, "resettable": 0}]` within seconds, on the heater
+rather than on the panel, whose own error list stays empty. That is also where
+the reset button's rule comes from — the appliance says per fault whether it
+can be cleared, and offering a button it has already said will do nothing is
+worse than offering none.
 
 The panel's own entities — shore power, the fault flag, the timer and the four
 display controls — come from a third vehicle again, a Combi 4 gas behind an

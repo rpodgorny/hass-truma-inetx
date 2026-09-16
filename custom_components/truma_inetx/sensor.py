@@ -54,6 +54,19 @@ class TrumaSensor(TrumaParamEntity, SensorEntity):
         self._reported_unpresentable = False
 
     @property
+    def extra_state_attributes(self) -> dict | None:
+        """What the row carries beside its state, if it carries anything.
+
+        For a parameter whose wire value is a structure: the state is the one
+        number worth looking up, and the rest of what the appliance said about
+        it belongs beside that number rather than in a second entity nobody
+        would think to look at.
+        """
+        if self.row.attrs is None:
+            return None
+        return self.row.attrs(self.value) or None
+
+    @property
     def native_value(self) -> float | int | str | None:
         """The device's own value for the parameter, in the row's unit."""
         value = self.value

@@ -42,6 +42,7 @@ class Platform(enum.StrEnum):
     """The platforms this integration forwards to."""
 
     BINARY_SENSOR = "binary_sensor"
+    BUTTON = "button"
     CLIMATE = "climate"
     NUMBER = "number"
     SELECT = "select"
@@ -161,6 +162,7 @@ def install_homeassistant() -> None:
     )
     mod("homeassistant.components.switch", SwitchEntity=object,
         SwitchDeviceClass=SimpleNamespace(SWITCH="switch"))
+    mod("homeassistant.components.button", ButtonEntity=object)
     mod("homeassistant.components.select", SelectEntity=object)
     mod("homeassistant.components.number", NumberEntity=object,
         NumberMode=SimpleNamespace(SLIDER="slider"))
