@@ -77,6 +77,8 @@ class TrumaParamEntity(TrumaEntity):
         self._attr_translation_key = row.translation_key
         self._attr_entity_category = row.entity_category
         self._attr_entity_registry_enabled_default = row.enabled_default
+        if row.placeholders is not None:
+            self._attr_translation_placeholders = row.placeholders(param)
 
     @property
     def value(self) -> object:
@@ -115,6 +117,13 @@ def async_add_rows(
     history with it. A device that appears later simply gets its entities
     then, which is how a battery-powered gas sensor that takes minutes to wake
     up is handled without waiting for it at startup.
+
+    A row that opts into ``requires_avail`` asks for one thing more: that the
+    device stop saying the parameter is unavailable. That is for the fixed-size
+    lists a device publishes whole -- a panel has six timer slots whether or
+    not it has six timers, and publishes all six, marking the empty ones
+    ``avail`` 0. Waiting for the flag is still waiting for evidence; it is just
+    the evidence that this copy of the parameter means something.
     """
     made: set[tuple[int, str, str, str]] = set()
 
@@ -127,6 +136,18 @@ def async_add_rows(
                 for row in rows_for(topic, param, platform):
                     ident = (addr, topic, param, row.translation_key)
                     if ident in made:
+                        continue
+                    if row.requires_avail and device.meta(topic, param).get(
+                        "avail"
+                    ) == 0:
+                        # Only an explicit 0 withholds it. A device that says
+                        # nothing about availability gets the entity, the way
+                        # it gets a control it said nothing about writing --
+                        # a control withheld on a guess is invisible, and one
+                        # offered against absent hardware gets reported.
+                        #
+                        # Not recorded as made: a slot filled later is built
+                        # at the update that fills it.
                         continue
                     made.add(ident)
                     new.append(build(addr, topic, param, row))

@@ -174,8 +174,11 @@ def test_the_reset_button_waits_for_a_fault_that_can_be_reset() -> None:
 def test_the_timer_can_be_switched_off_from_here() -> None:
     coordinator = _coordinator()
     made = stubs.setup_platform(SWITCH, coordinator)
-    # Timer1State read 1 on the panel of #22 with a timer armed; the other
-    # five slots carry avail=0 and so never reach an entity at all.
+    # Timer1State read 1 on the panel of #22 with a timer armed. Reported
+    # bare, with no metadata: a panel that says nothing about whether the slot
+    # is available still gets its switch, because a control withheld on a
+    # guess is invisible. The six slots and the avail flag that picks between
+    # them are in test_timer_entities.py.
     coordinator.report("TimerConfig", "Timer1State", 1, PANEL)
 
     timer = _by_key(made, "timer")
