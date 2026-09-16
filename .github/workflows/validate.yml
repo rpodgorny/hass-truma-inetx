@@ -33,15 +33,51 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: python3 tests/test_pairing_rotation.py
-      - run: python3 tests/test_pairing_transport_dispatch.py
-      - run: python3 tests/test_device_from_bluez.py
-      - run: python3 tests/test_transport_ack_order.py
-      - run: python3 tests/test_no_route_issue.py
-      - run: python3 tests/test_water_entities.py
-      - run: python3 tests/test_energy_entities.py
-      - run: python3 tests/test_ble_mgmt_entities.py
-      - run: python3 tests/test_water_priority.py
+      # Everything under tests/ runs, rather than a list of files to keep in
+      # step with the directory: five tests written for 0.9.0b4..b13 were never
+      # added here and went uncovered for the whole beta series, passing only
+      # on the machine they were written on.
+      #
+      # The staging that follows is deliberate and is the reason this is not
+      # one "install everything, run everything" step. Only the tests named
+      # below may need a third-party library; every other test must keep
+      # passing without one, so this first step runs them on a bare
+      # interpreter. A test double that quietly grows an ``import cbor2``
+      # fails here instead of passing because something later in the job had
+      # already installed it.
+      - name: tests that need no third-party library
+        run: |
+          set -u
+          # Kept in step with the two staged lists at the end of this job. A
+          # file left out of this list runs here without its library and fails
+          # loudly, which is the safe direction to be wrong in.
+          needs_library="
+          test_panel2_discovery.py
+          test_device_params.py
+          test_bus_dump_tool.py
+          test_param_discovery.py
+          test_measure_request.py
+          test_param_meta.py
+          test_panel_declared_options.py
+          "
+          ran=0
+          status=0
+          for path in tests/test_*.py; do
+            case "$needs_library" in
+              *"$(basename "$path")"*) continue ;;
+            esac
+            echo "--- $path"
+            python3 "$path" || status=1
+            ran=$((ran + 1))
+          done
+          # A glob that matched nothing, or a skip list that swallowed the lot,
+          # would otherwise report success having tested nothing.
+          if [ "$ran" -eq 0 ]; then
+            echo "no tests ran: the glob or the skip list is wrong" >&2
+            exit 1
+          fi
+          echo "$ran test files ran with no third-party library"
+          exit $status
       # The config flow builds its voluptuous schema at import time, and this
       # test drives the real flow rather than a stub of it.
       - run: pip install voluptuous
