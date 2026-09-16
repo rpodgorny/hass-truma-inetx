@@ -56,6 +56,16 @@ type TrumaConfigEntry = ConfigEntry[TrumaCoordinator]
 # DEVICE_SEED for the same reason.
 _KNOWN_NAMES = {DEV_BLE_MGMT: "Bluetooth management"}
 
+# Whether this Home Assistant hangs a device off its hub by the hub's registry
+# id rather than by its identifiers.
+#
+# ``via_device`` is deprecated as of 2026.8 and stops working in 2027.8;
+# ``via_device_id`` replaced it. Asked of the type rather than of the version
+# number, because the question is exactly "does this DeviceInfo take that
+# key" -- and an older one does not merely ignore it, it rejects the device
+# info whole and leaves the vehicle with no devices at all.
+_VIA_DEVICE_ID = "via_device_id" in DeviceInfo.__annotations__
+
 # Reconnect backoff. Start quick (a healthy link that just dropped should come
 # back fast) and grow exponentially to a cap when the panel stays unreachable,
 # so an out-of-range/unbonded device does not hammer — and monopolize — the
@@ -147,6 +157,10 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # Stable identity for entity/device unique IDs. The BLE address rotates
         # (resolvable private address), so it must NOT be used as identity.
         self.unique_id = entry.unique_id or address
+        # The device registry's own id for the panel, filled in by setup once
+        # it has registered it (see __init__.py). None until then, and on any
+        # Home Assistant too old to want it.
+        self.hub_device_id: str | None = None
         self._bus = Bus()
         self._client: TrumaBleClient | None = None
         self._identity: dict | None = None
@@ -607,13 +621,28 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             name = base
         else:
             name = f"{base} {device.instance}"
-        return DeviceInfo(
+        info = DeviceInfo(
             identifiers={(DOMAIN, f"{self.unique_id}_{addr:04X}")},
             name=name,
             model=device.name,
             serial_number=device.serial,
-            via_device=(DOMAIN, self.unique_id),
         )
+        # Hung off the panel, by whichever of the two names for that this
+        # Home Assistant takes.
+        #
+        # ``via_device`` names the hub by its identifiers and is deprecated as
+        # of 2026.8 -- it stops working in 2027.8. ``via_device_id`` names it
+        # by the registry's own id for it, which is why the panel is
+        # registered before any platform is forwarded (see __init__.py): the
+        # id does not exist until it is. Both are kept because this runs on
+        # whatever Home Assistant the vehicle has, and the older one does not
+        # know the new key at all -- it would reject the whole device info and
+        # leave the vehicle with no devices rather than with a flat list.
+        if _VIA_DEVICE_ID and self.hub_device_id is not None:
+            info["via_device_id"] = self.hub_device_id
+        else:
+            info["via_device"] = (DOMAIN, self.unique_id)
+        return info
 
     @property
     def poll_interval(self) -> int:

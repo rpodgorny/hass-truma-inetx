@@ -102,10 +102,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: TrumaConfigEntry) -> boo
     # up at the top level, permanently. It also means a bus that has not
     # spoken yet is still visible as a device, which is the difference between
     # "nothing has answered" and "the integration did nothing".
-    dr.async_get(hass).async_get_or_create(
+    hub = dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id,
         **coordinator.device_info(DEV_PANEL),
     )
+    # And hand back the registry's own id for it, which is what a bus device
+    # hangs off on a Home Assistant new enough to want one. It is knowable
+    # only here, after the panel is registered and before any platform is
+    # forwarded, which is exactly the window this call sits in.
+    coordinator.hub_device_id = hub.id
 
     async def _async_stop(_event: Event) -> None:
         """Close the BLE link before Home Assistant exits."""

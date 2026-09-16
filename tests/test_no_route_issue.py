@@ -29,6 +29,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from typing import TypedDict
 
 SRC = Path(__file__).resolve().parents[1] / "custom_components" / "truma_inetx"
 
@@ -112,8 +113,16 @@ def _load():
     _mod("homeassistant.exceptions", HomeAssistantError=RuntimeError)
     _mod("homeassistant.helpers", __path__=[], issue_registry=IR)
     _mod("homeassistant.helpers.storage", Store=object)
-    # DeviceInfo is a TypedDict; a plain dict is the same thing at runtime.
-    _mod("homeassistant.helpers.device_registry", DeviceInfo=dict)
+    # DeviceInfo is a TypedDict; at runtime this is the same thing. Declared
+    # rather than aliased to plain ``dict`` because the coordinator asks it
+    # which keys this Home Assistant takes, and ``dict`` has no annotations.
+    class DeviceInfo(TypedDict, total=False):
+        identifiers: set
+        name: str
+        via_device: tuple
+        via_device_id: str
+
+    _mod("homeassistant.helpers.device_registry", DeviceInfo=DeviceInfo)
     _mod("homeassistant.components", __path__=[])
     _mod("bleak", __path__=[])
     _mod("bleak.backends", __path__=[])

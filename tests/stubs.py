@@ -25,6 +25,7 @@ import sys
 import types
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import TypedDict
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "custom_components" / "truma_inetx"
@@ -123,9 +124,21 @@ def install_homeassistant() -> None:
         async_delete_issue=lambda *a, **kw: None,
         IssueSeverity=SimpleNamespace(WARNING="warning"),
     ))
-    # DeviceInfo is a TypedDict in Home Assistant, so a plain dict is not an
-    # approximation -- it is the same thing at runtime.
-    mod("homeassistant.helpers.device_registry", DeviceInfo=dict,
+    # DeviceInfo is a TypedDict in Home Assistant, so at runtime this is the
+    # same thing. Declared rather than aliased to plain ``dict`` because the
+    # coordinator asks it which keys this Home Assistant takes -- ``dict``
+    # has no ``__annotations__`` at all, and answering that question wrongly
+    # is how a device ends up hung off nothing.
+    class DeviceInfo(TypedDict, total=False):
+        identifiers: set
+        name: str
+        manufacturer: str
+        model: str
+        serial_number: str
+        via_device: tuple
+        via_device_id: str
+
+    mod("homeassistant.helpers.device_registry", DeviceInfo=DeviceInfo,
         async_get=lambda _hass: None)
     mod("homeassistant.helpers.entity", Entity=object)
     mod("homeassistant.helpers.entity_platform",
