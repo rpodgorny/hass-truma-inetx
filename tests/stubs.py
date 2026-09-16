@@ -110,6 +110,7 @@ def install_homeassistant() -> None:
         EntityCategory=EntityCategory,
         Platform=Platform,
         UnitOfElectricPotential=SimpleNamespace(VOLT="V"),
+        UnitOfMass=SimpleNamespace(KILOGRAMS="kg"),
         UnitOfTemperature=SimpleNamespace(CELSIUS="°C"),
         UnitOfTime=SimpleNamespace(SECONDS="s"),
     )
@@ -140,7 +141,11 @@ def install_homeassistant() -> None:
         "homeassistant.components.sensor",
         SensorEntity=object,
         SensorDeviceClass=SimpleNamespace(
-            TEMPERATURE="temperature", VOLTAGE="voltage", DURATION="duration"
+            TEMPERATURE="temperature",
+            VOLTAGE="voltage",
+            DURATION="duration",
+            WEIGHT="weight",
+            BATTERY="battery",
         ),
         SensorStateClass=SimpleNamespace(MEASUREMENT="measurement"),
     )
@@ -148,7 +153,7 @@ def install_homeassistant() -> None:
         "homeassistant.components.binary_sensor",
         BinarySensorEntity=object,
         BinarySensorDeviceClass=SimpleNamespace(
-            RUNNING="running", CONNECTIVITY="connectivity"
+            RUNNING="running", CONNECTIVITY="connectivity", PLUG="plug"
         ),
     )
     mod("homeassistant.components.switch", SwitchEntity=object,

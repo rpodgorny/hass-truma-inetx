@@ -46,11 +46,17 @@
       "connection": {
         "name": "BLE-Verbindung"
       },
+      "cooling_active": {
+        "name": "Kühlung"
+      },
       "flame": {
         "name": "Flamme"
       },
       "gas": {
         "name": "Gas"
+      },
+      "line_power": {
+        "name": "Landstrom"
       }
     },
     "number": {
@@ -62,6 +68,9 @@
       "air_mode": {
         "name": "Heizmodus"
       },
+      "cooling_mode": {
+        "name": "Kühlstufe"
+      },
       "electric_level": {
         "name": "Elektrische Heizung"
       },
@@ -70,6 +79,9 @@
       }
     },
     "sensor": {
+      "battery_level": {
+        "name": "Sensorbatterie"
+      },
       "ble_conn_state": {
         "name": "Verbindungsstatus"
       },
@@ -78,6 +90,9 @@
       },
       "ble_mgmt_state": {
         "name": "Status"
+      },
+      "cooling_temp": {
+        "name": "Kühltemperatur"
       },
       "current_temp": {
         "name": "Raumtemperatur"
@@ -91,8 +106,17 @@
       "fresh_water_level": {
         "name": "Frischwasser"
       },
+      "gas_bottle_contents": {
+        "name": "Gasflascheninhalt"
+      },
       "gas_bottle_level": {
         "name": "Gasflaschenfüllstand"
+      },
+      "gas_bottle_rem_time": {
+        "name": "Gasflasche Restwert (roh)"
+      },
+      "gas_bottle_temp": {
+        "name": "Gasflaschentemperatur"
       },
       "grey_water_level": {
         "name": "Grauwasser"
@@ -119,6 +143,9 @@
       },
       "faster_water_heating": {
         "name": "Schnelles Wasseraufheizen"
+      },
+      "water_autofill": {
+        "name": "Nachfüllmodus"
       },
       "water_boost": {
         "name": "Warmwasser-Boost"

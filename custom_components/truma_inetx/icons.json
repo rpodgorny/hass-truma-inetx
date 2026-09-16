@@ -20,6 +20,9 @@
       "faster_water_heating": {
         "default": "mdi:water-boiler"
       },
+      "water_autofill": {
+        "default": "mdi:water-plus"
+      },
       "water_boost": {
         "default": "mdi:water-thermometer"
       },
@@ -46,8 +49,16 @@
       "gas_bottle_level": {
         "default": "mdi:gas-cylinder"
       },
+      "gas_bottle_rem_time": {
+        "default": "mdi:gas-cylinder"
+      },
       "grey_water_level": {
         "default": "mdi:water-opacity"
+      }
+    },
+    "select": {
+      "cooling_mode": {
+        "default": "mdi:snowflake"
       }
     }
   }

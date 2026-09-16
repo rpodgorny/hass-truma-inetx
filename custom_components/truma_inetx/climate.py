@@ -52,6 +52,16 @@ _HVAC_TO_MODE = {
 # before the panel was asked.
 _DEFAULT_HVAC_MODES = [HVACMode.OFF, HVACMode.HEAT, HVACMode.FAN_ONLY]
 
+# Degrees, per setpoint topic, for a device that describes no range of its
+# own: the heater heats from 5 °C, and a room setpoint -- cooling, or the
+# panel's own in automatic -- starts at 16, which is where the panel's slider
+# starts and below which the bus refuses the write (bus.PARAM_VALIDATION).
+_FALLBACK_SETPOINT_RANGE = {
+    "AirHeating": (5, 30),
+    "AirCooling": (16, 30),
+    "RoomClimate": (16, 30),
+}
+
 # The fan level exposed as the climate entity's fan mode, which puts it in the
 # same card as the mode and setpoint -- where you want it in FAN_ONLY. The
 # dedicated "Fan level" number entity still exists for automations. The range
@@ -97,8 +107,6 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
 
     _attr_name = None  # primary feature → uses the device name
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
-    _attr_min_temp = 5
-    _attr_max_temp = 30
     _attr_target_temperature_step = 1
 
     def __init__(self, coordinator: TrumaCoordinator, addr: int) -> None:
@@ -174,13 +182,66 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
         """Current room temperature, as this appliance measures it."""
         return Bus.wire_to_celsius(self.device.get("AirHeating", "Temp"))
 
+    def _setpoint(self) -> tuple[int, str]:
+        """(address, topic) of the setpoint field the running mode moves.
+
+        The panel shows one slider and keeps a separate field behind each
+        mode. Measured on a Weinsberg with a roof air conditioner
+        (2026-09-03): setting 17 °C while cooling put AirCooling.TgtTemp on
+        the roof unit at 170 and left RoomClimate.TgtTemp sitting at 270,
+        while the same slider in heating moved AirHeating.TgtTemp on the
+        heater. Writing the heater's field while cooling -- which is what this
+        entity used to do in every mode -- is acknowledged by the transport
+        and changes nothing.
+
+        Automatic is *not* measured. RoomClimate.TgtTemp is the assumption
+        there: it is the field left over, and it belongs to the panel, which
+        is what decides between heating and cooling in automatic.
+
+        The heater's own field is the answer for heating, for off -- where the
+        setpoint is the resting target you come back to -- and for any mode
+        whose own field nothing on this bus publishes.
+        """
+        mode = self.hvac_mode
+        if mode is HVACMode.COOL:
+            cooler = self.bus.sole_publisher("AirCooling", "TgtTemp")
+            if cooler is not None:
+                return cooler.addr, "AirCooling"
+        elif mode is HVACMode.AUTO:
+            panel = self.bus.sole_publisher("RoomClimate", "TgtTemp")
+            if panel is not None:
+                return panel.addr, "RoomClimate"
+        return self._addr, "AirHeating"
+
     @property
     def target_temperature(self) -> float | None:
-        """Target room temperature."""
-        # The live setpoint lives on the appliance (AirHeating), not on the
-        # panel mirror -- RoomClimate.TgtTemp only echoes our own writes. Same
-        # source as current_temperature, so the two cannot disagree.
-        return Bus.wire_to_celsius(self.device.get("AirHeating", "TgtTemp"))
+        """Target temperature of the mode that is running."""
+        addr, topic = self._setpoint()
+        return Bus.wire_to_celsius(self.bus.device(addr).get(topic, "TgtTemp"))
+
+    @property
+    def min_temp(self) -> float:
+        """The lowest the running mode's own field takes.
+
+        Heating reaches down to 5 °C and a room setpoint does not -- a roof
+        air conditioner stops at 16, and so does the panel's slider in
+        cooling. The field's owner is asked first, the same way the fan range
+        is; the two fallbacks are what the bus refuses below.
+        """
+        return self._limit(0)
+
+    @property
+    def max_temp(self) -> float:
+        """The highest the running mode's own field takes."""
+        return self._limit(1)
+
+    def _limit(self, end: int) -> float:
+        """One end of the running mode's setpoint range, in degrees."""
+        addr, topic = self._setpoint()
+        bounds = self.bus.device(addr).bounds(topic, "TgtTemp")
+        if bounds is not None:
+            return bounds[end] / 10
+        return _FALLBACK_SETPOINT_RANGE[topic][end]
 
     @property
     def hvac_mode(self) -> HVACMode | None:
@@ -229,8 +290,9 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
         await self.async_set_hvac_mode(HVACMode.OFF)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set the target room temperature on this appliance."""
+        """Set the target temperature in the field the running mode uses."""
         temperature = kwargs[ATTR_TEMPERATURE]
+        addr, topic = self._setpoint()
         await self.coordinator.async_write(
-            self._addr, "AirHeating", "TgtTemp", int(round(temperature * 10))
+            addr, topic, "TgtTemp", int(round(temperature * 10))
         )
