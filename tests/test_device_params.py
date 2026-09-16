@@ -86,6 +86,9 @@ class _Coord:
     address_kind = None
     _client = None
     poll_interval = 0
+    # What setup fills in once it has registered the panel with the device
+    # registry, and what every other device then hangs off.
+    hub_device_id = "panel-device-id"
 
     def __init__(self) -> None:
         self._bus = BUS.Bus()
@@ -229,11 +232,9 @@ def test_two_of_a_kind_are_two_named_devices() -> None:
     assert coord.device_info(BOTTLE_LEFT)["name"] == "Truma LevelControl 3"
     assert coord.device_info(BOTTLE_RIGHT)["name"] == "Truma LevelControl 4"
     # Each hangs off the panel, which is the gateway they are all behind.
-    assert coord.device_info(BOTTLE_LEFT)["via_device"] == (
-        "truma_inetx",
-        coord.unique_id,
-    )
+    assert coord.device_info(BOTTLE_LEFT)["via_device_id"] == "panel-device-id"
     # ...and the panel is that hub rather than a device below it.
+    assert "via_device_id" not in coord.device_info(PANEL)
     assert "via_device" not in coord.device_info(PANEL)
 
 
@@ -263,10 +264,37 @@ def test_the_panels_bluetooth_side_is_named_though_it_names_nothing() -> None:
     _report(coord, BLE_MGMT, "BleDeviceManagement", "NrFreeSlots", 2)
 
     assert coord.device_info(BLE_MGMT)["name"] == "Bluetooth management"
-    assert coord.device_info(BLE_MGMT)["via_device"] == (
-        "truma_inetx",
-        coord.unique_id,
-    )
+    assert coord.device_info(BLE_MGMT)["via_device_id"] == "panel-device-id"
+
+
+def test_the_hub_is_named_the_way_this_home_assistant_names_hubs() -> None:
+    """``via_device`` is deprecated as of 2026.8 and stops working in 2027.8.
+
+    ``via_device_id`` replaced it, and names the panel by the device
+    registry's own id rather than by its identifiers -- which is why setup
+    registers the panel before any platform is forwarded, and hands the id
+    back here.
+
+    Both are kept, because this runs on whatever Home Assistant the vehicle
+    has: an older one does not merely ignore the new key, it rejects the
+    device info whole, and the vehicle ends up with no devices at all rather
+    than with a flat list.
+    """
+    coord = _Coord()
+    _report(coord, BLE_MGMT, "BleDeviceManagement", "NrFreeSlots", 2)
+
+    # Setup has not run yet, or this Home Assistant has never heard of the
+    # new key: the old one still says where the device belongs.
+    coord.hub_device_id = None
+    info = coord.device_info(BLE_MGMT)
+    assert info["via_device"] == ("truma_inetx", coord.unique_id)
+    assert "via_device_id" not in info
+
+    coord.hub_device_id = "panel-device-id"
+    info = coord.device_info(BLE_MGMT)
+    assert info["via_device_id"] == "panel-device-id"
+    # Never both: Home Assistant would have two answers to one question.
+    assert "via_device" not in info
 
 
 def test_a_device_that_names_itself_there_keeps_its_own_name() -> None:
