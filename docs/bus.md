@@ -136,12 +136,22 @@ none.
 
 **The panel's own entities** — shore power, the fault flag, the timers and the
 four display controls — come from a third vehicle, a Combi 4 gas behind an iNet
-X, from the parameter dump in
-[#22](https://github.com/rpodgorny/hass-truma-inetx/issues/22). Their ranges
-come from there too: the panel describes its own brightness as 10–100 and its
-night step as 1–10. Its display timeout it describes as 0 to 4294967295 seconds,
-which is the width of the field rather than a control, and is the one range this
-integration clips.
+X Pro, from the parameter dumps in
+[#22](https://github.com/rpodgorny/hass-truma-inetx/issues/22), which are kept
+in [`dumps/combi4-inetx-pro/`](../dumps/README.md). Their ranges come from there
+too: the panel describes its own brightness as 10–100 and its night step as
+1–10. Its display timeout it describes as 0 to 4294967295 seconds, which is the
+width of the field rather than a control, and is the one range this integration
+clips.
+
+That vehicle is also where the 12 V side was read, which nothing here said
+before the dumps were kept: an electrical block at 0x0405 publishes
+`FreshWater.Level` and `GreyWater.Level` with their measure requests,
+`VBat.Voltage` and `L1Bat.Voltage`, `LinePower.Plugged` and
+`Switches.FreshWaterPump` — so the tank levels, the two batteries and the pump
+switch are measured there rather than inferred from the schema, and it is the
+vehicle that shows shore power arriving from two publishers at once (the panel's
+`System.Plugged` beside the block's `LinePower.Plugged`).
 
 ## Push, and the one thing that is polled
 
