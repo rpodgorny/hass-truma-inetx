@@ -69,6 +69,14 @@ diagnostic sensor naming the three states, with the wire value in a `raw`
 attribute, so a fourth value reads unknown rather than being folded into a
 state it does not belong in.
 
+The climate entity reads the same family for what the appliance is *doing*, but
+never `System.FlameStatus`: each of its modes is answered by the flag of the
+function that mode drives — `AirHeating.Active`, `AirCooling.Active`,
+`AirCirculation.Active`. The appliance-wide one is ACTIVE with only the boiler
+working, which would have the entity claim the room was being heated (#30).
+`RoomClimate.Active` is not a member either: the panel gives it type 107, which
+is what its unexplained 4 has been all along.
+
 Measured three times, on different hardware: a Combi 6 E against an
 independent shore-power meter (#15), 1 → 2 in the second the draw fell from
 1787 W to 105 W; a Combi 4 gas at the panel (#24), which put the idle state in

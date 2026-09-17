@@ -7,7 +7,7 @@ Every entity sits on the bus device that reported it, below the panel — see
 
 | Entity | Platform | Notes |
 |---|---|---|
-| Truma iNet X | `climate` | Whichever modes the panel offers — Off / Heat / Fan-only everywhere, plus Auto, Cool or Dry where the vehicle has them. Offers only the control the current mode uses: the target temperature while heating or cooling, the fan speed as the fan mode (`off`, `1`–`10`) while venting. The setpoint follows the mode, because the panel keeps a separate field behind each one: heating writes the heater's, cooling writes the air conditioner's own, and each field's range is the one its owner describes (5–30 °C heating, 16–30 °C cooling) |
+| Truma iNet X | `climate` | Whichever modes the panel offers — Off / Heat / Fan-only everywhere, plus Auto, Cool or Dry where the vehicle has them. Offers only the control the current mode uses: the target temperature while heating or cooling, the fan speed as the fan mode (`off`, `1`–`10`) while venting. The setpoint follows the mode, because the panel keeps a separate field behind each one: heating writes the heater's, cooling writes the air conditioner's own, and each field's range is the one its owner describes (5–30 °C heating, 16–30 °C cooling). Also reports what the appliance is *doing* — heating, cooling, venting or standing by at target — taken from the running mode's own `Active` flag, which is what colours and labels a thermostat card (#30) |
 | Room temperature | `sensor` | °C |
 | Water temperature | `sensor` | °C |
 | Internal temperature | `sensor` | °C |
@@ -51,7 +51,7 @@ Every entity sits on the bus device that reported it, below the panel — see
 | Fault reset window | `sensor` | Diagnostic, disabled by default — seconds the appliance will keep accepting a reset |
 | Power mode (raw) | `sensor` | Diagnostic, disabled by default — `PowerMgmt.PwrMode`, unlabelled: nothing measured says what its values mean |
 | Temperature source (raw) | `sensor` | Diagnostic, disabled by default — which probe the panel takes the room temperature from |
-| Climate state (raw) | `sensor` | Diagnostic, disabled by default — `RoomClimate.Active`, which reads 4 while heating, a value no appliance-level `Active` has been seen at |
+| Climate state (raw) | `sensor` | Diagnostic, disabled by default — `RoomClimate.Active`, which reads 4 while heating. The panel gives it type 107, not the 105 of the `Active` family, so it is not a tri-state and the 4 is not an odd fourth state of one |
 | Display brightness | `number` | Config, % — the panel's daytime brightness |
 | Night brightness | `number` | Config — the panel's dark-mode step, 1–10 on the panel measured |
 | Display timeout | `number` | Config, seconds |

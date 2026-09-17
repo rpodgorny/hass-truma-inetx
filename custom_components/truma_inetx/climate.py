@@ -8,13 +8,14 @@ from homeassistant.components.climate import (
     FAN_OFF,
     ClimateEntity,
     ClimateEntityFeature,
+    HVACAction,
     HVACMode,
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .bus import Bus
+from .bus import ActiveState, Bus
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
 from .entity import TrumaEntity, async_add_per_device
 
@@ -58,6 +59,32 @@ _HVAC_TO_MODE = {
 # vehicle seen so far has, which is what this entity offered unconditionally
 # before the panel was asked.
 _DEFAULT_HVAC_MODES = [HVACMode.OFF, HVACMode.HEAT, HVACMode.FAN_ONLY]
+
+# Which function each mode runs, and what the appliance is doing while that
+# function reports ACTIVE. The topic is where the mode's own tri-state lives,
+# the same way _setpoint resolves the mode's own setpoint field -- a mode is
+# answered by the parameter it drives, not by one parameter for all of them.
+#
+# Deliberately not System.FlameStatus, which is the reading this entity looks
+# like it should use and must not: that is the *appliance* making heat, water
+# heating included, so it reads ACTIVE with the boiler working and the room
+# untouched. Measured on a Combi 4 in dumps/combi4-inetx-pro/water-boost.json
+# -- RoomClimate.Mode 0, AirHeating.Active 0, WaterHeating.Active 1,
+# System.FlameStatus 1. Claiming the room was being heated there is #27 one
+# level up: the right value, attached to the wrong thing (#30).
+_MODE_FUNCTION = {
+    HVACMode.HEAT: ("AirHeating", HVACAction.HEATING),
+    HVACMode.COOL: ("AirCooling", HVACAction.COOLING),
+    HVACMode.DRY: ("AirCooling", HVACAction.DRYING),
+    HVACMode.FAN_ONLY: ("AirCirculation", HVACAction.FAN),
+}
+# In automatic the panel decides, and says so only by which function runs, so
+# both are asked. Cooling first: a vehicle that reaches automatic at all has
+# an air conditioner, and the two are not expected to run at once.
+_AUTO_FUNCTIONS = (
+    ("AirCooling", HVACAction.COOLING),
+    ("AirHeating", HVACAction.HEATING),
+)
 
 # Degrees, per setpoint topic, for a device that describes no range of its
 # own: the heater heats from 5 °C, and a room setpoint -- cooling, or the
@@ -260,6 +287,69 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
         if not isinstance(mode, int):
             return None
         return _MODE_TO_HVAC.get(mode, HVACMode.OFF)
+
+    def _function_state(self, topic: str) -> int | None:
+        """The tri-state of one function, from the device that runs it.
+
+        This appliance's own, except cooling: a Combi does not cool, and the
+        roof unit that does is a device of its own -- the same resolution
+        _setpoint makes for the cooling setpoint field.
+        """
+        if topic == "AirCooling":
+            device = self.bus.sole_publisher(topic, "Active")
+        else:
+            device = self.device
+        if device is None:
+            return None
+        value = device.get(topic, "Active")
+        return value if isinstance(value, int) else None
+
+    @property
+    def hvac_action(self) -> HVACAction | None:
+        """What the appliance is doing now, as against what it was told to do.
+
+        hvac_mode is the instruction; this is the answer. Without it a card
+        cannot tell a heater that is firing from one standing by at target,
+        and everything that wants both has to join this entity to the Heating
+        and Cooling flags by hand -- on a vehicle where the cooling one lives
+        on another device.
+
+        Each mode is answered by its own function's tri-state (#30). ACTIVE
+        means that function is working; IDLE is the appliance on with the room
+        already where it was asked to be, which is the state the flags beside
+        this entity exist to make visible, and OFF is reported only for the
+        mode being off rather than for a function that reports nothing.
+
+        Nothing here is a fourth reading of the bus: AirHeating.Active,
+        AirCooling.Active and AirCirculation.Active are the same type-105
+        family as System.FlameStatus, whose three states three appliances have
+        measured (#15, #24, #23). AirHeating.Active has been seen at OFF and
+        at IDLE on a Combi 4, where it tracked room heating alone while water
+        heating ran on its own flag; ACTIVE is taken from the family rather
+        than measured on that parameter.
+        """
+        mode = self.hvac_mode
+        if mode is None:
+            return None
+        if mode is HVACMode.OFF:
+            return HVACAction.OFF
+        if mode is HVACMode.AUTO:
+            for topic, action in _AUTO_FUNCTIONS:
+                if self._function_state(topic) == ActiveState.ACTIVE:
+                    return action
+            return HVACAction.IDLE
+        function = _MODE_FUNCTION.get(mode)
+        if function is None:
+            # A mode _MODE_TO_HVAC names and this table does not. None today;
+            # if one is added there alone, unknown rather than a guess.
+            return None
+        topic, action = function
+        state = self._function_state(topic)
+        if state is None:
+            # The mode is offered and its function says nothing -- unknown is
+            # the honest answer, and this attribute is allowed to have none.
+            return None
+        return action if state == ActiveState.ACTIVE else HVACAction.IDLE
 
     @property
     def fan_mode(self) -> str | None:

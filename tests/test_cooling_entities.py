@@ -25,7 +25,10 @@ What it pins:
 5. the air conditioner's own fields are bounded by their own entries,
 6. a gas bottle carries its weight, its temperature and its sensor's battery
    as well as its level, each on the bottle that published it,
-7. no device address for any of it is written into the source.
+7. the climate entity reports what the appliance is *doing* -- each mode
+   answered by its own function's tri-state, and never by the appliance-wide
+   System.FlameStatus, which is ACTIVE with only the boiler working (#30),
+8. no device address for any of it is written into the source.
 
 Run: ``python3 tests/test_cooling_entities.py``
 """
@@ -285,6 +288,89 @@ def test_a_gas_bottle_carries_more_than_its_level() -> None:
     rem = by_addr[BOTTLE_A]["gas_bottle_rem_time"]
     assert rem._attr_entity_registry_enabled_default is False
     assert rem._attr_native_unit_of_measurement is None
+
+
+def test_the_action_is_what_is_running_not_what_was_asked() -> None:
+    """#30: hvac_mode is the instruction, hvac_action is the answer.
+
+    Each mode is answered by the tri-state of the function it drives, which is
+    the same resolution the setpoint makes -- heating on the appliance, cooling
+    on the unit that cools.
+    """
+    coordinator = _coordinator()
+    climate = _climate(coordinator)
+
+    # Heating, on this appliance's own flag.
+    coordinator.report("RoomClimate", "Mode", 3, PANEL)
+    coordinator.report("AirHeating", "Active", 1, HEATER)
+    assert climate.hvac_action == "heating"
+    coordinator.report("AirHeating", "Active", 2, HEATER)
+    assert climate.hvac_action == "idle", "standing by at target is not heating"
+    coordinator.report("AirHeating", "Active", 0, HEATER)
+    assert climate.hvac_action == "idle"
+
+    # Off is the mode being off, not a function reporting nothing.
+    coordinator.report("RoomClimate", "Mode", 0, PANEL)
+    assert climate.hvac_action == "off"
+
+    # Cooling, on the roof unit's flag -- not the heater's, which does not
+    # publish it and never will.
+    coordinator.report("RoomClimate", "Mode", 2, PANEL)
+    assert climate.hvac_action is None, "the unit has said nothing yet"
+    coordinator.report("AirCooling", "Active", 1, ROOF_AC)
+    assert climate.hvac_action == "cooling"
+    coordinator.report("AirCooling", "Active", 2, ROOF_AC)
+    assert climate.hvac_action == "idle"
+
+    # Ventilating, on the circulation flag.
+    coordinator.report("RoomClimate", "Mode", 5, PANEL)
+    coordinator.report("AirCirculation", "Active", 1, HEATER)
+    assert climate.hvac_action == "fan"
+    coordinator.report("AirCirculation", "Active", 0, HEATER)
+    assert climate.hvac_action == "idle"
+
+    # Automatic says which function runs only by running it.
+    coordinator.report("RoomClimate", "Mode", 1, PANEL)
+    coordinator.report("AirCooling", "Active", 2, ROOF_AC)
+    coordinator.report("AirHeating", "Active", 1, HEATER)
+    assert climate.hvac_action == "heating"
+    coordinator.report("AirCooling", "Active", 1, ROOF_AC)
+    assert climate.hvac_action == "cooling"
+    coordinator.report("AirCooling", "Active", 0, ROOF_AC)
+    coordinator.report("AirHeating", "Active", 2, HEATER)
+    assert climate.hvac_action == "idle"
+
+
+def test_heating_the_water_is_not_heating_the_room() -> None:
+    """#30, and #27 one level up: the right value on the wrong thing.
+
+    System.FlameStatus is the appliance making heat, water heating included.
+    Taken as the room's action it claims the vehicle is being heated while
+    only the boiler works -- the state this repo already has on file, in
+    ``dumps/combi4-inetx-pro/water-boost.json``: RoomClimate.Mode 0,
+    AirHeating.Active 0, WaterHeating.Active 1, System.FlameStatus 1.
+    """
+    coordinator = _coordinator()
+    climate = _climate(coordinator)
+    coordinator.report("System", "FlameStatus", 1, HEATER)
+    coordinator.report("WaterHeating", "Active", 1, HEATER)
+    coordinator.report("AirHeating", "Active", 0, HEATER)
+
+    # The dump's own state: the room mode is off while the boiler works.
+    coordinator.report("RoomClimate", "Mode", 0, PANEL)
+    assert climate.hvac_action == "off"
+
+    # And the harder case the dump does not hold: heating selected, the room
+    # already warm, the boiler working anyway. The appliance is making heat;
+    # the room is not being heated.
+    coordinator.report("RoomClimate", "Mode", 3, PANEL)
+    assert climate.hvac_action == "idle", "the boiler is not the room"
+
+    # Which is only true because nothing here consults the appliance-wide
+    # flag. Prose may name it -- a read would have to quote it.
+    assert '"FlameStatus"' not in (SRC / "climate.py").read_text(), (
+        "climate.py reads System.FlameStatus"
+    )
 
 
 def test_no_address_for_any_of_this_is_in_the_source() -> None:

@@ -1008,11 +1008,14 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             entity_category=EntityCategory.DIAGNOSTIC,
         ),
     ),
-    # The panel's own climate state, in the family the Active parameters
-    # belong to. Read 4 on the van while heating, which is a value none of
-    # the appliance-level Active parameters has been seen at -- so it is the
-    # raw number rather than a flag, and off by default until something
-    # measured says what its values mean.
+    # The panel's own climate state. Read 4 on the van while heating, which
+    # is a value none of the appliance-level Active parameters has been seen
+    # at -- and the reason is that this is not one of them: the panel gives it
+    # type 107 where the tri-state family is 105 (measured in
+    # dumps/combi4-inetx-pro/water-boost.json). So the raw number rather than
+    # a flag, and off by default until something says what its values mean.
+    # Not read by the climate entity for what the appliance is doing; the
+    # per-function 105 flags are (#30).
     ("RoomClimate", "Active"): (
         Row(
             platform=Platform.SENSOR,

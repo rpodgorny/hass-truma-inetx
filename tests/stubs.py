@@ -69,6 +69,17 @@ class HVACMode(enum.StrEnum):
     FAN_ONLY = "fan_only"
 
 
+class HVACAction(enum.StrEnum):
+    """What the appliance is doing, as against what it was asked to do."""
+
+    OFF = "off"
+    IDLE = "idle"
+    HEATING = "heating"
+    COOLING = "cooling"
+    DRYING = "drying"
+    FAN = "fan"
+
+
 class ClimateEntityFeature(enum.IntFlag):
     """Enough of the feature flags to check which ones a mode offers."""
 
@@ -276,6 +287,7 @@ def install_homeassistant() -> None:
         FAN_OFF="off",
         ClimateEntity=object,
         ClimateEntityFeature=ClimateEntityFeature,
+        HVACAction=HVACAction,
         HVACMode=HVACMode,
     )
 
