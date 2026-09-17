@@ -70,7 +70,14 @@ class TrumaParamEntity(TrumaEntity):
         row: Row,
     ) -> None:
         """Initialize from the row the parameter is presented as."""
-        super().__init__(coordinator, addr, f"{topic}.{param}_{row.translation_key}")
+        # What the entity *is*: a device, a parameter, and the platform it is
+        # presented on. Not its translation_key, which is what it is *called*
+        # -- an identity built from a presentation field makes every naming
+        # mistake permanent, which is how "Flame" outlived the measurement
+        # that disproved it (#27). The platform is enough of a discriminator
+        # because no parameter carries two rows on one platform; the table
+        # pins that rather than this code guarding it.
+        super().__init__(coordinator, addr, f"{topic}.{param}_{row.platform}")
         self._topic = topic
         self._param = param
         self.row = row
@@ -125,7 +132,7 @@ def async_add_rows(
     ``avail`` 0. Waiting for the flag is still waiting for evidence; it is just
     the evidence that this copy of the parameter means something.
     """
-    made: set[tuple[int, str, str, str]] = set()
+    made: set[tuple[int, str, str, Platform]] = set()
 
     @callback
     def _check() -> None:
@@ -141,7 +148,7 @@ def async_add_rows(
             for key in list(device.params):
                 topic, _, param = key.partition(".")
                 for row in rows_for(topic, param, platform):
-                    ident = (addr, topic, param, row.translation_key)
+                    ident = (addr, topic, param, platform)
                     if ident in made:
                         continue
                     if row.requires_avail and device.meta(topic, param).get(

@@ -18,8 +18,8 @@ What it pins:
    actually uses, at the address that publishes it,
 3. the setpoint range comes from that field's owner, falling back per topic
    rather than to one range for all three,
-4. cooling that is standing by reads as off, the way a flame that is standing
-   by does -- and is still visible, as a state of its own on the diagnostic
+4. cooling that is standing by reads as off, the way a heater that is
+   standing by does -- and is still visible, as a state of its own on the diagnostic
    sensor beside the flag: measured on the FreshJet of #23, which reports the
    2 that vehicle's first dump had not shown,
 5. the air conditioner's own fields are bounded by their own entries,
@@ -168,7 +168,7 @@ def test_the_cooling_states_are_named_in_every_language() -> None:
 
     for path in [SRC / "strings.json", *sorted((SRC / "translations").glob("*.json"))]:
         entry = json.loads(path.read_text())["entity"]["sensor"]["cooling_status"]
-        # The same three states as the flame, under the same keys: they are
+        # The same three states as the heater's, under the same keys: they are
         # what an automation matches on, so only the words move per language.
         assert set(entry["state"]) == {"off", "running", "idle"}, path.name
 

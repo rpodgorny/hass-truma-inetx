@@ -18,7 +18,7 @@ Every entity sits on the bus device that reported it, below the panel — see
 | Diesel burner | `switch` | Only where the heater has a diesel burner |
 | Gas | `binary_sensor` | Whether the heater is drawing on gas. Read-only — the heater moves this itself. Only where it burns gas |
 | Fan level | `number` | 0–10 |
-| Flame | `binary_sensor` | Burner currently firing |
+| Heating | `binary_sensor` | Whether the appliance is making heat right now, by whichever source is doing it — not a flame: measured on a Combi 6 E with the gas off at the appliance and the 1800 W element carrying the load, the parameter (`System.FlameStatus`, Truma's name) followed the element, switching 1 → 2 within a second of the shore draw falling from 1703 W to 36 W (#27). Standing by reads off |
 | BLE connection | `binary_sensor` | Diagnostic — is the panel connected |
 | Fresh water | `sensor` | % — only where the vehicle has a tank sensor |
 | Grey water | `sensor` | % — only where the vehicle has a tank sensor |
@@ -34,7 +34,7 @@ Every entity sits on the bus device that reported it, below the panel — see
 | Cooling temperature | `sensor` | °C — what the air conditioner measures. Only where the vehicle has one |
 | Cooling level | `select` | `AirCooling.Mode`: Low / Mid / High / Max / Night / Auto — the unit's own names for the stages, and how hard it runs, on its own device |
 | Cooling | `binary_sensor` | Whether the air conditioner is running, as opposed to standing by — `AirCooling.Active` 2 is the unit awake with its compressor off, measured on a FreshJet at 336 W against a 311 W base load (#23) |
-| Cooling status | `sensor` | Diagnostic — off / running / idle, the same three states as the flame, with the wire value in the `raw` attribute |
+| Cooling status | `sensor` | Diagnostic — off / running / idle, the same three states as **Heating status**, with the wire value in the `raw` attribute |
 | Refill mode | `switch` | The panel's "refill" button: while it is on the tank sensor measures continuously and the panel sounds a tone at full. Only where the vehicle has a tank sensor |
 | Shore power | `binary_sensor` | Whether 230 V is connected. The panel publishes it (`System.Plugged`) and so does an electrical block (`LinePower.Plugged`); a vehicle with both gets one on each device, which is two sources rather than one reading |
 | Fault | `binary_sensor` | Whether the appliance is reporting an error at all, on the appliance raising it |
@@ -58,7 +58,7 @@ Every entity sits on the bus device that reported it, below the panel — see
 | Screensaver | `switch` | Config |
 | Starter battery | `sensor` | V — only where something reports `VBat.Voltage` |
 | Leisure battery | `sensor` | V — only where something reports `L1Bat.Voltage` |
-| Flame status | `sensor` | Diagnostic — off / running / idle. Measured three times: a Combi 6 E against a shore-power meter (#15), a Combi 4 gas at the panel (#24), and a FreshJet roof unit on the same `AirCooling.Active` triple (#23): *idle* is the appliance on with the room already above its target, which the flame flag beside it cannot say. The number it was named from stays in the `raw` attribute, and a value nobody has named yet reads unknown rather than being folded into a state it does not belong in |
+| Heating status | `sensor` | Diagnostic — off / running / idle. Measured three times: a Combi 6 E against a shore-power meter (#15), a Combi 4 gas at the panel (#24), and a FreshJet roof unit on the same `AirCooling.Active` triple (#23): *idle* is the appliance on with the room already above its target, which the flag beside it cannot say. The wire value stays in the `raw` attribute, and a value nobody has named yet reads unknown rather than being folded into a state it does not belong in |
 | Free slots | `sensor` | Diagnostic — how many bonds the panel has left, summed over the breakdown by device kind it publishes. On its own Bluetooth management device |
 | Connection state | `sensor` | Diagnostic — the panel's own view of the link, `BleDeviceManagement.BleConnState` |
 | State | `sensor` | Diagnostic — the raw `BleDeviceManagement.State` value |

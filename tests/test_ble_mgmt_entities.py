@@ -118,9 +118,9 @@ def test_all_three_are_diagnostics_that_are_on() -> None:
 
     And on: what they are for is being in the recorder *before* the session
     that wedges, and an entity nobody has enabled records nothing. That is
-    what separates them from the raw flame value, which is off by default --
-    that one restates a reading already shown as a binary sensor, and nothing
-    here restates anything.
+    what separates them from RoomClimate.Active, which is off by default --
+    that one restates a state already shown on the appliance itself, at a
+    value nothing measured explains, and nothing here restates anything.
     """
     coordinator = _coordinator()
     made = stubs.setup_platform(SENSOR, coordinator)

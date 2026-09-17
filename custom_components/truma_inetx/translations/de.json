@@ -55,11 +55,11 @@
       "error": {
         "name": "Störung"
       },
-      "flame": {
-        "name": "Flamme"
-      },
       "gas": {
         "name": "Gas"
+      },
+      "heating_active": {
+        "name": "Heizung"
       },
       "line_power": {
         "name": "Landstrom"
@@ -140,14 +140,6 @@
       "fault_reset_window": {
         "name": "Reset-Zeitfenster"
       },
-      "flame_status": {
-        "name": "Flammenstatus",
-        "state": {
-          "off": "Aus",
-          "running": "Heizt",
-          "idle": "Bereit"
-        }
-      },
       "fresh_water_level": {
         "name": "Frischwasser"
       },
@@ -165,6 +157,14 @@
       },
       "grey_water_level": {
         "name": "Grauwasser"
+      },
+      "heating_status": {
+        "name": "Heizstatus",
+        "state": {
+          "off": "Aus",
+          "running": "Heizt",
+          "idle": "Bereit"
+        }
       },
       "internal_temp": {
         "name": "Innentemperatur"

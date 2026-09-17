@@ -75,9 +75,12 @@ class Row:
     """How one parameter is presented on one platform."""
 
     platform: Platform
-    # Names the entity (strings.json) and its icon (icons.json), and is the
-    # key half of the unique_id. Kept stable across presentation changes:
-    # moving it orphans every entity built from this row.
+    # Names the entity (strings.json) and its icon (icons.json). Presentation
+    # only: an entity's identity is its device, topic, parameter and platform
+    # -- see TrumaParamEntity -- so a name that turns out to be wrong costs
+    # the name to change and nothing else. This used to be half the unique_id,
+    # which made every wrong name permanent, and "Flame" on an appliance
+    # heating with its electric element is what that cost (#27).
     translation_key: str
 
     device_class: object | None = None
@@ -332,7 +335,7 @@ _AIR_MODE_LABELS = {0: "Fast", 1: "Comfort"}
 # is how hard the unit runs, which is why "Auto" sits inside it.
 _COOLING_LABELS = {0: "Low", 1: "Mid", 2: "High", 3: "Max", 4: "Night", 5: "Auto"}
 # The type-105 triple, under the names three appliances have now measured it
-# at. Not the flame's alone: every parameter in the family takes the same
+# at. Not FlameStatus's alone: every parameter in the family takes the same
 # three, and one dict is what keeps them reading alike.
 #
 # A Combi 6 E with gas and an 1800 W element, watched against an independent
@@ -652,11 +655,12 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
         Row(
             platform=Platform.SENSOR,
             translation_key="cooling_status",
-            # And the three states by name, for the same reason the flame has
-            # them: the flag above can say running or not, and the thing an
-            # owner wants to tell apart is *not running* from *standing by*.
-            # The number stays underneath, so a fourth value shows up as
-            # unknown-with-a-raw-attribute rather than being swallowed.
+            # And the three states by name, for the reason the heater's own
+            # parameter has them: the flag above can say running or not, and
+            # what an owner wants to tell apart is *not running* from
+            # *standing by*. The number stays underneath, so a fourth value
+            # shows up as unknown-with-a-raw-attribute rather than being
+            # swallowed.
             device_class=SensorDeviceClass.ENUM,
             labels=_ACTIVE_LABELS,
             attrs=_raw,
@@ -712,20 +716,31 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     ("System", "FlameStatus"): (
         Row(
             platform=Platform.BINARY_SENSOR,
-            translation_key="flame",
+            # Not "flame", which is Truma's word for the parameter and wrong
+            # about the thing: the value follows whichever source is making
+            # the heat. Measured on a Combi 6 E with the gas switched off at
+            # the appliance and the 1800 W element carrying the load (#27) --
+            # EnergySrc.GasLevel 0, FlameStatus 1 for seven minutes, and the
+            # 1 -> 2 landing 900 ms before the shore draw fell from 1703 W to
+            # 36 W. The parameter was following the element. An entity called
+            # "Flame" that reads on with nothing burning is what a
+            # gas-flavoured automation keys off, and its name is the
+            # invitation. Named the way AirCooling.Active is, because it is
+            # the same parameter family read the same way.
+            translation_key="heating_active",
             device_class=BinarySensorDeviceClass.RUNNING,
             # Not "anything non-zero". The parameter is type 105, the family
             # the Active parameters belong to, and 2 is the appliance standing
             # by: measured on a Combi 6 E against an independent shore-power
             # meter (#15), it went 1 -> 2 in the same second the draw fell
-            # from 1787 W to 105 W. Reporting a flame while the appliance
-            # stands by is worse than reporting nothing -- it is the reading
-            # an automation acts on.
+            # from 1787 W to 105 W. Reporting heat while the appliance stands
+            # by is worse than reporting nothing -- it is the reading an
+            # automation acts on.
             on_values=(ActiveState.ACTIVE,),
         ),
         Row(
             platform=Platform.SENSOR,
-            translation_key="flame_status",
+            translation_key="heating_status",
             # The three states by name, now that two vehicles have measured
             # the same three. No state class, then or now: these are states
             # and not a quantity, and long-term statistics would have handed
@@ -873,7 +888,7 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # put its own side of the link in the recorder *before* the next one.
     #
     # The panel describes none of them with an enum, so none is offered as a
-    # named state -- see the flame_status row above for the same reasoning.
+    # named state -- see the heating_status row above for the same reasoning.
     ("BleDeviceManagement", "NrFreeSlots"): (
         Row(
             platform=Platform.SENSOR,
@@ -900,7 +915,7 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             platform=Platform.SENSOR,
             translation_key="ble_mgmt_state",
             # On by default like the two above, though nothing measured says
-            # what its values mean yet -- the raw flame value is off for that
+            # what its values mean yet -- RoomClimate.Active is off for that
             # reason and this is not. A value only worth having *before* the
             # failure it explains has to be recorded before anybody knows to
             # go and enable it, and measured on the van it moves (2 at one
@@ -996,8 +1011,8 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # The panel's own climate state, in the family the Active parameters
     # belong to. Read 4 on the van while heating, which is a value none of
     # the appliance-level Active parameters has been seen at -- so it is the
-    # raw number rather than a flag, off by default, the same treatment the
-    # raw flame value gets.
+    # raw number rather than a flag, and off by default until something
+    # measured says what its values mean.
     ("RoomClimate", "Active"): (
         Row(
             platform=Platform.SENSOR,

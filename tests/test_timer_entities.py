@@ -190,10 +190,12 @@ def test_each_pair_is_named_by_its_slot() -> None:
         schedule = _by_param(sensors, f"Timer{slot}")
         assert arm._attr_translation_placeholders == {"slot": str(slot)}
         assert schedule._attr_translation_placeholders == {"slot": str(slot)}
-        # One translation key for all six, so the unique_id of the slot that
-        # has always been mapped does not move and take its history with it.
+        # One translation key for all six, because they are one entity six
+        # times over and the slot number is a placeholder in its name. What
+        # tells the six apart is the parameter, which is what identifies them.
         assert arm._attr_translation_key == "timer"
-        assert arm._attr_unique_id.endswith(f"TimerConfig.Timer{slot}State_timer")
+        assert arm.unique_id.endswith(f"TimerConfig.Timer{slot}State_switch")
+        assert schedule.unique_id.endswith(f"TimerConfig.Timer{slot}_sensor")
 
 
 def test_the_count_of_armed_timers_is_readable() -> None:

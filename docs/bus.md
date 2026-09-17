@@ -58,7 +58,10 @@ it.
 
 **The three-state `Active` family.** `System.FlameStatus`, `AirCooling.Active`
 and the other parameters the panel gives type 105 take 0, 1 and 2 — off,
-running, and the appliance on but standing by. Each gets a flag that is on for
+running, and the appliance on but standing by. `FlameStatus` is Truma's name
+for the parameter and it is wrong about it: the value follows whichever source
+is making the heat, gas or electric element (#27), so the entities built from
+it are named **Heating** and **Heating status**. Each gets a flag that is on for
 1 alone, never "anything non-zero": a burner idling with the room already warm,
 or a roof unit awake with its compressor off, is not the vehicle being heated
 or cooled, and the flag is what an automation acts on. Beside each flag sits a

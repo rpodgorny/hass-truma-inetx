@@ -89,6 +89,15 @@ class CoordinatorEntity:
     def __init__(self, coordinator) -> None:
         self.coordinator = coordinator
 
+    @property
+    def unique_id(self):
+        """What Home Assistant reads, rather than the attribute behind it.
+
+        An entity's identity is registry-visible and permanent, so a test that
+        wants to pin it should read it the way the registry does.
+        """
+        return self._attr_unique_id
+
 
 class _Coordinator:
     """DataUpdateCoordinator, which is only ever subscripted and subclassed."""

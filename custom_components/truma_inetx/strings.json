@@ -55,11 +55,11 @@
       "error": {
         "name": "Fault"
       },
-      "flame": {
-        "name": "Flame"
-      },
       "gas": {
         "name": "Gas"
+      },
+      "heating_active": {
+        "name": "Heating"
       },
       "line_power": {
         "name": "Shore power"
@@ -140,14 +140,6 @@
       "fault_reset_window": {
         "name": "Fault reset window"
       },
-      "flame_status": {
-        "name": "Flame status",
-        "state": {
-          "off": "Off",
-          "running": "Running",
-          "idle": "Idle"
-        }
-      },
       "fresh_water_level": {
         "name": "Fresh water"
       },
@@ -165,6 +157,14 @@
       },
       "grey_water_level": {
         "name": "Grey water"
+      },
+      "heating_status": {
+        "name": "Heating status",
+        "state": {
+          "off": "Off",
+          "running": "Running",
+          "idle": "Idle"
+        }
       },
       "internal_temp": {
         "name": "Internal temperature"

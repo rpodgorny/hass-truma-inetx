@@ -4,9 +4,6 @@
       "demo_mode": {
         "default": "mdi:store-outline"
       },
-      "flame": {
-        "default": "mdi:fire"
-      },
       "gas": {
         "default": "mdi:gas-cylinder"
       },
@@ -60,9 +57,6 @@
       "fault_reset_window": {
         "default": "mdi:timer-sand"
       },
-      "flame_status": {
-        "default": "mdi:fire"
-      },
       "fresh_water_level": {
         "default": "mdi:water"
       },
@@ -74,6 +68,9 @@
       },
       "grey_water_level": {
         "default": "mdi:water-opacity"
+      },
+      "heating_status": {
+        "default": "mdi:radiator"
       },
       "logic_supply": {
         "default": "mdi:flash-outline"

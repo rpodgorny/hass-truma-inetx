@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline checks for the energy sources, the batteries and the raw flame value.
+"""Offline checks for the energy sources, the batteries and the heat the Combi makes.
 
 No hardware and no Home Assistant install: HA is stubbed and the real
 ``bus.py``, ``profiles.py``, ``sensor.py``, ``switch.py`` and
@@ -24,6 +24,11 @@ Why this exists:
   three: a Combi 6 E against a shore-power meter, where 2 is the appliance
   standing by rather than a second kind of firing, and a Combi 4 gas watched at
   the panel. So the sensor names them instead of showing a code.
+- **#27.** And they are not named after a flame. On that same Combi 6 E, with
+  the gas switched off at the appliance and the 1800 W element carrying the
+  load, the parameter read 1 for seven minutes with nothing burning, and went
+  1 -> 2 as the element stopped. Truma's name for the parameter is
+  ``FlameStatus``; the entities built from it are Heating and Heating status.
 
 What it pins:
 
@@ -33,11 +38,14 @@ What it pins:
    platform writes ``EnergySrc.GasLevel``,
 3. each of them is created when, and only when, its parameter is reported,
 4. the batteries are scaled by ten, not by a thousand,
-5. the flame status is named -- off, running, idle -- and keeps the number it
-   was named from, and a value nobody has named reads unknown rather than
+5. the heating status is named -- off, running, idle -- and keeps the number
+   it was named from, and a value nobody has named reads unknown rather than
    being folded into a state it does not belong in,
-6. and the flame binary sensor is on while the burner runs and off while it
-   merely stands by.
+6. the heating flag is on while the appliance makes heat and off while it
+   merely stands by,
+7. and no entity is identified by what it is called: a row's translation_key
+   is absent from every unique_id, which is what makes a wrong name cheap to
+   correct.
 
 Run: ``python3 tests/test_energy_entities.py``
 """
@@ -171,7 +179,7 @@ def test_the_batteries_are_tenths_of_a_volt_not_millivolts() -> None:
     assert _by_key(made, "voltage").native_value == 13.7
 
 
-def test_the_three_flame_states_are_named() -> None:
+def test_the_three_heating_states_are_named() -> None:
     """#15 and #24: two vehicles measured the same three, so name them.
 
     A Combi 6 E against a shore-power meter (#15) and a Combi 4 gas watched at
@@ -181,7 +189,7 @@ def test_the_three_flame_states_are_named() -> None:
     coordinator = _coordinator()
     made = stubs.setup_platform(SENSOR, coordinator)
     coordinator.report("System", "FlameStatus", 2, HEATER)
-    status = _by_key(made, "flame_status")
+    status = _by_key(made, "heating_status")
 
     assert status._attr_entity_category is stubs.EntityCategory.DIAGNOSTIC
     assert status._attr_device_class == "enum"
@@ -206,7 +214,7 @@ def test_a_state_nobody_has_named_reads_unknown() -> None:
     coordinator = _coordinator()
     made = stubs.setup_platform(SENSOR, coordinator)
     coordinator.report("System", "FlameStatus", 3, HEATER)
-    status = _by_key(made, "flame_status")
+    status = _by_key(made, "heating_status")
 
     assert status.native_value is None
     assert status.extra_state_attributes == {"raw": 3}
@@ -216,35 +224,99 @@ def test_a_state_nobody_has_named_reads_unknown() -> None:
     assert status.native_value == "running"
 
 
-def test_the_flame_states_are_named_in_every_language() -> None:
+def test_the_heating_states_are_named_in_every_language() -> None:
     import json  # noqa: PLC0415
 
     for path in [SRC / "strings.json", *sorted((SRC / "translations").glob("*.json"))]:
-        entry = json.loads(path.read_text())["entity"]["sensor"]["flame_status"]
+        entry = json.loads(path.read_text())["entity"]["sensor"]["heating_status"]
         # The state under the word is the one automations match on, so it is
         # the same in every language and only the word moves.
         assert set(entry["state"]) == {"off", "running", "idle"}, path.name
 
 
-def test_the_flame_sensor_is_on_only_while_it_is_firing() -> None:
+def test_the_heating_flag_is_on_only_while_heat_is_being_made() -> None:
     """#15, measured: 0 off, 1 running, 2 idle -- not 0 off, anything else on.
 
     On a Combi 6 E the value went 1 -> 2 in the same second shore power fell
-    from 1787 W to 105 W. Read as ``> 0``, standing by looked like a flame.
+    from 1787 W to 105 W. Read as ``> 0``, standing by looked like heating.
     """
     coordinator = _coordinator()
     made = stubs.setup_platform(BINARY, coordinator)
     coordinator.report("System", "FlameStatus", 0, HEATER)
-    flame = _by_key(made, "flame")
+    heating = _by_key(made, "heating_active")
 
-    assert flame.is_on is False
+    assert heating.is_on is False
     coordinator.report("System", "FlameStatus", 1, HEATER)
-    assert flame.is_on is True
+    assert heating.is_on is True
     coordinator.report("System", "FlameStatus", 2, HEATER)
-    assert flame.is_on is False, "2 is the appliance standing by, not a flame"
+    assert heating.is_on is False, "2 is the appliance standing by, not heating"
     # A plain flag is still read as "anything non-zero", which is what the
     # tri-state row exists to be different from.
     assert PROFILES.ROWS[("EnergySrc", "GasLevel")][0].on_values is None
+
+
+def test_the_heating_flag_follows_the_electric_element_too() -> None:
+    """#27: the parameter is not about a flame, and the entity is not named one.
+
+    Measured on the Combi 6 E of #15 and #23, gas switched off at the appliance
+    from the Truma app and confirmed on the bus, water heating running on Eco
+    with the 1800 W element::
+
+        19:38:58   EnergySrc.GasLevel       0     <- gas off
+                   EnergySrc.ElectricLevel  2     <- 1800 W
+                   shore power              1699 W, flat
+        19:45:52   System.FlameStatus       1 -> 2
+        19:45:53   shore power                36 W
+
+    Seven minutes at 1 with nothing burning. An entity called Flame reading on
+    there is what a gas-flavoured automation keys off.
+    """
+    coordinator = _coordinator()
+    made = stubs.setup_platform(BINARY, coordinator)
+    coordinator.report("EnergySrc", "GasLevel", 0, HEATER)
+    coordinator.report("EnergySrc", "ElectricLevel", 2, HEATER)
+    coordinator.report("System", "FlameStatus", 1, HEATER)
+
+    assert _by_key(made, "gas").is_on is False
+    assert _by_key(made, "heating_active").is_on is True
+
+    # Nothing anybody reads claims a flame, in any language.
+    import json  # noqa: PLC0415
+
+    for path in [SRC / "strings.json", *sorted((SRC / "translations").glob("*.json"))]:
+        entity = json.loads(path.read_text())["entity"]
+        for domain, key in (
+            ("binary_sensor", "heating_active"),
+            ("sensor", "heating_status"),
+        ):
+            name = entity[domain][key]["name"]
+            assert "flam" not in name.lower(), (path.name, name)
+
+
+def test_a_name_is_not_an_identity() -> None:
+    """#27: a wrong name has to be correctable, so it cannot be half the id.
+
+    The unique_id used to end in the row's translation_key, which made every
+    name permanent -- correcting one orphaned the entity and took its history.
+    Identity is the device, the topic, the parameter and the platform now, and
+    the platform is only enough because no parameter carries two rows on one
+    platform. That is the invariant; it is pinned here rather than guarded in
+    the code.
+    """
+    coordinator = _coordinator()
+    made = stubs.setup_platform(BINARY, coordinator)
+    coordinator.report("System", "FlameStatus", 1, HEATER)
+    heating = _by_key(made, "heating_active")
+
+    assert "heating" not in heating.unique_id, heating.unique_id
+    assert heating.unique_id.endswith("_System.FlameStatus_binary_sensor")
+
+    seen: set[tuple[str, str, str]] = set()
+    for (topic, param), rows in PROFILES.ROWS.items():
+        for row in rows:
+            ident = (topic, param, str(row.platform))
+            assert ident not in seen, ident
+            seen.add(ident)
 
 
 def _main() -> None:
