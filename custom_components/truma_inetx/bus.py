@@ -292,8 +292,14 @@ class Device:
         readings -- ``Identify.Name``, ``Identify.SerialNr``,
         ``TimeAndDate.Time`` here, and ``System.FlameStatus``, ``L1Bat.Voltage``,
         ``GasBtl.FillLevelP`` on the vehicle of #23 -- while every parameter
-        either panel writes successfully carries no ``perm`` key at all. On the
-        second panel the value 1 never appears anywhere.
+        either panel writes successfully carries no ``perm`` key at all.
+
+        All three spellings exist, and the third is rare. Across the 242
+        parameters that vehicle's panel describes: 129 with no ``perm``, 112
+        with ``perm: 0``, and exactly one with ``perm: 1`` -- ``System.Beep``,
+        which is plainly writable. A narrower dump of the same panel had no 1
+        in it at all, so the absence is a matter of how much of the bus has
+        been described, not of the panel's vocabulary.
 
         So a missing ``perm`` means writable rather than unknown, which is what
         ``None`` is for here: "the device did not say", and the caller goes
@@ -531,33 +537,66 @@ class Bus:
         """
         return COMMAND_DEST.get(topic, addr)
 
+    def write_authority(self, addr: int, topic: str, param: str) -> Device | None:
+        """The device whose description governs a write from ``addr``.
+
+        The write goes to ``command_dest()``, so the device that receives it is
+        the authority on what it accepts -- and for a relayed topic that is not
+        the entity's own device, which has never described the parameter and
+        never will. Measured on the Combi 6 E of #23: the climate entity
+        offered cooling, because the modes come from the panel's own enum, and
+        then refused the write --
+
+            RoomClimate.Mode: value 2 not in [0, 3, 5]
+
+        -- because validation asked 0x0201, which says nothing about
+        RoomClimate, and fell through to PARAM_VALIDATION, a table written for
+        a van with no air conditioner. The routing was right all along; only
+        the validation looked at the wrong device.
+
+        Reads resolve a relayed topic the same way (``sole_publisher`` /
+        ``relayed``). A write judged by a stricter rule than the value it
+        changes is the bug, not the safeguard.
+        """
+        dest = self.devices.get(self.command_dest(addr, topic))
+        if dest is not None and dest.meta(topic, param):
+            return dest
+        # Nothing said at the destination: the entity's own device is the next
+        # best claim, and for every topic but the relayed ones it is the same
+        # device anyway.
+        return self.devices.get(addr, dest)
+
     def validate_write(
         self, addr: int, topic: str, param: str, value: int
     ) -> tuple[bool, str]:
-        """Validate a write against what the owning device said about itself.
+        """Validate a write against what the receiving device said about itself.
 
         The device's own description outranks PARAM_VALIDATION wherever it
         exists, because the table is a guess about hardware in general and the
         description is a statement about this vehicle.
+
+        Every refusal names the device it came from rather than the entity's
+        own address: on a relayed topic those differ, and a message blaming
+        0x0201 for a claim the panel made is an hour of somebody's life.
         """
-        device = self.devices.get(addr)
+        device = self.write_authority(addr, topic, param)
         if device is not None:
             if device.writable(topic, param) is False:
                 return False, (
-                    f"{topic}.{param}: 0x{addr:04X} describes it as read-only"
+                    f"{topic}.{param}: 0x{device.addr:04X} describes it as read-only"
                 )
             allowed = device.allowed_values(topic, param)
             if allowed is not None:
                 if value not in allowed:
                     return False, (
-                        f"{topic}.{param}: 0x{addr:04X} offers only {allowed}"
+                        f"{topic}.{param}: 0x{device.addr:04X} offers only {allowed}"
                     )
                 return True, "ok"
             bounds = device.bounds(topic, param)
             if bounds is not None:
                 if not bounds[0] <= value <= bounds[1]:
                     return False, (
-                        f"{topic}.{param}: 0x{addr:04X} accepts "
+                        f"{topic}.{param}: 0x{device.addr:04X} accepts "
                         f"{bounds[0]}-{bounds[1]}"
                     )
                 return True, "ok"

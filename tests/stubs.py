@@ -292,6 +292,18 @@ class FakeCoordinator:
         self._notify()
 
     async def async_write(self, addr: int, topic: str, param: str, value: int):
+        """Validate the way the real coordinator does, then record.
+
+        The validation is not decoration. A stub that records every write
+        unconditionally passes whatever an entity offers, so the whole class of
+        bug where an entity offers a value the validator then refuses is
+        invisible to every test in this suite -- which is exactly how #23
+        shipped: the climate entity offered cooling and the write was rejected
+        by our own table.
+        """
+        ok, msg = self.data.validate_write(addr, topic, param, value)
+        if not ok:
+            raise RuntimeError(f"Invalid Truma command: {msg}")
         self.writes.append((addr, topic, param, value))
 
 

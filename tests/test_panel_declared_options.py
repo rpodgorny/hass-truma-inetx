@@ -227,9 +227,60 @@ def test_the_device_outranks_our_table_when_it_has_spoken() -> None:
     # ...and it constrains as well as permits: 4 is in the protocol, not on
     # this vehicle's panel.
     assert bus.validate_write(PANEL, "RoomClimate", "Mode", 4)[0] is False
-    # ...and it is that device's claim, not the bus's: another device is still
-    # judged by the table.
-    assert bus.validate_write(HEATER, "RoomClimate", "Mode", 2)[0] is False
+    # ...and it is that device's claim, not the bus's -- said on a topic
+    # nobody relays, which is where that sentence is true. The roof unit
+    # describes a four-step fan and refuses a 6; the Combi has described
+    # nothing, so it is judged by the table's (0, 10) and takes one.
+    bus.learn_param("AirCirculation", "FanLevel", {"min": 0, "max": 4}, ROOF_AC)
+    assert bus.validate_write(ROOF_AC, "AirCirculation", "FanLevel", 6)[0] is False
+    assert bus.validate_write(HEATER, "AirCirculation", "FanLevel", 6)[0] is True
+
+
+def test_a_relayed_write_is_judged_by_the_panel_that_receives_it() -> None:
+    """#23: cooling was offered by the panel's enum and refused by our table.
+
+    The write goes where COMMAND_DEST sends it, so that is the device whose
+    description governs. Validating against the entity's own device asked the
+    Combi about RoomClimate -- a topic it does not publish and never will --
+    and fell through to PARAM_VALIDATION, written for a van with no air
+    conditioner:
+
+        HomeAssistantError: Invalid Truma command:
+        RoomClimate.Mode: value 2 not in [0, 3, 5]
+    """
+    bus = BUS.Bus()
+    bus.learn_param("RoomClimate", "Mode", {"enum": _enum(COMBI_6E)}, PANEL)
+
+    ok, msg = bus.validate_write(HEATER, "RoomClimate", "Mode", 2)
+    assert ok, msg
+    assert bus.write_authority(HEATER, "RoomClimate", "Mode").addr == PANEL
+
+    # The panel's enum constrains such a write as well as permitting it, and
+    # the refusal names the device that made the claim rather than the entity
+    # the write came from.
+    ok, msg = bus.validate_write(HEATER, "RoomClimate", "Mode", 4)
+    assert not ok
+    assert f"0x{PANEL:04X}" in msg, msg
+
+    # Nothing described at the destination leaves the table in charge, which
+    # is what happens while discovery is still running.
+    assert BUS.Bus().validate_write(HEATER, "RoomClimate", "Mode", 2)[0] is False
+
+
+def test_the_climate_entity_can_reach_a_mode_the_panel_offers() -> None:
+    """The same bug from the layer the user hit it on (#23).
+
+    The climate entity lives on the heater and offers whatever the panel
+    enumerates, so offering cooling and then refusing to write it was the two
+    halves of this integration disagreeing about which device to ask.
+    """
+    coordinator = _coordinator()
+    climate = _climate(coordinator)
+    coordinator.describe("RoomClimate", "Mode", PANEL, v=0, enum=_enum(COMBI_6E))
+    assert "cool" in climate.hvac_modes
+
+    asyncio.run(climate.async_set_hvac_mode("cool"))
+    assert coordinator.writes == [(HEATER, "RoomClimate", "Mode", 2)], coordinator.writes
 
 
 def test_our_table_still_applies_where_nothing_was_described() -> None:
