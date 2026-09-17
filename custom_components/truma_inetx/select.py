@@ -56,11 +56,32 @@ class TrumaSelect(TrumaParamEntity, SelectEntity):
         """Initialize from the row."""
         super().__init__(coordinator, addr, topic, param, row)
         self._labels: dict[int, str] = dict(row.labels or {})
-        self._values = {label: value for value, label in self._labels.items()}
+        # Every option resolves through here, to the parameter and the value
+        # that selects it. The row's own labels are laid down first, so a
+        # device that enumerates its own off keeps it: EnergySrc.ElectricLevel
+        # names 0 "Electric off" on a gas/electric Combi, and writing that 0
+        # is what switches the element off (#28).
+        self._writes: dict[str, tuple[str, int]] = {
+            label: (param, value) for value, label in self._labels.items()
+        }
+        # An off the parameter itself has no value for. Water heating is
+        # switched off by WaterHeating.Active while WaterHeating.Mode
+        # enumerates the three temperature steps and nothing else, so that
+        # option is ours to invent -- and it goes in beside the rest rather
+        # than being recognised by its spelling on the way back in. Home
+        # Assistant hands a select one flat list of strings and hands the same
+        # strings back, so an invented option and a label are the same kind of
+        # thing by the time it returns; a sentinel that outranked the labels
+        # is how off became unselectable on the one vehicle whose own enum
+        # offered it (#28).
+        self._off: str | None = None
+        if row.off_param is not None and OFF not in self._writes:
+            self._off = OFF
+            self._writes[OFF] = (row.off_param, 0)
 
     @property
     def options(self) -> list[str]:
-        """The steps this device offers, in value order, plus any off.
+        """The steps this device offers, in value order, plus any invented off.
 
         The device enumerates the parameter for the vehicle it is installed
         in, so it is the authority on which steps exist. Its *names* for them
@@ -77,17 +98,17 @@ class TrumaSelect(TrumaParamEntity, SelectEntity):
         if values is None:
             values = list(self._labels)
         offered = [self._labels[value] for value in values if value in self._labels]
-        if self.row.off_param is None:
+        if self._off is None:
             return offered
-        return [OFF, *offered]
+        return [self._off, *offered]
 
     @property
     def current_option(self) -> str | None:
         """The step currently selected, or off."""
-        if self.row.off_param is not None:
-            active = self.device.get(self._topic, self.row.off_param)
-            if active == 0:
-                return OFF
+        if self._off is not None:
+            off_param, _ = self._writes[self._off]
+            if self.device.get(self._topic, off_param) == 0:
+                return self._off
         value = self.value
         if not isinstance(value, int):
             return None
@@ -95,10 +116,11 @@ class TrumaSelect(TrumaParamEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         """Select a step, switching the function on first where it has an off."""
-        if option == OFF:
-            assert self.row.off_param is not None
-            await self.async_write(self.row.off_param, 0)
-            return
-        if self.row.off_param is not None:
-            await self.async_write(self.row.off_param, 1)
-        await self.async_write(self._param, self._values[option])
+        param, value = self._writes[option]
+        off_param = self.row.off_param
+        if off_param is not None and param == self._param:
+            # A step is being chosen, and this function is switched off in its
+            # own right: switch it on before saying which step. Selecting the
+            # invented off writes off_param itself, and nothing else.
+            await self.async_write(off_param, 1)
+        await self.async_write(param, value)

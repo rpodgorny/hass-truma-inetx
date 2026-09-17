@@ -36,8 +36,13 @@ What it pins:
 5. off is always offered on the climate entity, whatever the panel says,
 6. each select is created only on a device that reports its parameter -- a
    Combi D has no electric element and its panel never mentions the parameter,
-7. and a slider's range comes from its own device, not from a constant that
-   happens to be a Combi's.
+7. a slider's range comes from its own device, not from a constant that happens
+   to be a Combi's,
+8. an off a device enumerates itself writes that value, and an off this
+   integration invents writes the parameter that switches the function off
+   (#28),
+9. and every option a select offers can be selected, which is the general form
+   of #28: the two go into one flat list of strings and come back as one.
 
 Run: ``python3 tests/test_panel_declared_options.py``
 """
@@ -59,7 +64,7 @@ stubs.install_homeassistant()
 BUS = stubs.load("bus")
 stubs.load("const")
 stubs.mod("truma_pkg.coordinator", TrumaCoordinator=object, TrumaConfigEntry=object)
-stubs.load("profiles")
+PROFILES = stubs.load("profiles")
 stubs.load("entity")
 SELECT = stubs.load("select")
 NUMBER = stubs.load("number")
@@ -214,6 +219,67 @@ def test_the_water_select_switches_the_function_off_rather_than_the_step() -> No
         (HEATER, "WaterHeating", "Active", 1),
         (HEATER, "WaterHeating", "Mode", 2),
     ], coordinator.writes
+
+
+def test_the_electric_element_can_be_switched_off() -> None:
+    """#28: 0 is a step of this parameter's own, not an off we invent.
+
+    Measured on a gas/electric Combi 6 E, whose panel enumerates
+    ``EnergySrc.ElectricLevel`` as ``{0: Electric off, 1: 900W, 2: 1800W}``.
+    So the row needs no ``off_param`` and rightly has none -- and the write is
+    the ordinary one, the value the device named.
+
+    What broke: the label for 0 is the word "off", which is also the option
+    the water select invents for itself, and the write path recognised that
+    option by its spelling before it looked anything up. Off was offered, and
+    then the only option in the dropdown that raised.
+    """
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SELECT, coordinator)
+    coordinator.describe(
+        "EnergySrc", "ElectricLevel", HEATER, v=1,
+        enum=_enum({0: "Electric off", 1: "900W", 2: "1800W"}),
+    )
+    electric = _by_key(made, "electric_level")
+
+    assert electric.options == ["off", "900 W", "1800 W"], electric.options
+    assert electric.current_option == "900 W"
+
+    asyncio.run(electric.async_select_option("off"))
+    asyncio.run(electric.async_select_option("1800 W"))
+    assert coordinator.writes == [
+        (HEATER, "EnergySrc", "ElectricLevel", 0),
+        (HEATER, "EnergySrc", "ElectricLevel", 2),
+    ], coordinator.writes
+    # Nothing was switched on beside it: this function has no other parameter
+    # to switch, which is the difference from water heating.
+    assert PROFILES.ROWS[("EnergySrc", "ElectricLevel")][0].off_param is None
+
+
+def test_every_option_a_select_offers_can_be_selected() -> None:
+    """The general form of #28, and the guard that would have caught it.
+
+    A select's options come from two places -- the row's own labels, and the
+    off it invents where the function is switched by a parameter of its own --
+    and Home Assistant gives it one flat list of strings to offer and hands
+    the same strings back. So the thing to pin is not which spelling means
+    what: it is that every option offered resolves to a write.
+    """
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SELECT, coordinator)
+    for (topic, param), rows in PROFILES.ROWS.items():
+        if any(row.platform == "select" for row in rows):
+            coordinator.report(topic, param, 0, HEATER)
+
+    assert len(made) == sum(
+        row.platform == "select" for rows in PROFILES.ROWS.values() for row in rows
+    ), _keys(made)
+    for entity in made:
+        assert entity.options, _keys([entity])
+        for option in entity.options:
+            coordinator.writes.clear()
+            asyncio.run(entity.async_select_option(option))
+            assert coordinator.writes, f"{entity._attr_translation_key}: {option}"
 
 
 def test_the_device_outranks_our_table_when_it_has_spoken() -> None:
