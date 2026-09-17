@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 
-from .bus import Bus
+from .bus import Bus, MeasureMiss
 from .const import LOGGER
 from .truma.const import (
     CTRL_MBP,
@@ -54,6 +54,18 @@ _PARAM_DISC_SETTLE = 3  # seconds
 # Same reasoning as _PARAM_DISC_GAP -- do not hand the transport a second
 # frame before it has drained the first.
 _MEASURE_GAP = 0.15  # seconds
+# ...and the same settle as _PARAM_DISC_SETTLE, paid only after a measure
+# request went unanswered. Ready and DataAck carry no transfer identity, so a
+# reply that arrives after we stopped waiting for it would otherwise be taken
+# for the next transfer's. The transport invalidates itself over exactly this
+# (ble._send_locked) and a probe asks it not to, which makes the wait ours to
+# keep. A healthy request pays nothing.
+_MEASURE_SETTLE = 3  # seconds
+# How many consecutive unanswered requests before a publisher stops being
+# asked. A device that has gone away is asked three times a minute apart and
+# then left alone; one that is merely slow gets three chances, and one that is
+# still publishing anything at all is asked again regardless (see below).
+_MEASURE_MISSES_BEFORE_GIVING_UP = 3
 
 
 class StartupFailed(Exception):
@@ -229,6 +241,18 @@ async def discover_params(client, bus: Bus, name: str, now) -> None:
         LOGGER.warning(message)
         raise StartupFailed(message)
 
+    # Every device on the bus has now been asked to describe itself, and the
+    # answers have settled. Said here rather than when the whole startup
+    # returns, because what waits on it waits for exactly this: a device that
+    # has not named itself by now is not going to (see
+    # TrumaCoordinator.device_is_named). The steps after this one can fail on
+    # their own, and a startup that got this far and then timed out would
+    # otherwise leave the vehicle with values, no names and therefore no
+    # entities at all -- where naming those devices after their addresses is
+    # the right answer, and was what happened before the wait existed.
+    bus.discovered = True
+
+
 async def request_measurements(client, bus: Bus, name: str) -> None:
     """Ask the on-demand sensors to take a fresh reading.
 
@@ -254,18 +278,76 @@ async def request_measurements(client, bus: Bus, name: str) -> None:
     """
     for topic, evidence in MEASURE_REQUEST_TOPICS.items():
         for dest in bus.publishers(topic, evidence):
+            device = bus.device(dest)
+            missed = bus.measure_misses.get((dest, topic))
+            if missed is not None:
+                if device.last_seen > missed.heard_at:
+                    # It has said something since, so it is there and the
+                    # silence was the request's, not the device's.
+                    bus.measure_misses.pop((dest, topic), None)
+                    missed = None
+                elif missed.count >= _MEASURE_MISSES_BEFORE_GIVING_UP:
+                    continue
             LOGGER.debug(
                 "Truma %s: asking 0x%04X for a fresh %s measurement",
                 name,
                 dest,
                 topic,
             )
-            await client.send(
+            answered = await client.send(
                 build_write_frame(
                     client.assigned_addr, dest, topic, MEASURE_REQUEST_PARAM, 1
-                )
+                ),
+                # Silence is one of the answers here. The panel is the peer
+                # that acknowledges, and it withholds the acknowledgement for
+                # a frame addressed to a device that is not there -- which is
+                # the premise discover_params is built on, and the reason it
+                # probes too. Without this, one unanswered request invalidates
+                # the transport and drops the session: at startup, and then
+                # again every _MEASURE_INTERVAL for as long as Home Assistant
+                # runs, because the publisher list is everything that has ever
+                # reported a level and nothing prunes it. A tank sensor
+                # removed or re-paired mid-run would cost a reconnect a
+                # minute, with nothing in the log naming the cause.
+                #
+                # Nothing reads the return value beyond the counter below: a
+                # fresh Level arriving through the notification path is what
+                # confirms the request, and that is checked by the entity, not
+                # here.
+                probe=True,
             )
-            await asyncio.sleep(_MEASURE_GAP)
+            if answered:
+                bus.measure_misses.pop((dest, topic), None)
+                await asyncio.sleep(_MEASURE_GAP)
+                continue
+            count = (missed.count if missed else 0) + 1
+            bus.measure_misses[(dest, topic)] = MeasureMiss(count, device.last_seen)
+            if count == _MEASURE_MISSES_BEFORE_GIVING_UP:
+                # Said once, and out loud: a tank level that has stopped being
+                # refreshed still shows its last measurement, so the entity
+                # looks fine and the reading is simply old. That is issue #4
+                # coming back quietly, and this line is the only thing that
+                # would say so.
+                LOGGER.warning(
+                    "Truma %s: 0x%04X has not answered %d %s measurement "
+                    "requests and has published nothing meanwhile; it will "
+                    "not be asked again until it does. Its last reading "
+                    "stands and will not refresh",
+                    name,
+                    dest,
+                    count,
+                    topic,
+                )
+            else:
+                LOGGER.debug(
+                    "Truma %s: 0x%04X did not answer a %s measurement request "
+                    "(%d in a row)",
+                    name,
+                    dest,
+                    topic,
+                    count,
+                )
+            await asyncio.sleep(_MEASURE_SETTLE)
 
 
 def handle_frame(bus: Bus, parsed: dict, client=None, name: str = "") -> bool:

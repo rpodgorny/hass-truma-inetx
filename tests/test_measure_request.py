@@ -23,8 +23,14 @@ What it pins:
    reporter's vehicle and something else on the next one,
 4. a vehicle that has never reported a tank is never asked, because every
    vehicle subscribes to these topics whether or not it has the hardware,
-5. and the reply lands in the state field the sensor reads, so an emptied tank
-   actually moves.
+5. the reply lands in the state field the sensor reads, so an emptied tank
+   actually moves,
+6. the request is a probe, because the panel withholds the acknowledgement for
+   a frame addressed to a device that is not there and an unanswered non-probe
+   send ends the session -- at startup, and then once a minute for as long as
+   Home Assistant runs,
+7. and a publisher that never answers is asked three times and then left
+   alone, until it publishes something of its own.
 
 Run: ``python3 tests/test_measure_request.py`` (needs ``cbor2``).
 """
@@ -99,7 +105,13 @@ class _Client:
     def __init__(self, coord, clock: _Clock, answers: bool = True,
                  disconnect_at: float | None = None,
                  discovery: dict[int, list[tuple[str, str, int]]] | None = None,
+                 acks_measure: bool = True,
                  ) -> None:
+        # Whether the *transport* acknowledges a measure request at all, which
+        # is a different question from whether the device answers with a
+        # level: the panel is the peer that acknowledges, and it withholds the
+        # acknowledgement for a frame addressed to a device that is not there.
+        self._acks_measure = acks_measure
         self.assigned_addr = APP_ADDR
         self.sent: list[tuple[float, dict]] = []
         self._coord = coord
@@ -126,8 +138,14 @@ class _Client:
 
     async def send(self, frame: bytes, *, probe: bool = False) -> bool:
         parsed = PROTO.parse_v3_frame(frame)
+        # Recorded because it is the flag the real transport keys its teardown
+        # off: an unanswered send that is not a probe invalidates the stream
+        # and disconnects (ble._send_locked).
+        parsed["probe"] = probe
         self.sent.append((self._clock.now, parsed))
         cbor = parsed.get("cbor") or {}
+        if cbor.get("pn") == TC.MEASURE_REQUEST_PARAM and not self._acks_measure:
+            return False
 
         values = self._discovery.get(parsed["dest"])
         if values is not None and parsed.get("sub_type") == TC.MBP_PARAM_DISC:
@@ -406,6 +424,83 @@ def test_poll_mode_asks_once_per_poll_and_does_not_hold_the_link() -> None:
     assert clock.now < 60, (
         f"poll held the link for {clock.now:.0f}s waiting on the interval"
     )
+
+
+def test_a_measure_request_is_sent_as_a_probe() -> None:
+    """Silence is one of the answers, so it must not end the session.
+
+    The panel is the peer that acknowledges, and it withholds the
+    acknowledgement for a frame addressed to a device that is not there --
+    which is the premise parameter discovery is built on, and why that probes
+    too. Sent without the flag, one unanswered request invalidates the
+    transport and disconnects (``ble._send_locked``): at startup, and then
+    again every ``_MEASURE_INTERVAL`` for as long as Home Assistant runs,
+    because the publisher list is everything that has ever reported a level
+    and nothing prunes it. A tank sensor removed or re-paired mid-run would
+    cost a reconnect a minute.
+    """
+    clock = _Clock()
+    coord = _Coord(clock)
+    client = _Client(coord, clock)
+    _seen_tanks(coord)
+
+    _run(coord._request_measurements(client), clock)
+
+    measures = [
+        parsed for _when, parsed in client.sent
+        if (parsed.get("cbor") or {}).get("pn") == TC.MEASURE_REQUEST_PARAM
+    ]
+    assert measures, "nothing was asked"
+    for parsed in measures:
+        assert parsed["probe"] is True, (
+            "a measure request sent without probe ends the session when the "
+            "panel withholds the acknowledgement"
+        )
+
+
+def test_a_publisher_that_never_answers_is_left_alone() -> None:
+    """Three tries a minute apart, then stop -- not forever, every minute."""
+    clock = _Clock()
+    coord = _Coord(clock)
+    client = _Client(coord, clock, acks_measure=False)
+    _seen_tanks(coord)
+
+    for _ in range(5):
+        _run(coord._request_measurements(client), clock)
+
+    per_topic: dict[str, int] = {}
+    for _when, _dest, topic in _requests(client):
+        per_topic[topic] = per_topic.get(topic, 0) + 1
+    assert per_topic == {"FreshWater": 3, "GreyWater": 3}, per_topic
+
+    misses = coord._bus.measure_misses
+    assert misses[(BOARD, "FreshWater")].count == 3, misses
+
+
+def test_a_publisher_that_speaks_again_is_asked_again() -> None:
+    """The count is about the device, not about the request.
+
+    A sensor that is slow, or that the panel was briefly not routing for,
+    comes back -- and anything it publishes is proof it is there. Left to the
+    count alone, a tank that answered again would never be asked to measure
+    again, which is issue #4 with extra steps.
+    """
+    clock = _Clock()
+    coord = _Coord(clock)
+    client = _Client(coord, clock, acks_measure=False)
+    _seen_tanks(coord)
+
+    for _ in range(4):
+        _run(coord._request_measurements(client), clock)
+    assert len(_requests(client)) == 6, "three tries per topic, then silence"
+
+    # It publishes something of its own, the way a device that is there does.
+    coord._bus.update("FreshWater", "Level", 30, BOARD)
+    client._acks_measure = True
+    _run(coord._request_measurements(client), clock)
+
+    assert len(_requests(client)) == 8, "a device that spoke was not asked again"
+    assert (BOARD, "FreshWater") not in coord._bus.measure_misses
 
 
 def _main() -> None:

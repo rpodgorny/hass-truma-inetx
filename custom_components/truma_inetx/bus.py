@@ -319,6 +319,20 @@ class Device:
         return perm != 0
 
 
+@dataclass(frozen=True)
+class MeasureMiss:
+    """An unanswered measure request, and what the device had said by then.
+
+    ``heard_at`` is the device's ``last_seen`` at the moment of the miss, so
+    the next round can tell "it is not there" from "that one request went
+    unanswered": anything published since resets the count. See
+    ``session.request_measurements``.
+    """
+
+    count: int
+    heard_at: float
+
+
 @dataclass
 class Bus:
     """Every device the panel has let us hear from, and the link's own state."""
@@ -334,6 +348,11 @@ class Bus:
 
     last_update: float = 0.0
     connected: bool = False
+    # (address, topic) -> consecutive unanswered measure requests. Kept on the
+    # bus rather than in the session, because the question it answers is about
+    # a device ("is that tank sensor still there") and outlives any one link.
+    measure_misses: dict[tuple[int, str], MeasureMiss] = field(default_factory=dict)
+
     # Whether startup has finished asking every device on the bus to describe
     # itself. Until it has, a device that has published a value may still be
     # about to publish its name, and anything that names a device from the bus

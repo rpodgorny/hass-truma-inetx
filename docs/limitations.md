@@ -69,5 +69,14 @@ reaching them means re-pairing or forcing a setup failure.
 
 - **Duplicate entries in the panel's device list.** Each pairing can leave an
   extra record. Harmless so far, but it consumes the panel's ~4 slots.
+- **A tank sensor that stops answering stops being refreshed.** A tank reports
+  the level it last measured and nothing else, so it is asked once a minute
+  (issue #4). If the panel withholds the acknowledgement — which it does for a
+  frame addressed to a device that is no longer there, after a re-pairing or a
+  removal — the sensor is asked three times and then left alone until it
+  publishes something of its own, with one warning in the log naming the
+  address. The entity keeps its last reading, which is honest but will not
+  move. Asking regardless was worse: an unanswered request of that kind ends
+  the session, so it cost a reconnect a minute.
 - Only the local name / service UUID are used for discovery; the stored address
   is treated as volatile because it rotates.

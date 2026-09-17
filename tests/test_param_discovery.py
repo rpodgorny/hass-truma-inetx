@@ -470,6 +470,46 @@ def test_a_startup_that_hangs_is_not_waited_on_forever() -> None:
     assert "did not finish within" in str(raised), raised
 
 
+def test_discovery_is_what_says_the_bus_has_been_described() -> None:
+    """The flag an entity waits on, set where the claim becomes true.
+
+    Everything that names a device from the bus waits for either the name or
+    the end of discovery, because a device with a value and no name yet would
+    otherwise be given an entity id built on "bus_device_0xNNNN" for good
+    (#23). Set when the whole of startup returned rather than here, a startup
+    that described the bus and then failed in a later step -- asking the tanks
+    to measure, or simply running out of its own timeout -- would leave the
+    vehicle with values, no names and therefore no entities at all.
+    """
+    coord = _Coord()
+    assert coord._bus.discovered is False, "nothing has been asked yet"
+
+    client = _Client(coord)
+    _run(coord._run_startup(client))
+    assert coord._bus.discovered is True
+
+
+def test_a_bus_nobody_answered_for_is_not_called_described() -> None:
+    """The failure path keeps the flag down, so the retry names things right.
+
+    Not one address acknowledging means the transport is gone, whatever the
+    link claims -- and the values that arrived from subscribing are a bus we
+    have not been told the names of. Releasing the entities there would stamp
+    the placeholder into their ids on the strength of a session that carried
+    nothing.
+    """
+    coord = _Coord()
+    client = _SilentClient(coord)
+
+    raised = None
+    try:
+        _run(coord._run_startup(client))
+    except Exception as exc:  # noqa: BLE001 - the type is HA's, stubbed here
+        raised = exc
+    assert raised is not None, "a bus nobody answered for was accepted"
+    assert coord._bus.discovered is False
+
+
 def _main() -> None:
     stubs.run_tests(globals(), "parameter discovery")
 
