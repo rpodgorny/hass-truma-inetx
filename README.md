@@ -12,6 +12,29 @@ burner and the fan — no cloud, no Truma account, no LIN wiring.
 Developed against an iNet X driving a **Truma Combi**. Other Truma appliances
 speak the same protocol but are untested; reports welcome.
 
+> ## ⚠️ Updating from 0.8.x: **every entity id changes**
+>
+> The 0.9.0 betas put each entity on the bus device that reports it, so its
+> unique id now carries a device address. **There is no migration**, and these
+> consequences were measured on the upgrade rather than predicted:
+>
+> - Old entities stay in the registry as `unavailable` until you delete them
+>   from the device page. History does not carry over.
+> - Automations, scripts and dashboards that name an entity have to be pointed
+>   at the new one.
+> - An entity that ships disabled and that you had enabled by hand comes back
+>   disabled, and the choice cannot be recovered from the old entry.
+> - Where an old entity still holds the name a new one wants, the new one keeps
+>   a `_2` suffix — even after the old one is deleted.
+>
+> The tidiest route is to **delete the config entry and set the integration up
+> again from scratch** (panel into add-device mode, pair once): no stale
+> entities, no `_2` names, nothing to clean up by hand. It is **not
+> necessary** — updating in place works — it trades the cleanup for one
+> re-pairing.
+>
+> Why, and the rest of it: [One device per device](#one-device-per-device).
+
 ## Reaching the panel
 
 The panel advertises a **fast-rotating Resolvable Private Address** and only
@@ -340,21 +363,16 @@ describes as 0 to 4294967295 seconds, which is the width of the field rather
 than a control, and is the one range this integration clips.
 
 The 0.9.0 betas move every entity onto the bus device that reports it, and
-every entity id changes with it. There is no migration: the integration is
-still in development, and a unique id that used to mean "this parameter,
-somewhere on this panel" cannot be mapped onto one that means "this parameter,
-on this device" without guessing which device. Old entities stay in the
-registry as unavailable until they are deleted from the device page, and
-history does not carry over. Automations and dashboards that name an entity
-have to be pointed at the new one.
+every entity id changes with it — the warning at the top of this file says
+what that costs on an upgrade. There is no migration because a unique id that
+used to mean "this parameter, somewhere on this panel" cannot be mapped onto
+one that means "this parameter, on this device" without guessing which device,
+and because the integration is still in development.
 
-Two further consequences, both measured on that upgrade. Because the unique id
-gains the device address, Home Assistant sees every entity as a new one: an
-entity you had switched on by hand that ships disabled by default — the
-internal temperature, the supply voltage and the raw flame status are the three
-— comes back disabled, and the choice cannot be recovered from the old entry.
-And where an old entity still holds the name the new one wants, the new one
-takes a `_2` suffix and keeps it, even after the old one is deleted.
+Because the unique id gains the device address, Home Assistant sees every
+entity as a new one — which is why an entity enabled by hand comes back
+disabled. The three that ship disabled by default are the internal
+temperature, the supply voltage and the raw flame status.
 
 On a vehicle that already had the electric select or the diesel switch before
 they became conditional, the same applies. The integration does not remove
