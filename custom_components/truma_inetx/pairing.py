@@ -25,6 +25,17 @@ can hear the panel:
 Bonding where HA will *connect* is the whole point of the order: a bond that
 lives on a path HA does not use fails every later connect at encryption, which
 looks exactly like broken hardware.
+
+That order has one hole, and it is the whole of #26: on a host with no proxy,
+the connect it dispatches on is the thing bonding is *for*. An unbonded panel
+drops the link before its services resolve, so ``establish_connection`` never
+returns a client, the dispatch never runs, and ``Device1.Pair()`` is never
+called -- twenty-six attempts, sixty seconds, the agent never registered
+(measured on a Raspi 3B with a USB dongle, 2026-09-17). So a connect that has
+failed on every address the panel is advertising falls back to the BlueZ path,
+which needs no link of its own in order to bond. Only the fallback is new: a
+connect that *succeeds* still decides the transport, because a link in hand is
+the only thing that ever predicted it.
 """
 
 from __future__ import annotations
@@ -74,6 +85,16 @@ async def ensure_bonded(
     The caller must have prompted the user to put the panel into add-device
     mode (and to clear its device list if it is full).
 
+    When no address the panel is advertising will even establish a link, there
+    is no client to dispatch on and the loop above has nothing left to try:
+    that is #26, where a proxyless host spent the whole timeout re-dialling a
+    panel that drops every unbonded link. A connect failure on an address we
+    have already failed to connect on means the rotation has wrapped, so the
+    BlueZ path is taken anyway -- it bonds over its own D-Bus connection and
+    needs no link from us. Gated on the panel resolving to a BlueZ object path,
+    because that path is what ``Device1.Pair()`` is called on: without one there
+    is nothing for the fallback to do, and the failure is somewhere else.
+
     Returns ``(bonded, client)``. Over a proxy link ``client`` is the LIVE,
     encrypted connection left open for the coordinator to adopt (handing it off
     avoids the disconnect/reconnect that wedges the just-bonded RPA); the caller
@@ -93,6 +114,12 @@ async def ensure_bonded(
     # panel is advertising it comes back and we retry it, which is right,
     # because a bond can also fail for reasons that heal.
     avoid: set[str] = set()
+    # Addresses that would not even establish a link, as opposed to ``avoid``,
+    # which also collects addresses that connected and then failed to bond.
+    # The fallback below turns on the difference: a bond failure has a client
+    # behind it and is the rotation's business, while a connect failure on
+    # every candidate means no transport was ever chosen at all (#26).
+    connect_failed: set[str] = set()
     while time.monotonic() < deadline:
         device = async_resolve_device(hass, name, avoid=avoid)
         if device is None:
@@ -104,6 +131,29 @@ async def ensure_bonded(
             avoid.clear()
             await asyncio.sleep(1.5)
             continue
+        if device.address.upper() in connect_failed and _live_device_path(
+            hass, name, adapter_path
+        ):
+            # The resolver has handed back an address we already failed to
+            # connect on, so every candidate the panel is advertising has had
+            # its turn -- the rotation has wrapped with nothing to show. Since
+            # BlueZ can see the panel, bond there: Device1.Pair() brings up its
+            # own link and does the SMP exchange that the plain connect was
+            # waiting for the panel to volunteer.
+            LOGGER.debug(
+                "Truma %s: no address will establish a link; bonding through "
+                "BlueZ instead of re-dialling",
+                name,
+            )
+            bonded = await _ensure_bonded_bluez(
+                name,
+                address,
+                adapter_path=adapter_path,
+                timeout=max(deadline - time.monotonic(), 0.0),
+                hass=hass,
+                trust_existing_bond=False,
+            )
+            return bonded, None
         try:
             client = await establish_connection(
                 BleakClientWithServiceCache, device, device.address, max_attempts=1
@@ -112,6 +162,7 @@ async def ensure_bonded(
             last_exc = exc
             LOGGER.debug("Truma %s pairing connect: %s", name, exc)
             avoid.add(device.address.upper())
+            connect_failed.add(device.address.upper())
             await asyncio.sleep(2.0)
             continue
 
@@ -345,6 +396,7 @@ async def _ensure_bonded_bluez(
     adapter_path: str | None = None,
     timeout: float = 60.0,
     hass: HomeAssistant | None = None,
+    trust_existing_bond: bool = True,
 ) -> bool:
     """Bond the Truma panel over local BlueZ (D-Bus). Return ``True`` if bonded.
 
@@ -356,6 +408,27 @@ async def _ensure_bonded_bluez(
     ``adapter_path`` (e.g. ``/org/bluez/hci0``) scopes the bond to the adapter
     HA connects through; when omitted, any adapter that sees the panel is used.
 
+    ``trust_existing_bond`` is whether BlueZ reporting ``Paired`` may be taken
+    as the answer. Normally it may: the caller got as far as a link before
+    handing over, so a bond on this adapter is one the panel honours. It may
+    not when the caller arrives here *because* nothing would establish a link
+    (#26) -- a bond is half-held by definition then. BlueZ will offer a key the
+    panel has forgotten and the panel drops the link the moment it cannot
+    decrypt, which is indistinguishable from a panel that was never paired, so
+    a host-side ``Paired`` would report success against a panel that has seen
+    nothing.
+
+    Unproven, the order is try **then** remove: ``Device1.Pair()`` goes first
+    and the bond is dropped only once that has failed with BlueZ still claiming
+    ``Paired``. Removing up front would be the cheaper code and the worse
+    behaviour -- re-pairing is the one path a user reaches with a *working*
+    bond (Reconfigure), and a panel that is not in add-device mode at that
+    moment would be left with no bond at all. One removal *attempt* per call,
+    and only after the panel has refused: a removal that does not go through
+    leaves the bond suspect, so the call runs out its timeout rather than
+    reporting a success it cannot see -- and does not spend that timeout
+    retrying a D-Bus call that has already said no.
+
     BlueZ transport only. Safe to call when already bonded (returns quickly).
     """
     bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
@@ -366,12 +439,15 @@ async def _ensure_bonded_bluez(
             bus, "/", "org.freedesktop.DBus.ObjectManager"
         )
 
-        # Fast path: already bonded (on the connecting adapter)?
+        # Fast path: already bonded (on the connecting adapter)? Not open to
+        # a caller that could not establish a link -- see trust_existing_bond.
         objects = await object_manager.call_get_managed_objects()
         path = _find_device(
             objects, name=name, address=address, adapter_path=adapter_path
         )
-        if _already_bonded(objects, path=path, adapter_path=adapter_path):
+        if trust_existing_bond and _already_bonded(
+            objects, path=path, adapter_path=adapter_path
+        ):
             LOGGER.debug("Truma %s already bonded on %s", name, adapter_path)
             return True
         if path and not adapter_path:
@@ -393,16 +469,37 @@ async def _ensure_bonded_bluez(
 
         LOGGER.info("Truma %s: attempting Just Works bond (%ss)", name, timeout)
         start = time.monotonic()
+        # Whether a bond BlueZ reports is one this call can believe. A bond
+        # that predates the call may be half-held -- the panel discarded its
+        # key and BlueZ kept ours -- and stops being suspect once we have
+        # bonded it ourselves or dropped the old one. The drop gets one attempt
+        # either way, so a RemoveDevice the daemon refuses cannot turn the
+        # remaining timeout into a retry loop.
+        suspect = not trust_existing_bond
+        removal_tried = False
         while time.monotonic() - start < timeout:
             objects = await object_manager.call_get_managed_objects()
             path = _live_device_path(hass, name, adapter_path) or _find_device(
                 objects, name=name, address=address, adapter_path=adapter_path
             )
-            if path and _is_paired(objects, path):
+            if path and _is_paired(objects, path) and not suspect:
                 LOGGER.info("Truma %s bonded", name)
                 return True
             if path:
-                await _try_pair(bus, path)
+                failure = await _try_pair(bus, path)
+                if failure is None:
+                    # Ours now, whatever was there before.
+                    suspect = False
+                elif suspect and not removal_tried and _is_paired(objects, path):
+                    # Try-then-remove: the panel refused while BlueZ still
+                    # claims a bond, so the key on this host is one the panel
+                    # no longer has. Drop it and let the next pass pair clean.
+                    # Not conditioned on the error text -- BlueZ words this
+                    # several ways (AlreadyExists, AuthenticationFailed) and
+                    # every one of them means the same thing here.
+                    removal_tried = True
+                    if await _forget(bus, path, name, adapter_path=adapter_path):
+                        suspect = False
             else:
                 LOGGER.debug("Truma %s: no device object to pair yet", name)
             await asyncio.sleep(_POLL_INTERVAL)
@@ -418,8 +515,15 @@ async def _ensure_bonded_bluez(
         bus.disconnect()
 
 
-async def _try_pair(bus: MessageBus, path: str) -> None:
-    """One pairing attempt against the device at ``path`` (best effort)."""
+async def _try_pair(bus: MessageBus, path: str) -> str | None:
+    """One pairing attempt against the device at ``path`` (best effort).
+
+    ``None`` means the bond took. Anything else is the failure text, which the
+    caller needs in order to tell "the panel has not accepted yet" from "this
+    host holds a key the panel has forgotten" -- it cannot read that off the
+    string, but it can read it off a failure landing beside a ``Paired`` that
+    was already there.
+    """
     device = await _get_interface(bus, path, "org.bluez.Device1")
     properties = await _get_interface(
         bus, path, "org.freedesktop.DBus.Properties"
@@ -434,3 +538,37 @@ async def _try_pair(bus: MessageBus, path: str) -> None:
         await asyncio.wait_for(device.call_pair(), timeout=_PAIR_CALL_TIMEOUT)
     except Exception as exc:  # noqa: BLE001 - expected until the panel accepts
         LOGGER.debug("Truma pair attempt: %s", str(exc)[:80])
+        return str(exc)[:80] or type(exc).__name__
+    return None
+
+
+async def _forget(
+    bus: MessageBus, path: str, name: str, *, adapter_path: str | None = None
+) -> bool:
+    """Drop the host's own bond for the panel, so the next ``Pair()`` is fresh.
+
+    ``Adapter1.RemoveDevice`` is the only way to clear a bond BlueZ holds; the
+    panel has no say in it and does not need one, because the key being removed
+    is the half the panel has already discarded. The adapter comes from the
+    device path when the caller has not scoped one, since a device object always
+    hangs off the adapter that knows it.
+
+    Returns whether the bond is gone. A failure here is not fatal -- the caller
+    keeps retrying ``Pair()`` and keeps treating the old bond as suspect, which
+    is the state it was in anyway.
+    """
+    adapter = adapter_path or path.rsplit("/", 1)[0]
+    try:
+        interface = await _get_interface(bus, adapter, "org.bluez.Adapter1")
+        await asyncio.wait_for(
+            interface.call_remove_device(path), timeout=_PAIR_CALL_TIMEOUT
+        )
+    except Exception as exc:  # noqa: BLE001 - best effort
+        LOGGER.debug("Truma %s forget bond: %s", name, str(exc)[:80])
+        return False
+    LOGGER.info(
+        "Truma %s: dropped this host's bond (%s); the panel had refused it",
+        name,
+        path,
+    )
+    return True

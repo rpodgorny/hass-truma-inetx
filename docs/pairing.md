@@ -28,15 +28,28 @@ attempt, since the panel only accepts a bond while its pairing screen is up:
    advertise a fresh Bluetooth address that pairs cleanly. Resolves most
    stubborn cases.
 
-You do **not** need to clear any bonds on the Bluetooth proxy. If the proxy
-still holds a bond the panel has forgotten, the panel rejects it on that one
-address only (`error: 97`), and the integration rotates to the panel's next
-address, which pairs normally.
+You do **not** need to clear any bonds, on either side of the link. If a
+**proxy** still holds a bond the panel has forgotten, the panel rejects it on
+that one address only (`error: 97`), and the integration rotates to the panel's
+next address, which pairs normally. If **this host's own adapter** is the one
+holding it, BlueZ offers a key the panel no longer has and the panel drops the
+link before its services resolve — so pairing asks the panel first and, only
+once the panel has refused, drops the host's bond and pairs again. Nothing to
+do by hand, and nothing is dropped unless the panel has already said no.
+
+That second case is why pairing no longer requires a connection to succeed
+first. A panel with no bond drops every link it is offered, so on a host with
+no proxy the connect and the bond were each waiting for the other: the BlueZ
+pairing agent was never reached at all, and pairing ran out its timeout
+re-dialling (#26). A connect that fails on every address the panel is
+advertising now hands over to BlueZ, which bonds over its own connection.
 
 ## Where the bond lives
 
 Pairing bonds the panel on whichever adapter or proxy Home Assistant connects
 through at that moment, and the bond lives *there* — a BLE bond is per-adapter.
-If that hardware later goes away, the panel has to be paired again.
+If that hardware later goes away, the panel has to be paired again. Where no
+connection can be made at all, the bond goes on the local adapter that can see
+the panel, because that is the only place a bond can be made without one.
 
 To re-pair later, use **Reconfigure** on the device.
