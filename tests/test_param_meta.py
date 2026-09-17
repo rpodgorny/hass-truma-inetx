@@ -96,8 +96,20 @@ def _discovery(parameters: list, topic: str = "System") -> dict:
 
 # The shape of a described parameter, as the panel sends it: the value, its
 # type and permissions, its range, and an enum naming every value.
-FLAME_STATUS = {
-    "pn": "FlameStatus",
+#
+# The parameter is invented, and deliberately so. This fixture was called
+# FLAME_STATUS and carried ``pn: "FlameStatus"`` with a made-up ``type: 4``,
+# ``perm: 1`` and an Off/Gas/Electric enum -- none of which any panel has
+# published. Real hardware sends ``System.FlameStatus`` as ``{'type': 105,
+# 'perm': 0, 'avail': 1}`` with no enum at all (#23), and its three values are
+# off / running / idle, measured rather than named by the panel (#15, #24,
+# #27). A fixture wearing a real parameter's name reads as evidence about that
+# parameter, and this one contradicted the hardware in every field.
+#
+# So: a name no bus carries, and every field here is about the machinery that
+# keeps a description, not about any appliance.
+DESCRIBED_PARAM = {
+    "pn": "DescribedState",
     "v": 2,
     "type": 4,
     "perm": 1,
@@ -106,8 +118,8 @@ FLAME_STATUS = {
     "max": 2,
     "enum": [
         {"n": "Off", "a": True, "v": 0},
-        {"n": "Gas", "a": True, "v": 1},
-        {"n": "Electric", "a": True, "v": 2},
+        {"n": "Low", "a": True, "v": 1},
+        {"n": "High", "a": True, "v": 2},
     ],
 }
 
@@ -115,11 +127,11 @@ FLAME_STATUS = {
 def test_a_discovery_answer_teaches_the_names_of_a_tri_state() -> None:
     """The whole of issue #15: 0, 1 and 2 named by whoever defined them."""
     coord = _Coord()
-    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([FLAME_STATUS]))
+    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([DESCRIBED_PARAM]))
 
-    meta = coord._bus.device(HEATER).meta("System", "FlameStatus")
+    meta = coord._bus.device(HEATER).meta("System", "DescribedState")
     assert meta, "the device described the parameter and it was dropped"
-    assert meta["enum"] == {"0": "Off", "1": "Gas", "2": "Electric"}, meta
+    assert meta["enum"] == {"0": "Off", "1": "Low", "2": "High"}, meta
     assert (meta["min"], meta["max"]) == (0, 2), meta
     # perm/avail say whether it can be written and whether it means anything on
     # this vehicle; both are part of the answer to "what is this".
@@ -129,19 +141,20 @@ def test_a_discovery_answer_teaches_the_names_of_a_tri_state() -> None:
 def test_the_value_still_lands_where_it_always_did() -> None:
     """Learning the description must not disturb the state it arrives with."""
     coord = _Coord()
-    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([FLAME_STATUS]))
+    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([DESCRIBED_PARAM]))
 
-    assert coord._bus.device(HEATER).get("System", "FlameStatus") == 2
+    assert coord._bus.device(HEATER).get("System", "DescribedState") == 2
     assert coord.updates == 1, "the frame did not reach the entities"
 
 
 def test_a_plain_update_describes_as_well_as_reports() -> None:
     """Info frames carry the same description; both paths have to keep it."""
     coord = _Coord()
-    _feed(coord, 0x00, {"tn": "System", **FLAME_STATUS})
+    _feed(coord, 0x00, {"tn": "System", **DESCRIBED_PARAM})
 
-    assert coord._bus.device(HEATER).get("System", "FlameStatus") == 2
-    assert coord._bus.device(HEATER).meta("System", "FlameStatus")["enum"]["1"] == "Gas"
+    assert coord._bus.device(HEATER).get("System", "DescribedState") == 2
+    meta = coord._bus.device(HEATER).meta("System", "DescribedState")
+    assert meta["enum"]["1"] == "Low", meta
 
 
 def test_a_value_this_vehicle_cannot_produce_is_marked() -> None:
@@ -169,12 +182,12 @@ def test_a_value_this_vehicle_cannot_produce_is_marked() -> None:
 def test_a_later_frame_that_says_less_erases_nothing() -> None:
     """Most frames are bare values. They must not undo the discovery answer."""
     coord = _Coord()
-    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([FLAME_STATUS]))
-    _feed(coord, 0x00, {"tn": "System", "pn": "FlameStatus", "v": 0})
+    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([DESCRIBED_PARAM]))
+    _feed(coord, 0x00, {"tn": "System", "pn": "DescribedState", "v": 0})
 
-    meta = coord._bus.device(HEATER).meta("System", "FlameStatus")
-    assert meta["enum"] == {"0": "Off", "1": "Gas", "2": "Electric"}, meta
-    assert coord._bus.device(HEATER).get("System", "FlameStatus") == 0
+    meta = coord._bus.device(HEATER).meta("System", "DescribedState")
+    assert meta["enum"] == {"0": "Off", "1": "Low", "2": "High"}, meta
+    assert coord._bus.device(HEATER).get("System", "DescribedState") == 0
 
 
 def test_a_parameter_with_no_value_is_still_described() -> None:
@@ -214,10 +227,10 @@ def test_junk_is_ignored_rather_than_stored() -> None:
 def test_the_description_survives_a_diagnostics_download() -> None:
     """It exists to be read by someone who was sent a download link."""
     coord = _Coord()
-    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([FLAME_STATUS]))
+    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([DESCRIBED_PARAM]))
 
     dumped = json.loads(json.dumps(coord._bus.device(HEATER).param_meta))
-    assert dumped["System.FlameStatus"]["enum"]["2"] == "Electric"
+    assert dumped["System.DescribedState"]["enum"]["2"] == "High"
 
 
 def test_the_description_is_what_a_control_is_built_from() -> None:
@@ -257,7 +270,7 @@ def test_a_parameter_the_device_calls_read_only_refuses_a_write() -> None:
     ok, msg = coord._bus.validate_write(HEATER, "EnergySrc", "GasLevel", 0)
     assert ok is False and "read-only" in msg, msg
     # A device that said nothing about permissions is not assumed to refuse.
-    assert coord._bus.device(HEATER).writable("System", "FlameStatus") is None
+    assert coord._bus.device(HEATER).writable("System", "NeverDescribed") is None
 
 
 def _main() -> None:
