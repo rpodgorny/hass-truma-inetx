@@ -1,0 +1,1956 @@
+{
+ "home_assistant": {
+  "arch": "aarch64",
+  "dev": false,
+  "docker": true,
+  "hassio": true,
+  "installation_type": "Home Assistant OS",
+  "os_name": "Linux",
+  "os_version": "6.18.34-haos-raspi",
+  "python_version": "3.14.6",
+  "timezone": "Europe/Berlin",
+  "version": "2026.8.3",
+  "virtualenv": false,
+  "container_arch": "aarch64",
+  "supervisor": "2026.09.0",
+  "host_os": "Home Assistant OS 18.2",
+  "docker_version": "29.6.2",
+  "chassis": "embedded",
+  "run_as_root": true
+ },
+ "custom_components": {
+  "lacrosse_jeelink": {
+   "documentation": "https://github.com/Lu-Fi/ha-lacrosse-jeelink",
+   "version": "1.5.0",
+   "requirements": [
+    "pyserial==3.5"
+   ]
+  },
+  "truma_inetx": {
+   "documentation": "https://github.com/rpodgorny/hass-truma-inetx",
+   "version": "0.8.0",
+   "requirements": [
+    "cbor2==5.6.5"
+   ]
+  },
+  "hacs": {
+   "documentation": "https://hacs.xyz/docs/use/",
+   "version": "2.0.5",
+   "requirements": [
+    "aiogithubapi>=22.10.1"
+   ]
+  },
+  "bms_ble": {
+   "documentation": "https://github.com/patman15/BMS_BLE-HA",
+   "version": "2.17.0",
+   "requirements": [
+    "aiobmsble==0.28.0"
+   ]
+  }
+ },
+ "integration_manifest": {
+  "domain": "truma_inetx",
+  "name": "Truma iNet X (BLE)",
+  "bluetooth": [
+   {
+    "local_name": "Truma iNetX*"
+   },
+   {
+    "service_uuid": "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
+   },
+   {
+    "service_uuid": "fc310002-f3b2-11e8-8eb2-f2801f1b9fd1"
+   }
+  ],
+  "codeowners": [
+   "rpodgorny"
+  ],
+  "config_flow": true,
+  "dependencies": [
+   "bluetooth_adapters",
+   "frontend",
+   "http"
+  ],
+  "documentation": "https://github.com/rpodgorny/hass-truma-inetx",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/rpodgorny/hass-truma-inetx/issues",
+  "requirements": [
+   "cbor2==5.6.5"
+  ],
+  "version": "0.8.0",
+  "is_built_in": false,
+  "overwrites_built_in": false
+ },
+ "setup_times": {
+  "null": {
+   "setup": 0.00015150901162996888
+  },
+  "01M2B74NQXYGXCV00YSFFZ98T8": {
+   "wait_import_platforms": -6.15773946599802,
+   "config_entry_setup": 6.271187089005252
+  }
+ },
+ "data": {
+  "entry": {
+   "created_at": "2026-09-12T16:27:50.909550+00:00",
+   "data": {
+    "address": "**REDACTED**",
+    "name": "**REDACTED**"
+   },
+   "discovery_keys": "**REDACTED**",
+   "disabled_by": null,
+   "domain": "truma_inetx",
+   "entry_id": "01M2B74NQXYGXCV00YSFFZ98T8",
+   "minor_version": 1,
+   "modified_at": "2026-09-14T06:22:31.840927+00:00",
+   "options": {
+    "poll_interval_seconds": 0
+   },
+   "pref_disable_new_entities": false,
+   "pref_disable_polling": false,
+   "source": "bluetooth",
+   "subentries": [],
+   "title": "**REDACTED**",
+   "unique_id": "**REDACTED**",
+   "version": 1
+  },
+  "last_update_success": true,
+  "address_kind": "identity",
+  "state": {
+   "room_mode": 0,
+   "room_target_temp": 220,
+   "room_current_temp": null,
+   "room_active": 0,
+   "air_target_temp": 200,
+   "air_current_temp": 198,
+   "air_mode": 1,
+   "air_active": 0,
+   "fan_level": 0,
+   "fan_active": 0,
+   "water_mode": 1,
+   "water_active": 1,
+   "water_current_temp": 396,
+   "water_boost": null,
+   "water_faster_heating": 1,
+   "water_faster_heating_time": 2400,
+   "diesel_level": null,
+   "electric_level": null,
+   "gas_level": 1,
+   "flame_status": 1,
+   "voltage_vcc12": null,
+   "error_codes": null,
+   "panel_inactive_since": 0,
+   "internal_temp": 198,
+   "water_pump": 1,
+   "fresh_water_level": 50,
+   "grey_water_level": 0,
+   "starter_battery_voltage": 128,
+   "leisure_battery_voltage": 131,
+   "last_update": 1789367316.7342339,
+   "connected": true,
+   "assigned_addr": 1282,
+   "raw_params": {
+    "WaterHeating.Temp": 396,
+    "Panel.UserInactiveSince": 0,
+    "Transfer.Status": 0,
+    "Install.Status": 0,
+    "Install.InstallNow": 1,
+    "Install.SwPreviousMaj": 3,
+    "Install.SwPreviousMin": 4,
+    "Install.SwPreviousBgFx": 27,
+    "Install.ClassId": "ac901cc6-1ddd-5704-9e5f-3f996cf4f2b4",
+    "Install.VendorId": "8651475e-d646-5345-badd-a066232e6034",
+    "PowerMgmt.PwrMode": 3,
+    "ErrorReset.ErrCode": [],
+    "TimeAndDate.Time": "08:02",
+    "TimeAndDate.Date": "14.09.26",
+    "TimeAndDate.SystemTime": 1789365720,
+    "Temperature.ExternalRaw": -299,
+    "Temperature.Internal": 198,
+    "Temperature.InternalRaw": -299,
+    "Temperature.InternalSource": 1,
+    "Temperature.Offset": 0,
+    "RoomClimate.Active": 0,
+    "RoomClimate.Mode": 0,
+    "RoomClimate.TgtTemp": 220,
+    "DeviceManagement.Search": 0,
+    "DeviceManagement.Delete": 0,
+    "DeviceManagement.RegCompleted": 1,
+    "System.Plugged": 0,
+    "System.FlameStatus": 1,
+    "System.DemoMode": 0,
+    "System.FactoryReset": 0,
+    "System.Search": 0,
+    "TimerConfig.Timer1State": 1,
+    "TimerConfig.Timer2": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "TimerConfig.Timer2State": 0,
+    "TimerConfig.Timer3": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "TimerConfig.Timer3State": 0,
+    "TimerConfig.Timer4": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "TimerConfig.Timer4State": 0,
+    "TimerConfig.Timer5": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "TimerConfig.Timer5State": 0,
+    "TimerConfig.Timer6": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "Identify.Name": "Combi 4",
+    "Identify.FuncID": 6660,
+    "Identify.SupID": 1305,
+    "Identify.VarID": 3,
+    "Identify.Supplier": "Schaudt",
+    "Identify.Type": 4,
+    "Identify.SerialNr": "CBG04EU-E-35008040",
+    "Identify.SwMaj": 1,
+    "Identify.SwMin": 11,
+    "Identify.SwBgFx": 0,
+    "Identify.SwBdNr": 1,
+    "Identify.HwMaj": 3,
+    "Identify.HwMin": 4,
+    "Identify.CertThumb": "rc6OR12J83X_5NPNmpXVFtung9TiXCnDTq-drUbxC-w",
+    "Identify.UniqueID": "e7c7795d-69d5-4c1e-97d6-43e8b4e51722.device.id.ip.inetx",
+    "Panel.Intst": 100,
+    "Panel.Screensaver": 0,
+    "Panel.DisplayTimeout": 120,
+    "Panel.Language": 1,
+    "Panel.DarkIntst": 1,
+    "Panel.ErrCatVer": "2026.5.27.95637",
+    "AirHeating.Temp": 198,
+    "VBat.Voltage": 128,
+    "VBat.State": 0,
+    "Switches.FreshWaterPump": 1,
+    "Switches.FloorHeatingInstalled": 0,
+    "Identify.IID": 4,
+    "AirHeating.Active": 0,
+    "AirHeating.TgtTemp": 200,
+    "Switches.Active": 1,
+    "PowerSupply.12VPower": 1,
+    "PowerSupply.MainSwitch": 1,
+    "AirHeating.Mode": 1,
+    "AirHeating.Location": 1,
+    "WaterHeating.Active": 1,
+    "WaterHeating.Mode": 1,
+    "WaterHeating.FasterHeatingMode": 1,
+    "WaterHeating.FasterHeatingModeTime": 2400,
+    "EnergySrc.GasLevel": 1,
+    "EnergySrc.NeedsEnergySrc": 1,
+    "AirCirculation.Active": 0,
+    "AirCirculation.FanLevel": 0,
+    "AirCirculation.Location": 1,
+    "ErrorReset.Req": 0,
+    "ErrorReset.WaitTime": 900,
+    "ErrorReset.ResetTime": 60,
+    "ACCAirHeating.Mode": 1,
+    "VBat.Priority": 20,
+    "L1Bat.Voltage": 131,
+    "L1Bat.State": 0,
+    "L1Bat.Priority": 20,
+    "FreshWater.Level": 50,
+    "FreshWater.State": 1,
+    "FreshWater.Autofill": 0,
+    "FreshWater.MeasureRequest": 0,
+    "GreyWater.Level": 0,
+    "GreyWater.State": 0,
+    "GreyWater.MeasureRequest": 0,
+    "LinePower.Plugged": 0,
+    "BleDeviceManagement.Search": 0,
+    "BleDeviceManagement.Device": 0,
+    "BleDeviceManagement.State": 1,
+    "BleDeviceManagement.BleConnState": 0,
+    "BleDeviceManagement.NrFreeSlots": [
+     {
+      "type": 12,
+      "nrOfSlots": 1
+     },
+     {
+      "type": 9,
+      "nrOfSlots": 2
+     }
+    ],
+    "BleDeviceManagement.ConnectID": 0,
+    "BleDeviceManagement.SearchResult": []
+   },
+   "param_meta": {
+    "WaterHeating.Temp": {
+     "type": 10,
+     "perm": 0,
+     "avail": 1,
+     "min": -400,
+     "max": 1300
+    },
+    "Panel.UserInactiveSince": {
+     "type": 18,
+     "avail": 1,
+     "min": 0,
+     "max": 4294967295
+    },
+    "Transfer.Status": {
+     "type": 111,
+     "avail": 1
+    },
+    "Install.Status": {
+     "type": 108,
+     "avail": 1
+    },
+    "Install.InstallNow": {
+     "type": 104,
+     "avail": 1
+    },
+    "Install.SwPreviousMaj": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "Install.SwPreviousMin": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "Install.SwPreviousBgFx": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "Install.ClassId": {
+     "type": 4,
+     "avail": 1
+    },
+    "Install.VendorId": {
+     "type": 4,
+     "avail": 1
+    },
+    "PowerMgmt.PwrMode": {
+     "type": 102,
+     "avail": 1
+    },
+    "ErrorReset.ErrCode": {
+     "type": 202,
+     "avail": 1
+    },
+    "TimeAndDate.Time": {
+     "type": 4,
+     "perm": 0,
+     "avail": 1
+    },
+    "TimeAndDate.Date": {
+     "type": 4,
+     "perm": 0,
+     "avail": 1
+    },
+    "TimeAndDate.SystemTime": {
+     "type": 18,
+     "avail": 1,
+     "min": 0,
+     "max": 4294967295
+    },
+    "Temperature.ExternalRaw": {
+     "type": 10,
+     "perm": 0,
+     "avail": 0,
+     "min": -32768,
+     "max": 32767
+    },
+    "Temperature.Internal": {
+     "type": 10,
+     "perm": 0,
+     "avail": 1,
+     "min": -32768,
+     "max": 32767
+    },
+    "Temperature.InternalRaw": {
+     "type": 10,
+     "perm": 0,
+     "avail": 0,
+     "min": -32768,
+     "max": 32767
+    },
+    "Temperature.InternalSource": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "Temperature.Offset": {
+     "type": 10,
+     "avail": 0,
+     "min": -50,
+     "max": 50
+    },
+    "RoomClimate.Active": {
+     "type": 107,
+     "avail": 1
+    },
+    "RoomClimate.Mode": {
+     "type": 2,
+     "avail": 1,
+     "enum": {
+      "0": "Off",
+      "3": "Heating",
+      "5": "Ventilating"
+     }
+    },
+    "RoomClimate.TgtTemp": {
+     "type": 10,
+     "avail": 1,
+     "min": 160,
+     "max": 300
+    },
+    "DeviceManagement.Search": {
+     "type": 104,
+     "avail": 1
+    },
+    "DeviceManagement.Delete": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 65535
+    },
+    "DeviceManagement.RegCompleted": {
+     "type": 104,
+     "perm": 0,
+     "avail": 1
+    },
+    "System.Plugged": {
+     "type": 104,
+     "perm": 0,
+     "avail": 1
+    },
+    "System.FlameStatus": {
+     "type": 105,
+     "perm": 0,
+     "avail": 1
+    },
+    "System.DemoMode": {
+     "type": 2,
+     "avail": 1,
+     "enum": {
+      "0": "Off",
+      "1": "On",
+      "2": "On and configured"
+     }
+    },
+    "System.FactoryReset": {
+     "type": 104,
+     "avail": 1
+    },
+    "System.Search": {
+     "type": 104,
+     "avail": 1
+    },
+    "TimerConfig.Timer1State": {
+     "type": 119,
+     "avail": 1
+    },
+    "TimerConfig.Timer2": {
+     "type": 206,
+     "perm": 0,
+     "avail": 0
+    },
+    "TimerConfig.Timer2State": {
+     "type": 119,
+     "avail": 0
+    },
+    "TimerConfig.Timer3": {
+     "type": 206,
+     "perm": 0,
+     "avail": 0
+    },
+    "TimerConfig.Timer3State": {
+     "type": 119,
+     "avail": 0
+    },
+    "TimerConfig.Timer4": {
+     "type": 206,
+     "perm": 0,
+     "avail": 0
+    },
+    "TimerConfig.Timer4State": {
+     "type": 119,
+     "avail": 0
+    },
+    "TimerConfig.Timer5": {
+     "type": 206,
+     "perm": 0,
+     "avail": 0
+    },
+    "TimerConfig.Timer5State": {
+     "type": 119,
+     "avail": 0
+    },
+    "TimerConfig.Timer6": {
+     "type": 206,
+     "perm": 0,
+     "avail": 0
+    },
+    "Identify.Name": {
+     "type": 4,
+     "perm": 0,
+     "avail": 1
+    },
+    "Identify.FuncID": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 65535
+    },
+    "Identify.SupID": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 65535
+    },
+    "Identify.VarID": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 65535
+    },
+    "Identify.Supplier": {
+     "type": 4,
+     "avail": 1
+    },
+    "Identify.Type": {
+     "type": 103,
+     "perm": 0,
+     "avail": 1
+    },
+    "Identify.SerialNr": {
+     "type": 4,
+     "perm": 0,
+     "avail": 1
+    },
+    "Identify.SwMaj": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "Identify.SwMin": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "Identify.SwBgFx": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "Identify.SwBdNr": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 65535
+    },
+    "Identify.HwMaj": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "Identify.HwMin": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "Identify.CertThumb": {
+     "type": 4,
+     "avail": 1
+    },
+    "Identify.UniqueID": {
+     "type": 4,
+     "avail": 1
+    },
+    "Panel.Intst": {
+     "type": 15,
+     "avail": 1,
+     "min": 10,
+     "max": 100
+    },
+    "Panel.Screensaver": {
+     "type": 104,
+     "avail": 1
+    },
+    "Panel.DisplayTimeout": {
+     "type": 18,
+     "avail": 1,
+     "min": 0,
+     "max": 4294967295
+    },
+    "Panel.Language": {
+     "type": 110,
+     "avail": 1
+    },
+    "Panel.DarkIntst": {
+     "type": 15,
+     "avail": 1,
+     "min": 1,
+     "max": 10
+    },
+    "Panel.ErrCatVer": {
+     "type": 4,
+     "avail": 1
+    },
+    "AirHeating.Temp": {
+     "type": 10,
+     "perm": 0,
+     "avail": 1,
+     "min": -400,
+     "max": 600
+    },
+    "VBat.Voltage": {
+     "type": 11,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 4093
+    },
+    "VBat.State": {
+     "type": 106,
+     "perm": 0,
+     "avail": 1
+    },
+    "Switches.FreshWaterPump": {
+     "type": 104,
+     "avail": 1
+    },
+    "Switches.FloorHeatingInstalled": {
+     "type": 104,
+     "avail": 1
+    },
+    "Identify.IID": {
+     "type": 100,
+     "perm": 0,
+     "avail": 1
+    },
+    "AirHeating.Active": {
+     "type": 105,
+     "avail": 1
+    },
+    "AirHeating.TgtTemp": {
+     "type": 10,
+     "avail": 1,
+     "min": 50,
+     "max": 300
+    },
+    "Switches.Active": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "PowerSupply.12VPower": {
+     "type": 104,
+     "avail": 1
+    },
+    "PowerSupply.MainSwitch": {
+     "type": 104,
+     "avail": 1
+    },
+    "AirHeating.Mode": {
+     "type": 2,
+     "avail": 1,
+     "enum": {
+      "0": "Fast",
+      "1": "Comfort"
+     }
+    },
+    "AirHeating.Location": {
+     "type": 109,
+     "avail": 1
+    },
+    "WaterHeating.Active": {
+     "type": 105,
+     "avail": 1
+    },
+    "WaterHeating.Mode": {
+     "type": 2,
+     "avail": 1,
+     "enum": {
+      "0": "40",
+      "1": "60",
+      "2": "70"
+     }
+    },
+    "WaterHeating.FasterHeatingMode": {
+     "type": 104,
+     "avail": 1
+    },
+    "WaterHeating.FasterHeatingModeTime": {
+     "type": 18,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 2400
+    },
+    "EnergySrc.GasLevel": {
+     "type": 2,
+     "avail": 1,
+     "enum": {
+      "0": "Gas off",
+      "1": "Gas on"
+     }
+    },
+    "EnergySrc.NeedsEnergySrc": {
+     "type": 104,
+     "perm": 0,
+     "avail": 1
+    },
+    "AirCirculation.Active": {
+     "type": 105,
+     "avail": 1
+    },
+    "AirCirculation.FanLevel": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 10
+    },
+    "AirCirculation.Location": {
+     "type": 109,
+     "avail": 1
+    },
+    "ErrorReset.Req": {
+     "type": 104,
+     "perm": 0,
+     "avail": 1
+    },
+    "ErrorReset.WaitTime": {
+     "type": 18,
+     "perm": 0,
+     "avail": 0,
+     "min": 0,
+     "max": 900
+    },
+    "ErrorReset.ResetTime": {
+     "type": 18,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 60
+    },
+    "ACCAirHeating.Mode": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 1,
+     "max": 1
+    },
+    "VBat.Priority": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "L1Bat.Voltage": {
+     "type": 11,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 4093
+    },
+    "L1Bat.State": {
+     "type": 106,
+     "perm": 0,
+     "avail": 1
+    },
+    "L1Bat.Priority": {
+     "type": 1,
+     "perm": 0,
+     "avail": 1,
+     "min": 0,
+     "max": 255
+    },
+    "FreshWater.Level": {
+     "type": 15,
+     "avail": 1,
+     "min": 0,
+     "max": 100
+    },
+    "FreshWater.State": {
+     "type": 106,
+     "perm": 0,
+     "avail": 1
+    },
+    "FreshWater.Autofill": {
+     "type": 104,
+     "avail": 1
+    },
+    "FreshWater.MeasureRequest": {
+     "type": 104,
+     "avail": 1
+    },
+    "GreyWater.Level": {
+     "type": 15,
+     "avail": 1,
+     "min": 0,
+     "max": 100
+    },
+    "GreyWater.State": {
+     "type": 106,
+     "perm": 0,
+     "avail": 1
+    },
+    "GreyWater.MeasureRequest": {
+     "type": 104,
+     "avail": 1
+    },
+    "LinePower.Plugged": {
+     "type": 104,
+     "perm": 0,
+     "avail": 1
+    },
+    "BleDeviceManagement.Search": {
+     "type": 105,
+     "avail": 1
+    },
+    "BleDeviceManagement.Device": {
+     "type": 103,
+     "avail": 1
+    },
+    "BleDeviceManagement.State": {
+     "type": 114,
+     "perm": 0,
+     "avail": 1
+    },
+    "BleDeviceManagement.BleConnState": {
+     "type": 117,
+     "perm": 0,
+     "avail": 1
+    },
+    "BleDeviceManagement.NrFreeSlots": {
+     "type": 203,
+     "perm": 0,
+     "avail": 1
+    },
+    "BleDeviceManagement.ConnectID": {
+     "type": 1,
+     "avail": 1,
+     "min": 0,
+     "max": 4294967295
+    },
+    "BleDeviceManagement.SearchResult": {
+     "type": 204,
+     "perm": 0,
+     "avail": 1
+    }
+   },
+   "seen_devices": [
+    "0x0101",
+    "0x0201",
+    "0x0405",
+    "0x0601"
+   ],
+   "topic_source": {
+    "WaterHeating": 513,
+    "Panel": 257,
+    "Transfer": 257,
+    "Install": 257,
+    "PowerMgmt": 1029,
+    "ErrorReset": 513,
+    "TimeAndDate": 257,
+    "Temperature": 257,
+    "RoomClimate": 257,
+    "DeviceManagement": 1537,
+    "System": 257,
+    "TimerConfig": 257,
+    "Identify": 1029,
+    "AirHeating": 513,
+    "VBat": 1029,
+    "Switches": 1029,
+    "PowerSupply": 1029,
+    "EnergySrc": 513,
+    "AirCirculation": 513,
+    "ACCAirHeating": 513,
+    "L1Bat": 1029,
+    "FreshWater": 1029,
+    "GreyWater": 1029,
+    "LinePower": 1029,
+    "BleDeviceManagement": 1537
+   },
+   "device_params": {
+    "0x0101": {
+     "Panel.UserInactiveSince": 0,
+     "Transfer.Status": 0,
+     "Install.Status": 0,
+     "Install.InstallNow": 1,
+     "Install.SwPreviousMaj": 3,
+     "Install.SwPreviousMin": 4,
+     "Install.SwPreviousBgFx": 27,
+     "Install.ClassId": "ac901cc6-1ddd-5704-9e5f-3f996cf4f2b4",
+     "Install.VendorId": "8651475e-d646-5345-badd-a066232e6034",
+     "PowerMgmt.PwrMode": 3,
+     "ErrorReset.ErrCode": [],
+     "TimeAndDate.Time": "08:02",
+     "TimeAndDate.Date": "14.09.26",
+     "TimeAndDate.SystemTime": 1789365720,
+     "Temperature.ExternalRaw": -299,
+     "Temperature.Internal": 198,
+     "Temperature.InternalRaw": -299,
+     "Temperature.InternalSource": 1,
+     "Temperature.Offset": 0,
+     "RoomClimate.Active": 0,
+     "RoomClimate.Mode": 0,
+     "RoomClimate.TgtTemp": 220,
+     "DeviceManagement.Search": 0,
+     "DeviceManagement.Delete": 0,
+     "DeviceManagement.RegCompleted": 0,
+     "System.Plugged": 0,
+     "System.FlameStatus": 1,
+     "System.DemoMode": 0,
+     "System.FactoryReset": 0,
+     "System.Search": 0,
+     "TimerConfig.Timer1State": 1,
+     "TimerConfig.Timer2": {
+      "id": 0,
+      "name": "DefaultTimer",
+      "symbol": 7,
+      "start": "00:00",
+      "end": "00:00",
+      "wd": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     },
+     "TimerConfig.Timer2State": 0,
+     "TimerConfig.Timer3": {
+      "id": 0,
+      "name": "DefaultTimer",
+      "symbol": 7,
+      "start": "00:00",
+      "end": "00:00",
+      "wd": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     },
+     "TimerConfig.Timer3State": 0,
+     "TimerConfig.Timer4": {
+      "id": 0,
+      "name": "DefaultTimer",
+      "symbol": 7,
+      "start": "00:00",
+      "end": "00:00",
+      "wd": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     },
+     "TimerConfig.Timer4State": 0,
+     "TimerConfig.Timer5": {
+      "id": 0,
+      "name": "DefaultTimer",
+      "symbol": 7,
+      "start": "00:00",
+      "end": "00:00",
+      "wd": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     },
+     "TimerConfig.Timer5State": 0,
+     "TimerConfig.Timer6": {
+      "id": 0,
+      "name": "DefaultTimer",
+      "symbol": 7,
+      "start": "00:00",
+      "end": "00:00",
+      "wd": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     },
+     "Identify.Name": "iNet X Pro Panel",
+     "Identify.FuncID": 96,
+     "Identify.SupID": 17943,
+     "Identify.VarID": 0,
+     "Identify.Supplier": "Truma",
+     "Identify.Type": 1,
+     "Identify.SerialNr": "IPBMTEU-A-34317973",
+     "Identify.SwMaj": 3,
+     "Identify.SwMin": 5,
+     "Identify.SwBgFx": 38,
+     "Identify.SwBdNr": 1,
+     "Identify.HwMaj": 3,
+     "Identify.HwMin": 4,
+     "Identify.CertThumb": "rc6OR12J83X_5NPNmpXVFtung9TiXCnDTq-drUbxC-w",
+     "Identify.UniqueID": "e7c7795d-69d5-4c1e-97d6-43e8b4e51722.device.id.ip.inetx",
+     "Panel.Intst": 100,
+     "Panel.Screensaver": 0,
+     "Panel.DisplayTimeout": 120,
+     "Panel.Language": 1,
+     "Panel.DarkIntst": 1,
+     "Panel.ErrCatVer": "2026.5.27.95637"
+    },
+    "0x0201": {
+     "WaterHeating.Temp": 396,
+     "AirHeating.Temp": 198,
+     "Identify.Name": "Combi 4",
+     "Identify.FuncID": 832,
+     "Identify.SupID": 17943,
+     "Identify.VarID": 34,
+     "Identify.IID": 2,
+     "Identify.Supplier": "Truma",
+     "Identify.Type": 2,
+     "Identify.SerialNr": "CBG04EU-E-35008040",
+     "Identify.SwMaj": 2,
+     "Identify.SwMin": 0,
+     "Identify.SwBgFx": 1,
+     "Identify.SwBdNr": 1,
+     "AirHeating.Active": 0,
+     "AirHeating.TgtTemp": 200,
+     "AirHeating.Mode": 1,
+     "AirHeating.Location": 1,
+     "WaterHeating.Active": 1,
+     "WaterHeating.Mode": 1,
+     "WaterHeating.FasterHeatingMode": 1,
+     "WaterHeating.FasterHeatingModeTime": 2400,
+     "EnergySrc.GasLevel": 1,
+     "EnergySrc.NeedsEnergySrc": 1,
+     "AirCirculation.Active": 0,
+     "AirCirculation.FanLevel": 0,
+     "AirCirculation.Location": 1,
+     "PowerMgmt.PwrMode": 3,
+     "ErrorReset.Req": 0,
+     "ErrorReset.WaitTime": 900,
+     "ErrorReset.ErrCode": [],
+     "ErrorReset.ResetTime": 60,
+     "ACCAirHeating.Mode": 1
+    },
+    "0x0405": {
+     "Identify.SwBdNr": 0,
+     "VBat.Voltage": 128,
+     "VBat.State": 0,
+     "ErrorReset.ErrCode": [],
+     "Switches.FreshWaterPump": 1,
+     "Switches.FloorHeatingInstalled": 0,
+     "Switches.Active": 1,
+     "PowerSupply.12VPower": 1,
+     "PowerSupply.MainSwitch": 1,
+     "Identify.FuncID": 6660,
+     "Identify.SupID": 1305,
+     "Identify.VarID": 3,
+     "Identify.IID": 4,
+     "Identify.Supplier": "Schaudt",
+     "Identify.Type": 4,
+     "Identify.SwMaj": 1,
+     "Identify.SwMin": 11,
+     "Identify.SwBgFx": 0,
+     "VBat.Priority": 20,
+     "L1Bat.Voltage": 131,
+     "L1Bat.State": 0,
+     "L1Bat.Priority": 20,
+     "FreshWater.Level": 50,
+     "FreshWater.State": 1,
+     "FreshWater.Autofill": 0,
+     "FreshWater.MeasureRequest": 0,
+     "GreyWater.Level": 0,
+     "GreyWater.State": 0,
+     "GreyWater.MeasureRequest": 0,
+     "PowerMgmt.PwrMode": 3,
+     "LinePower.Plugged": 0
+    },
+    "0x0601": {
+     "BleDeviceManagement.Search": 0,
+     "BleDeviceManagement.Device": 0,
+     "BleDeviceManagement.State": 1,
+     "BleDeviceManagement.BleConnState": 0,
+     "BleDeviceManagement.NrFreeSlots": [
+      {
+       "type": 12,
+       "nrOfSlots": 1
+      },
+      {
+       "type": 9,
+       "nrOfSlots": 2
+      }
+     ],
+     "BleDeviceManagement.ConnectID": 0,
+     "BleDeviceManagement.SearchResult": [],
+     "DeviceManagement.Search": 0,
+     "DeviceManagement.Delete": 0,
+     "DeviceManagement.RegCompleted": 1
+    }
+   },
+   "device_param_meta": {
+    "0x0101": {
+     "Panel.UserInactiveSince": {
+      "type": 18,
+      "avail": 1,
+      "min": 0,
+      "max": 4294967295
+     },
+     "Transfer.Status": {
+      "type": 111,
+      "avail": 1
+     },
+     "Install.Status": {
+      "type": 108,
+      "avail": 1
+     },
+     "Install.InstallNow": {
+      "type": 104,
+      "avail": 1
+     },
+     "Install.SwPreviousMaj": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Install.SwPreviousMin": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Install.SwPreviousBgFx": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Install.ClassId": {
+      "type": 4,
+      "avail": 1
+     },
+     "Install.VendorId": {
+      "type": 4,
+      "avail": 1
+     },
+     "PowerMgmt.PwrMode": {
+      "type": 102,
+      "avail": 1
+     },
+     "ErrorReset.ErrCode": {
+      "type": 202,
+      "avail": 1
+     },
+     "TimeAndDate.Time": {
+      "type": 4,
+      "perm": 0,
+      "avail": 1
+     },
+     "TimeAndDate.Date": {
+      "type": 4,
+      "perm": 0,
+      "avail": 1
+     },
+     "TimeAndDate.SystemTime": {
+      "type": 18,
+      "avail": 1,
+      "min": 0,
+      "max": 4294967295
+     },
+     "Temperature.ExternalRaw": {
+      "type": 10,
+      "perm": 0,
+      "avail": 0,
+      "min": -32768,
+      "max": 32767
+     },
+     "Temperature.Internal": {
+      "type": 10,
+      "perm": 0,
+      "avail": 1,
+      "min": -32768,
+      "max": 32767
+     },
+     "Temperature.InternalRaw": {
+      "type": 10,
+      "perm": 0,
+      "avail": 0,
+      "min": -32768,
+      "max": 32767
+     },
+     "Temperature.InternalSource": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Temperature.Offset": {
+      "type": 10,
+      "avail": 0,
+      "min": -50,
+      "max": 50
+     },
+     "RoomClimate.Active": {
+      "type": 107,
+      "avail": 1
+     },
+     "RoomClimate.Mode": {
+      "type": 2,
+      "avail": 1,
+      "enum": {
+       "0": "Off",
+       "3": "Heating",
+       "5": "Ventilating"
+      }
+     },
+     "RoomClimate.TgtTemp": {
+      "type": 10,
+      "avail": 1,
+      "min": 160,
+      "max": 300
+     },
+     "DeviceManagement.Search": {
+      "type": 104,
+      "avail": 1
+     },
+     "DeviceManagement.Delete": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "DeviceManagement.RegCompleted": {
+      "type": 104,
+      "perm": 0,
+      "avail": 1
+     },
+     "System.Plugged": {
+      "type": 104,
+      "perm": 0,
+      "avail": 1
+     },
+     "System.FlameStatus": {
+      "type": 105,
+      "perm": 0,
+      "avail": 1
+     },
+     "System.DemoMode": {
+      "type": 2,
+      "avail": 1,
+      "enum": {
+       "0": "Off",
+       "1": "On",
+       "2": "On and configured"
+      }
+     },
+     "System.FactoryReset": {
+      "type": 104,
+      "avail": 1
+     },
+     "System.Search": {
+      "type": 104,
+      "avail": 1
+     },
+     "TimerConfig.Timer1State": {
+      "type": 119,
+      "avail": 1
+     },
+     "TimerConfig.Timer2": {
+      "type": 206,
+      "perm": 0,
+      "avail": 0
+     },
+     "TimerConfig.Timer2State": {
+      "type": 119,
+      "avail": 0
+     },
+     "TimerConfig.Timer3": {
+      "type": 206,
+      "perm": 0,
+      "avail": 0
+     },
+     "TimerConfig.Timer3State": {
+      "type": 119,
+      "avail": 0
+     },
+     "TimerConfig.Timer4": {
+      "type": 206,
+      "perm": 0,
+      "avail": 0
+     },
+     "TimerConfig.Timer4State": {
+      "type": 119,
+      "avail": 0
+     },
+     "TimerConfig.Timer5": {
+      "type": 206,
+      "perm": 0,
+      "avail": 0
+     },
+     "TimerConfig.Timer5State": {
+      "type": 119,
+      "avail": 0
+     },
+     "TimerConfig.Timer6": {
+      "type": 206,
+      "perm": 0,
+      "avail": 0
+     },
+     "Identify.Name": {
+      "type": 4,
+      "perm": 0,
+      "avail": 1
+     },
+     "Identify.FuncID": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.SupID": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.VarID": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.Supplier": {
+      "type": 4,
+      "avail": 1
+     },
+     "Identify.Type": {
+      "type": 103,
+      "perm": 0,
+      "avail": 1
+     },
+     "Identify.SerialNr": {
+      "type": 4,
+      "perm": 0,
+      "avail": 1
+     },
+     "Identify.SwMaj": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.SwMin": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.SwBgFx": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.SwBdNr": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.HwMaj": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.HwMin": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.CertThumb": {
+      "type": 4,
+      "avail": 1
+     },
+     "Identify.UniqueID": {
+      "type": 4,
+      "avail": 1
+     },
+     "Panel.Intst": {
+      "type": 15,
+      "avail": 1,
+      "min": 10,
+      "max": 100
+     },
+     "Panel.Screensaver": {
+      "type": 104,
+      "avail": 1
+     },
+     "Panel.DisplayTimeout": {
+      "type": 18,
+      "avail": 1,
+      "min": 0,
+      "max": 4294967295
+     },
+     "Panel.Language": {
+      "type": 110,
+      "avail": 1
+     },
+     "Panel.DarkIntst": {
+      "type": 15,
+      "avail": 1,
+      "min": 1,
+      "max": 10
+     },
+     "Panel.ErrCatVer": {
+      "type": 4,
+      "avail": 1
+     }
+    },
+    "0x0201": {
+     "WaterHeating.Temp": {
+      "type": 10,
+      "perm": 0,
+      "avail": 1,
+      "min": -400,
+      "max": 1300
+     },
+     "AirHeating.Temp": {
+      "type": 10,
+      "perm": 0,
+      "avail": 1,
+      "min": -400,
+      "max": 600
+     },
+     "Identify.Name": {
+      "type": 4,
+      "perm": 0,
+      "avail": 1
+     },
+     "Identify.FuncID": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.SupID": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.VarID": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.IID": {
+      "type": 100,
+      "perm": 0,
+      "avail": 1
+     },
+     "Identify.Supplier": {
+      "type": 4,
+      "avail": 1
+     },
+     "Identify.Type": {
+      "type": 103,
+      "perm": 0,
+      "avail": 1
+     },
+     "Identify.SerialNr": {
+      "type": 4,
+      "perm": 0,
+      "avail": 1
+     },
+     "Identify.SwMaj": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.SwMin": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.SwBgFx": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.SwBdNr": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "AirHeating.Active": {
+      "type": 105,
+      "avail": 1
+     },
+     "AirHeating.TgtTemp": {
+      "type": 10,
+      "avail": 1,
+      "min": 50,
+      "max": 300
+     },
+     "AirHeating.Mode": {
+      "type": 2,
+      "avail": 1,
+      "enum": {
+       "0": "Fast",
+       "1": "Comfort"
+      }
+     },
+     "AirHeating.Location": {
+      "type": 109,
+      "avail": 1
+     },
+     "WaterHeating.Active": {
+      "type": 105,
+      "avail": 1
+     },
+     "WaterHeating.Mode": {
+      "type": 2,
+      "avail": 1,
+      "enum": {
+       "0": "40",
+       "1": "60",
+       "2": "70"
+      }
+     },
+     "WaterHeating.FasterHeatingMode": {
+      "type": 104,
+      "avail": 1
+     },
+     "WaterHeating.FasterHeatingModeTime": {
+      "type": 18,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 2400
+     },
+     "EnergySrc.GasLevel": {
+      "type": 2,
+      "avail": 1,
+      "enum": {
+       "0": "Gas off",
+       "1": "Gas on"
+      }
+     },
+     "EnergySrc.NeedsEnergySrc": {
+      "type": 104,
+      "perm": 0,
+      "avail": 1
+     },
+     "AirCirculation.Active": {
+      "type": 105,
+      "avail": 1
+     },
+     "AirCirculation.FanLevel": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 10
+     },
+     "AirCirculation.Location": {
+      "type": 109,
+      "avail": 1
+     },
+     "PowerMgmt.PwrMode": {
+      "type": 102,
+      "avail": 1
+     },
+     "ErrorReset.Req": {
+      "type": 104,
+      "perm": 0,
+      "avail": 1
+     },
+     "ErrorReset.WaitTime": {
+      "type": 18,
+      "perm": 0,
+      "avail": 0,
+      "min": 0,
+      "max": 900
+     },
+     "ErrorReset.ErrCode": {
+      "type": 202,
+      "avail": 1
+     },
+     "ErrorReset.ResetTime": {
+      "type": 18,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 60
+     },
+     "ACCAirHeating.Mode": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 1,
+      "max": 1
+     }
+    },
+    "0x0405": {
+     "Identify.SwBdNr": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "VBat.Voltage": {
+      "type": 11,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 4093
+     },
+     "VBat.State": {
+      "type": 106,
+      "perm": 0,
+      "avail": 1
+     },
+     "ErrorReset.ErrCode": {
+      "type": 202,
+      "avail": 1
+     },
+     "Switches.FreshWaterPump": {
+      "type": 104,
+      "avail": 1
+     },
+     "Switches.FloorHeatingInstalled": {
+      "type": 104,
+      "avail": 1
+     },
+     "Switches.Active": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "PowerSupply.12VPower": {
+      "type": 104,
+      "avail": 1
+     },
+     "PowerSupply.MainSwitch": {
+      "type": 104,
+      "avail": 1
+     },
+     "Identify.FuncID": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.SupID": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.VarID": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "Identify.IID": {
+      "type": 100,
+      "perm": 0,
+      "avail": 1
+     },
+     "Identify.Supplier": {
+      "type": 4,
+      "avail": 1
+     },
+     "Identify.Type": {
+      "type": 103,
+      "perm": 0,
+      "avail": 1
+     },
+     "Identify.SwMaj": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.SwMin": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "Identify.SwBgFx": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "VBat.Priority": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "L1Bat.Voltage": {
+      "type": 11,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 4093
+     },
+     "L1Bat.State": {
+      "type": 106,
+      "perm": 0,
+      "avail": 1
+     },
+     "L1Bat.Priority": {
+      "type": 1,
+      "perm": 0,
+      "avail": 1,
+      "min": 0,
+      "max": 255
+     },
+     "FreshWater.Level": {
+      "type": 15,
+      "avail": 1,
+      "min": 0,
+      "max": 100
+     },
+     "FreshWater.State": {
+      "type": 106,
+      "perm": 0,
+      "avail": 1
+     },
+     "FreshWater.Autofill": {
+      "type": 104,
+      "avail": 1
+     },
+     "FreshWater.MeasureRequest": {
+      "type": 104,
+      "avail": 1
+     },
+     "GreyWater.Level": {
+      "type": 15,
+      "avail": 1,
+      "min": 0,
+      "max": 100
+     },
+     "GreyWater.State": {
+      "type": 106,
+      "perm": 0,
+      "avail": 1
+     },
+     "GreyWater.MeasureRequest": {
+      "type": 104,
+      "avail": 1
+     },
+     "PowerMgmt.PwrMode": {
+      "type": 102,
+      "avail": 1
+     },
+     "LinePower.Plugged": {
+      "type": 104,
+      "perm": 0,
+      "avail": 1
+     }
+    },
+    "0x0601": {
+     "BleDeviceManagement.Search": {
+      "type": 105,
+      "avail": 1
+     },
+     "BleDeviceManagement.Device": {
+      "type": 103,
+      "avail": 1
+     },
+     "BleDeviceManagement.State": {
+      "type": 114,
+      "perm": 0,
+      "avail": 1
+     },
+     "BleDeviceManagement.BleConnState": {
+      "type": 117,
+      "perm": 0,
+      "avail": 1
+     },
+     "BleDeviceManagement.NrFreeSlots": {
+      "type": 203,
+      "perm": 0,
+      "avail": 1
+     },
+     "BleDeviceManagement.ConnectID": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 4294967295
+     },
+     "BleDeviceManagement.SearchResult": {
+      "type": 204,
+      "perm": 0,
+      "avail": 1
+     },
+     "DeviceManagement.Search": {
+      "type": 104,
+      "avail": 1
+     },
+     "DeviceManagement.Delete": {
+      "type": 1,
+      "avail": 1,
+      "min": 0,
+      "max": 65535
+     },
+     "DeviceManagement.RegCompleted": {
+      "type": 104,
+      "perm": 0,
+      "avail": 1
+     }
+    }
+   },
+   "contested_topics": {
+    "DeviceManagement": [
+     "0x0101",
+     "0x0601"
+    ],
+    "ErrorReset": [
+     "0x0101",
+     "0x0201",
+     "0x0405"
+    ],
+    "Identify": [
+     "0x0101",
+     "0x0201",
+     "0x0405"
+    ],
+    "PowerMgmt": [
+     "0x0101",
+     "0x0201",
+     "0x0405"
+    ]
+   }
+  }
+ },
+ "issues": []
+}

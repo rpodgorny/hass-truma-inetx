@@ -23,9 +23,18 @@ source address; nothing reads it, and it should be empty.
 
 A download can be read back with the
 [dump tool](development.md#dumping-the-bus-without-home-assistant), which prints
-the same bus device by device without Home Assistant in the way.
+the same bus device by device without Home Assistant in the way. The downloads
+this project has learned from are kept in [`dumps/`](../dumps/README.md).
 
-The BLE address, the panel's name and the persisted app identity (`muid` /
-`uuid`) are redacted: the address is a private address that still pins the panel
-to a location, and the identity is what the panel bonds against. The panel state
-itself carries nothing identifying.
+The BLE address, the panel's name, the discovery keys and the persisted app
+identity (`muid` / `uuid`) are redacted: the address is a private address that
+still pins the panel to a location, and the identity is what the panel bonds
+against. The panel state itself carries nothing identifying.
+
+The discovery keys are redacted as a subtree because that is where the address
+hides from a redactor that works on key names — Home Assistant serialises the
+key as `"repr": "DiscoveryKey(domain='bluetooth', key='…', version=1)"`. Any
+download taken before this was fixed carries the panel's address in that string,
+including the three attached to
+[#22](https://github.com/rpodgorny/hass-truma-inetx/issues/22): scrub it before
+re-posting one.

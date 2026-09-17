@@ -14,6 +14,12 @@ from .coordinator import TrumaConfigEntry
 # The BLE address is a resolvable private address that still pins the panel to
 # a location, and muid/uuid are the persisted app identity the panel bonds
 # against. The bus state itself carries nothing identifying.
+# discovery_keys is here because redaction works on key names and that
+# subtree hides the address inside a value: Home Assistant serialises the key
+# as ``"repr": "DiscoveryKey(domain='bluetooth', key='76:32:EF:78:FD:1A',
+# version=1)"``, which no address-named key matches. Every download written
+# before this line carried the panel's address in it, the three attached to
+# issue #22 included.
 TO_REDACT = {
     CONF_ADDRESS,
     CONF_NAME,
@@ -22,6 +28,7 @@ TO_REDACT = {
     "address",
     "muid",
     "uuid",
+    "discovery_keys",
 }
 
 

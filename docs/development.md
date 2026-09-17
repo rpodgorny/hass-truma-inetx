@@ -33,6 +33,11 @@ these can mean anything:
     AirCirculation           0x0201, 0x0406
 ```
 
+Real downloads are kept in [`dumps/`](../dumps/README.md) — the evidence for
+vehicles nobody here can plug into, read by the tool above and by the tests.
+File a new one with `tools/import_dump.py`, which scrubs it and refuses to
+write anything with an address-shaped string left in it.
+
 ## Tests
 
 The checks in `tests/` are self-contained: they stub Home Assistant, bleak and

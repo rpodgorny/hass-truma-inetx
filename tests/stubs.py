@@ -97,6 +97,18 @@ class _Coordinator:
         return cls
 
 
+def _redact(data, keys):
+    """Replace every value under a redacted key name, at any depth."""
+    if isinstance(data, dict):
+        return {
+            k: "**REDACTED**" if k in keys else _redact(v, keys)
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [_redact(v, keys) for v in data]
+    return data
+
+
 def install_homeassistant() -> None:
     """Put the Home Assistant modules the integration imports on sys.path."""
     mod("homeassistant", __path__=[])
@@ -149,8 +161,10 @@ def install_homeassistant() -> None:
 
     mod("homeassistant.components", __path__=[])
     mod("homeassistant.components.diagnostics",
-        # The real one drops keys; redaction is not what any of this is about.
-        async_redact_data=lambda data, _keys: data)
+        # Redacting for real, by key name and all the way down, the way the
+        # real one does: a download that still carries the panel's address is
+        # the kind of bug a test has to be able to see.
+        async_redact_data=_redact)
     mod(
         "homeassistant.components.sensor",
         SensorEntity=object,

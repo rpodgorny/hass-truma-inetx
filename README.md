@@ -99,6 +99,7 @@ rest are in [known limitations](docs/limitations.md).
 - [Diagnostics](docs/diagnostics.md)
 - [Known limitations](docs/limitations.md)
 - [Development](docs/development.md) — bench dumps without HA, tests
+- [`dumps/`](dumps/README.md) — real diagnostics downloads, per vehicle
 - [Credits and licensing](docs/licensing.md)
 
 ## Licence

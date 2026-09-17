@@ -20,7 +20,9 @@ What it pins:
    attributable are still on the bus,
 3. a pre-0.7 download, which has only a flat store, lands in `unattributed`
    rather than under a device that would be a guess,
-4. the integration's own return value keeps working, wrapper or not.
+4. the integration's own return value keeps working, wrapper or not,
+5. every real download stored in ``dumps/`` still reads back, and none of
+   them carries a BLE address.
 
 Run: ``python3 tests/test_diagnostics_shapes.py``
 """
@@ -28,6 +30,7 @@ Run: ``python3 tests/test_diagnostics_shapes.py``
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -160,6 +163,34 @@ def test_a_flat_download_is_not_assigned_to_a_guess() -> None:
     }
     # ...and it still prints something rather than looking like an empty bus.
     assert "AirHeating.TgtTemp" in BUS.dump(bus)
+
+
+def test_every_stored_dump_still_reads_back() -> None:
+    """The real downloads in ``dumps/`` are read, not just described.
+
+    They are the only evidence for vehicles nobody here can plug into, so a
+    reader change that stops understanding one of their shapes has to fail
+    here rather than the next time somebody opens one. The same pass checks
+    that nothing address-shaped got committed with them: ``import_dump.py``
+    refuses to write one, and this is what catches a file that went in by
+    hand.
+    """
+    import re
+
+    leak = re.compile(
+        r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b|iNetX-[0-9A-Fa-f]{6}"
+    )
+    stored = sorted((Path(__file__).resolve().parents[1] / "dumps").glob("*/*.json"))
+    assert stored, "dumps/ is empty -- the hoard is the point of it"
+
+    for path in stored:
+        text = path.read_text()
+        assert not leak.search(text), f"{path.name} carries an address"
+        bus = BUS.from_diagnostics(json.loads(text))
+        assert bus.devices or bus.unattributed, f"{path.name} read as an empty bus"
+        # And it prints: a file that parses into a bus nothing renders from is
+        # no more use than one that does not parse.
+        assert BUS.dump(bus).strip(), f"{path.name} rendered nothing"
 
 
 def test_a_file_that_is_not_one_of_ours_reads_as_nothing() -> None:

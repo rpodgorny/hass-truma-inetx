@@ -1,0 +1,367 @@
+{
+ "home_assistant": {
+  "arch": "aarch64",
+  "dev": false,
+  "docker": true,
+  "hassio": true,
+  "installation_type": "Home Assistant OS",
+  "os_name": "Linux",
+  "os_version": "6.18.34-haos-raspi",
+  "python_version": "3.14.6",
+  "timezone": "Europe/Berlin",
+  "version": "2026.8.3",
+  "virtualenv": false,
+  "container_arch": "aarch64",
+  "supervisor": "2026.09.0",
+  "host_os": "Home Assistant OS 18.2",
+  "docker_version": "29.6.2",
+  "chassis": "embedded",
+  "run_as_root": true
+ },
+ "custom_components": {
+  "lacrosse_jeelink": {
+   "documentation": "https://github.com/Lu-Fi/ha-lacrosse-jeelink",
+   "version": "1.5.0",
+   "requirements": [
+    "pyserial==3.5"
+   ]
+  },
+  "truma_inetx": {
+   "documentation": "https://github.com/rpodgorny/hass-truma-inetx",
+   "version": "0.7.0",
+   "requirements": [
+    "cbor2==5.6.5"
+   ]
+  },
+  "hacs": {
+   "documentation": "https://hacs.xyz/docs/use/",
+   "version": "2.0.5",
+   "requirements": [
+    "aiogithubapi>=22.10.1"
+   ]
+  },
+  "bms_ble": {
+   "documentation": "https://github.com/patman15/BMS_BLE-HA",
+   "version": "2.17.0",
+   "requirements": [
+    "aiobmsble==0.28.0"
+   ]
+  }
+ },
+ "integration_manifest": {
+  "domain": "truma_inetx",
+  "name": "Truma iNet X (BLE)",
+  "bluetooth": [
+   {
+    "local_name": "Truma iNetX*"
+   },
+   {
+    "service_uuid": "fc310000-f3b2-11e8-8eb2-f2801f1b9fd1"
+   },
+   {
+    "service_uuid": "fc310002-f3b2-11e8-8eb2-f2801f1b9fd1"
+   }
+  ],
+  "codeowners": [
+   "rpodgorny"
+  ],
+  "config_flow": true,
+  "dependencies": [
+   "bluetooth_adapters",
+   "frontend",
+   "http"
+  ],
+  "documentation": "https://github.com/rpodgorny/hass-truma-inetx",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/rpodgorny/hass-truma-inetx/issues",
+  "requirements": [
+   "cbor2==5.6.5"
+  ],
+  "version": "0.7.0",
+  "is_built_in": false,
+  "overwrites_built_in": false
+ },
+ "setup_times": {},
+ "data": {
+  "entry": {
+   "created_at": "2026-09-12T16:27:50.909550+00:00",
+   "data": {
+    "address": "**REDACTED**",
+    "name": "**REDACTED**"
+   },
+   "discovery_keys": "**REDACTED**",
+   "disabled_by": null,
+   "domain": "truma_inetx",
+   "entry_id": "01M2B74NQXYGXCV00YSFFZ98T8",
+   "minor_version": 1,
+   "modified_at": "2026-09-12T21:09:38.687004+00:00",
+   "options": {
+    "poll_interval_seconds": 0
+   },
+   "pref_disable_new_entities": false,
+   "pref_disable_polling": false,
+   "source": "bluetooth",
+   "subentries": [],
+   "title": "**REDACTED**",
+   "unique_id": "**REDACTED**",
+   "version": 1
+  },
+  "last_update_success": true,
+  "state": {
+   "room_mode": 3,
+   "room_target_temp": 220,
+   "room_current_temp": null,
+   "room_active": 4,
+   "air_target_temp": 170,
+   "air_current_temp": 225,
+   "air_mode": 0,
+   "air_active": 2,
+   "fan_level": 0,
+   "fan_active": 0,
+   "water_mode": 0,
+   "water_active": 0,
+   "water_current_temp": 266,
+   "diesel_level": null,
+   "electric_level": null,
+   "flame_status": 2,
+   "voltage_vcc12": null,
+   "error_codes": null,
+   "panel_inactive_since": 10,
+   "internal_temp": 225,
+   "water_pump": 1,
+   "fresh_water_level": 50,
+   "grey_water_level": 0,
+   "last_update": 1789248030.3176758,
+   "connected": true,
+   "assigned_addr": 1282,
+   "raw_params": {
+    "Panel.UserInactiveSince": 10,
+    "Transfer.Status": 0,
+    "Install.Status": 0,
+    "Install.InstallNow": 1,
+    "Install.SwPreviousMaj": 3,
+    "Install.SwPreviousMin": 4,
+    "Install.SwPreviousBgFx": 27,
+    "Install.ClassId": "ac901cc6-1ddd-5704-9e5f-3f996cf4f2b4",
+    "Install.VendorId": "8651475e-d646-5345-badd-a066232e6034",
+    "PowerMgmt.PwrMode": 3,
+    "ErrorReset.ErrCode": [],
+    "TimeAndDate.Time": "20:08",
+    "TimeAndDate.Date": "12.09.26",
+    "TimeAndDate.SystemTime": 1789236480,
+    "Temperature.ExternalRaw": -299,
+    "Temperature.Internal": 225,
+    "Temperature.InternalRaw": -299,
+    "Temperature.InternalSource": 1,
+    "Temperature.Offset": 0,
+    "RoomClimate.Active": 4,
+    "RoomClimate.Mode": 3,
+    "RoomClimate.TgtTemp": 220,
+    "DeviceManagement.Search": 0,
+    "DeviceManagement.Delete": 0,
+    "DeviceManagement.RegCompleted": 1,
+    "Identify.SwBgFx": 0,
+    "Identify.SwBdNr": 0,
+    "Identify.HwMaj": 3,
+    "System.Plugged": 0,
+    "System.FlameStatus": 2,
+    "System.DemoMode": 0,
+    "System.FactoryReset": 0,
+    "System.Search": 0,
+    "TimerConfig.Timer1State": 1,
+    "TimerConfig.Timer2": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "TimerConfig.Timer2State": 0,
+    "TimerConfig.Timer3": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "TimerConfig.Timer3State": 0,
+    "TimerConfig.Timer4": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "TimerConfig.Timer4State": 0,
+    "TimerConfig.Timer5": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "TimerConfig.Timer5State": 0,
+    "TimerConfig.Timer6": {
+     "id": 0,
+     "name": "DefaultTimer",
+     "symbol": 7,
+     "start": "00:00",
+     "end": "00:00",
+     "wd": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "Identify.Name": "Combi 4",
+    "Identify.FuncID": 6660,
+    "Identify.SupID": 1305,
+    "Identify.VarID": 3,
+    "Identify.Supplier": "Schaudt",
+    "Identify.Type": 4,
+    "Identify.SerialNr": "CBG04EU-E-35008040",
+    "Identify.SwMaj": 1,
+    "Identify.SwMin": 11,
+    "Identify.HwMin": 4,
+    "Identify.CertThumb": "rc6OR12J83X_5NPNmpXVFtung9TiXCnDTq-drUbxC-w",
+    "Identify.UniqueID": "e7c7795d-69d5-4c1e-97d6-43e8b4e51722.device.id.ip.inetx",
+    "Panel.Intst": 100,
+    "Panel.Screensaver": 0,
+    "Panel.DisplayTimeout": 120,
+    "Panel.Language": 0,
+    "Panel.DarkIntst": 1,
+    "Panel.ErrCatVer": "2026.5.27.95637",
+    "AirHeating.Temp": 225,
+    "WaterHeating.Temp": 266,
+    "Switches.FreshWaterPump": 1,
+    "Switches.FloorHeatingInstalled": 0,
+    "FreshWater.Autofill": 0,
+    "FreshWater.MeasureRequest": 0,
+    "GreyWater.Level": 0,
+    "Identify.IID": 4,
+    "Switches.Active": 1,
+    "PowerSupply.12VPower": 1,
+    "PowerSupply.MainSwitch": 1,
+    "AirHeating.Active": 2,
+    "AirHeating.TgtTemp": 170,
+    "AirHeating.Mode": 0,
+    "AirHeating.Location": 1,
+    "WaterHeating.Active": 0,
+    "WaterHeating.Mode": 0,
+    "WaterHeating.FasterHeatingMode": 0,
+    "WaterHeating.FasterHeatingModeTime": 0,
+    "EnergySrc.GasLevel": 1,
+    "EnergySrc.NeedsEnergySrc": 1,
+    "AirCirculation.Active": 0,
+    "AirCirculation.FanLevel": 0,
+    "AirCirculation.Location": 1,
+    "ErrorReset.Req": 0,
+    "ErrorReset.WaitTime": 900,
+    "ErrorReset.ResetTime": 60,
+    "ACCAirHeating.Mode": 1,
+    "VBat.Voltage": 128,
+    "VBat.State": 0,
+    "VBat.Priority": 20,
+    "L1Bat.Voltage": 132,
+    "L1Bat.State": 0,
+    "L1Bat.Priority": 20,
+    "FreshWater.Level": 50,
+    "FreshWater.State": 1,
+    "GreyWater.State": 0,
+    "GreyWater.MeasureRequest": 0,
+    "LinePower.Plugged": 0,
+    "BleDeviceManagement.Search": 0,
+    "BleDeviceManagement.Device": 0,
+    "BleDeviceManagement.State": 1,
+    "BleDeviceManagement.BleConnState": 0,
+    "BleDeviceManagement.NrFreeSlots": [
+     {
+      "type": 12,
+      "nrOfSlots": 1
+     },
+     {
+      "type": 9,
+      "nrOfSlots": 2
+     }
+    ],
+    "BleDeviceManagement.ConnectID": 0,
+    "BleDeviceManagement.SearchResult": []
+   },
+   "seen_devices": [
+    "0x0101",
+    "0x0201",
+    "0x0405",
+    "0x0601"
+   ],
+   "topic_source": {
+    "Panel": 257,
+    "Transfer": 257,
+    "Install": 257,
+    "PowerMgmt": 1029,
+    "ErrorReset": 513,
+    "TimeAndDate": 257,
+    "Temperature": 257,
+    "RoomClimate": 257,
+    "DeviceManagement": 1537,
+    "Identify": 1029,
+    "System": 257,
+    "TimerConfig": 257,
+    "AirHeating": 513,
+    "WaterHeating": 513,
+    "Switches": 1029,
+    "FreshWater": 1029,
+    "GreyWater": 1029,
+    "PowerSupply": 1029,
+    "EnergySrc": 513,
+    "AirCirculation": 513,
+    "ACCAirHeating": 513,
+    "VBat": 1029,
+    "L1Bat": 1029,
+    "LinePower": 1029,
+    "BleDeviceManagement": 1537
+   }
+  }
+ },
+ "issues": []
+}

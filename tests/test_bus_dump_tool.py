@@ -139,6 +139,51 @@ def test_a_download_reads_back_into_a_dump() -> None:
     assert "System.Search" in out, out
 
 
+def test_a_download_carries_no_address() -> None:
+    """Nothing in a download names the panel's address, at any depth.
+
+    The address sits in the config entry twice, and the second one is not
+    under a key called address: Home Assistant serialises a discovery key as
+    a ``repr`` string with the address inside it, so redaction by key name
+    only reaches it through ``discovery_keys`` itself. Every download written
+    before that was added carried the panel's address in plain text, the
+    three attached to issue #22 included.
+    """
+    addr = "76:32:EF:78:FD:1A"
+    coordinator = types.SimpleNamespace(
+        data=BUS.Bus(),
+        unique_id="Truma iNetX-FFB4D1",
+        last_update_success=True,
+        address_kind="identity",
+        session_transport="local",
+        _client=None,
+        poll_interval=0,
+    )
+    entry = types.SimpleNamespace(
+        runtime_data=coordinator,
+        as_dict=lambda: {
+            "title": "Truma iNetX-FFB4D1",
+            "data": {"address": addr, "name": "Truma iNetX-FFB4D1"},
+            "discovery_keys": {
+                "bluetooth": [
+                    {
+                        "__type": "<class 'homeassistant.helpers"
+                        ".discovery_flow.DiscoveryKey'>",
+                        "repr": f"DiscoveryKey(domain='bluetooth', "
+                        f"key='{addr}', version=1)",
+                    }
+                ]
+            },
+        },
+    )
+    download = json.dumps(
+        asyncio.run(DIAG.async_get_config_entry_diagnostics(None, entry))
+    )
+
+    assert addr not in download, download
+    assert "FFB4D1" not in download, download
+
+
 def _main() -> None:
     stubs.run_tests(globals(), "bus dump tool")
 
