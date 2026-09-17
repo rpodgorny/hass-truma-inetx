@@ -120,7 +120,7 @@ def async_panel_advertising(hass: HomeAssistant, name: str) -> bool:
 # ``...FFB4D1`` for "Truma iNetX-FFB4D1" -- while everything else is a
 # Resolvable Private Address that changes every few minutes. Which of the two
 # a given host can actually connect on is a property of that host's kernel and
-# controller -- the README's proxy section has which kernel does what, and why
+# controller -- ``docs/connectivity.md`` has which kernel does what, and why
 # 6.19 changed it -- so it is worth remembering rather than guessing: see
 # ``prefer_identity``.
 ADDR_IDENTITY = "identity"
