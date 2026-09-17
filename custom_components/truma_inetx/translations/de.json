@@ -117,6 +117,14 @@
       "climate_state": {
         "name": "Klimastatus (roh)"
       },
+      "cooling_status": {
+        "name": "Kühlstatus",
+        "state": {
+          "off": "Aus",
+          "running": "Kühlt",
+          "idle": "Bereit"
+        }
+      },
       "cooling_temp": {
         "name": "Kühltemperatur"
       },

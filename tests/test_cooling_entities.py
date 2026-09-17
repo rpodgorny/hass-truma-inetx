@@ -19,7 +19,9 @@ What it pins:
 3. the setpoint range comes from that field's owner, falling back per topic
    rather than to one range for all three,
 4. cooling that is standing by reads as off, the way a flame that is standing
-   by does,
+   by does -- and is still visible, as a state of its own on the diagnostic
+   sensor beside the flag: measured on the FreshJet of #23, which reports the
+   2 that vehicle's first dump had not shown,
 5. the air conditioner's own fields are bounded by their own entries,
 6. a gas bottle carries its weight, its temperature and its sensor's battery
    as well as its level, each on the bottle that published it,
@@ -128,6 +130,47 @@ def test_cooling_that_is_standing_by_reads_as_off() -> None:
     assert cooling.is_on is False, "standing by was reported as cooling"
     coordinator.report("AirCooling", "Active", 0, ROOF_AC)
     assert cooling.is_on is False
+
+
+def test_standing_by_is_a_state_of_its_own_beside_the_flag() -> None:
+    """Measured on the FreshJet of #23: AirCooling.Active really does take 2.
+
+    Cooling selected, the room at 13 °C against a 16 °C target, and the unit
+    reporting 2 while the shore-power meter read 336 W against a 311 W base
+    load -- awake, compressor off. The flag above cannot say that, and "not
+    cooling" and "standing by" are the two an owner wants told apart.
+    """
+    coordinator = _coordinator()
+    sensors = stubs.setup_platform(SENSOR, coordinator)
+    coordinator.report("AirCooling", "Active", 2, ROOF_AC)
+    status = _by_key(sensors, "cooling_status")
+
+    assert status._addr == ROOF_AC
+    assert status._attr_entity_category is stubs.EntityCategory.DIAGNOSTIC
+    assert status._attr_device_class == "enum"
+    assert status._attr_options == ["off", "running", "idle"]
+
+    for value, state in ((0, "off"), (1, "running"), (2, "idle")):
+        coordinator.report("AirCooling", "Active", value, ROOF_AC)
+        assert status.native_value == state
+        assert status.extra_state_attributes == {"raw": value}
+
+    # A value nobody has named stays visible rather than being folded into a
+    # state it does not belong in -- an ENUM sensor may only be in a state it
+    # declared, and Home Assistant rejects anything else once per update.
+    coordinator.report("AirCooling", "Active", 3, ROOF_AC)
+    assert status.native_value is None
+    assert status.extra_state_attributes == {"raw": 3}
+
+
+def test_the_cooling_states_are_named_in_every_language() -> None:
+    import json  # noqa: PLC0415
+
+    for path in [SRC / "strings.json", *sorted((SRC / "translations").glob("*.json"))]:
+        entry = json.loads(path.read_text())["entity"]["sensor"]["cooling_status"]
+        # The same three states as the flame, under the same keys: they are
+        # what an automation matches on, so only the words move per language.
+        assert set(entry["state"]) == {"off", "running", "idle"}, path.name
 
 
 def test_the_setpoint_follows_the_running_mode() -> None:

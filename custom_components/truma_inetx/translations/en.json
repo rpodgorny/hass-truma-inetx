@@ -117,6 +117,14 @@
       "climate_state": {
         "name": "Climate state (raw)"
       },
+      "cooling_status": {
+        "name": "Cooling status",
+        "state": {
+          "off": "Off",
+          "running": "Cooling",
+          "idle": "Idle"
+        }
+      },
       "cooling_temp": {
         "name": "Cooling temperature"
       },

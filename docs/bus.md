@@ -46,13 +46,22 @@ itself. A control over something the appliance also drives would fight it and
 flap, so the reading reflects the heater's choice rather than pretending to make
 it.
 
-**The flame status sensor** exists because nothing published says what
-`System.FlameStatus` means. It takes 0, 1 and 2; the flame binary sensor has to
-answer on or off, and does it by treating anything non-zero as lit. The panel
-describes the parameter with the same type code it gives `AirCirculation.Active`
-and the other `Active` fields, which are the protocol's OFF / ACTIVE / IDLE
-triple — good evidence, not proof. Watching the raw value through an ignition
-would settle it.
+**The three-state `Active` family.** `System.FlameStatus`, `AirCooling.Active`
+and the other parameters the panel gives type 105 take 0, 1 and 2 — off,
+running, and the appliance on but standing by. Each gets a flag that is on for
+1 alone, never "anything non-zero": a burner idling with the room already warm,
+or a roof unit awake with its compressor off, is not the vehicle being heated
+or cooled, and the flag is what an automation acts on. Beside each flag sits a
+diagnostic sensor naming the three states, with the wire value in a `raw`
+attribute, so a fourth value reads unknown rather than being folded into a
+state it does not belong in.
+
+Measured three times, on different hardware: a Combi 6 E against an
+independent shore-power meter (#15), 1 → 2 in the second the draw fell from
+1787 W to 105 W; a Combi 4 gas at the panel (#24), which put the idle state in
+words; and a Dometic FreshJet roof unit (#23) reporting 2 with cooling
+selected, drawing 336 W against a 311 W base load and 585 W while actually
+running.
 
 ## The two water-priority switches
 

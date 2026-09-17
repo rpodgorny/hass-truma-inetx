@@ -331,7 +331,9 @@ _AIR_MODE_LABELS = {0: "Fast", 1: "Comfort"}
 # table's word for 0; the unit's own word is "Low". Not a thermostat mode: it
 # is how hard the unit runs, which is why "Auto" sits inside it.
 _COOLING_LABELS = {0: "Low", 1: "Mid", 2: "High", 3: "Max", 4: "Night", 5: "Auto"}
-# The type-105 triple, under the names two vehicles have now measured it at.
+# The type-105 triple, under the names three appliances have now measured it
+# at. Not the flame's alone: every parameter in the family takes the same
+# three, and one dict is what keeps them reading alike.
 #
 # A Combi 6 E with gas and an 1800 W element, watched against an independent
 # shore-power meter (#15): 1 with the burner firing, still 1 with the gas off
@@ -344,10 +346,17 @@ _COOLING_LABELS = {0: "Low", 1: "Mid", 2: "High", 3: "Max", 4: "Night", 5: "Auto
 # temperature, 2 = on with the room above it". The same three, and it says
 # plainly what the idle state is *for*.
 #
+# A Dometic FreshJet roof air conditioner, on the same meter as the first
+# (#23): AirCooling.Active 2 with cooling selected and the room at 13 C
+# against a 16 C target, drawing 336 W where the vehicle's base load is 311 W
+# -- the electronics awake and the compressor not -- and the same unit read
+# 585 W while running earlier that month. So the idle state is the family's,
+# not the burner's.
+#
 # Lower case, because these are the states an automation matches on and not
 # the words anybody reads: the words are in strings.json, per language, and
 # the state under them does not move when the translation does.
-_FLAME_LABELS: dict[int, str] = {
+_ACTIVE_LABELS: dict[int, str] = {
     ActiveState.OFF: "off",
     ActiveState.ACTIVE: "running",
     ActiveState.IDLE: "idle",
@@ -634,10 +643,24 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             device_class=BinarySensorDeviceClass.RUNNING,
             # Read the way the tri-state Active family reads, so a 2 is the
             # unit standing by rather than a second kind of "on" -- the care
-            # FlameStatus needed. A plain 0/1 flag reads identically either
-            # way, so this costs nothing if it turns out to be one. The one
-            # running unit measured so far reported 1 and never a 2 (#23).
+            # FlameStatus needed. Measured since, on the FreshJet of #23: it
+            # does report a 2, with cooling selected and the compressor idle
+            # at 336 W against a 311 W base load. Read as "anything non-zero"
+            # this flag would have claimed the vehicle was being cooled.
             on_values=(ActiveState.ACTIVE,),
+        ),
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="cooling_status",
+            # And the three states by name, for the same reason the flame has
+            # them: the flag above can say running or not, and the thing an
+            # owner wants to tell apart is *not running* from *standing by*.
+            # The number stays underneath, so a fourth value shows up as
+            # unknown-with-a-raw-attribute rather than being swallowed.
+            device_class=SensorDeviceClass.ENUM,
+            labels=_ACTIVE_LABELS,
+            attrs=_raw,
+            entity_category=EntityCategory.DIAGNOSTIC,
         ),
     ),
     # -- system ----------------------------------------------------------
@@ -708,7 +731,7 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             # and not a quantity, and long-term statistics would have handed
             # somebody a daily mean of 1.4.
             device_class=SensorDeviceClass.ENUM,
-            labels=_FLAME_LABELS,
+            labels=_ACTIVE_LABELS,
             # And the number underneath, always. This entity exists because
             # somebody standing next to a running heater could watch the raw
             # value in a history graph, which is how the meaning was found in

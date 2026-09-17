@@ -51,6 +51,9 @@
       "climate_state": {
         "default": "mdi:home-thermometer-outline"
       },
+      "cooling_status": {
+        "default": "mdi:snowflake"
+      },
       "error_code": {
         "default": "mdi:alert-circle-outline"
       },
