@@ -334,6 +334,14 @@ class Bus:
 
     last_update: float = 0.0
     connected: bool = False
+    # Whether startup has finished asking every device on the bus to describe
+    # itself. Until it has, a device that has published a value may still be
+    # about to publish its name, and anything that names a device from the bus
+    # has to wait rather than settle for a placeholder -- see
+    # TrumaCoordinator.device_is_named. Never cleared: a reconnect cannot
+    # un-know what a device has already said, and clearing it would make every
+    # reconnect a second race.
+    discovered: bool = False
     # The address the panel assigned *us* at registration. The panel puts it
     # in the src of some frames, so it has to be recognisable as not-a-device.
     assigned_addr: int = DEV_APP_DEFAULT
@@ -489,6 +497,22 @@ class Bus:
         """
         return not any(
             other != addr and device.label == label
+            for other, device in self.devices.items()
+        )
+
+    def name_is_unique(self, addr: int, name: str) -> bool:
+        """Whether ``name`` is this device's alone among what the bus reports.
+
+        The question a device name has to answer is "which of the two is
+        this", and where there is only one there is nothing to answer. A
+        Schaudt electrical block and a Dometic roof unit share device class
+        0x04 and nothing else -- they are "EBL25x" and "FreshJet" on the bus
+        of #23, two names an owner can already tell apart, and appending the
+        class instance to each ("EBL25x 5", "FreshJet 6") answered a question
+        nobody had asked.
+        """
+        return not any(
+            other != addr and device.name == name
             for other, device in self.devices.items()
         )
 

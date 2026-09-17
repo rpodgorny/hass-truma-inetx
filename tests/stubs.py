@@ -97,6 +97,73 @@ class _Coordinator:
         return cls
 
 
+class _DeviceEntry:
+    """A registry device, with the two fields the coordinator reconciles."""
+
+    def __init__(self, entry_id: str, identifiers: set, name, model) -> None:
+        self.id = entry_id
+        self.identifiers = identifiers
+        self.name = name
+        self.model = model
+        # Home Assistant shows the owner's name in preference to ours, and
+        # nothing here may overwrite it -- that is what a rename is for.
+        self.name_by_user = None
+
+
+class _DeviceRegistry:
+    """Enough device registry to see a device renamed, or not renamed.
+
+    Names are the whole point of this double: a device is registered afresh by
+    every entity built on it, so "which name was current when" is a property
+    of the registry rather than of the bus, and a registry that records
+    nothing cannot show a name going backwards (#23).
+    """
+
+    def __init__(self) -> None:
+        self.devices: list = []
+        self.updates: list[tuple[str, dict]] = []
+
+    def clear(self) -> None:
+        self.devices.clear()
+        self.updates.clear()
+
+    def async_get_or_create(self, *, config_entry_id=None, **info):
+        entry = self.async_get_device(identifiers=info.get("identifiers", set()))
+        if entry is None:
+            entry = _DeviceEntry(
+                f"device-{len(self.devices)}",
+                set(info.get("identifiers", set())),
+                info.get("name"),
+                info.get("model"),
+            )
+            self.devices.append(entry)
+            return entry
+        # The real registry takes the newest device info, which is exactly how
+        # a name goes backwards when an entity is built before its device has
+        # named itself.
+        entry.name = info.get("name")
+        entry.model = info.get("model")
+        return entry
+
+    def async_get_device(self, identifiers=frozenset(), connections=None):
+        for entry in self.devices:
+            if entry.identifiers & set(identifiers):
+                return entry
+        return None
+
+    def async_update_device(self, device_id: str, **changes):
+        for entry in self.devices:
+            if entry.id == device_id:
+                for key, value in changes.items():
+                    setattr(entry, key, value)
+                self.updates.append((device_id, changes))
+                return entry
+        raise AssertionError(f"no such device {device_id}")
+
+
+DEVICE_REGISTRY = _DeviceRegistry()
+
+
 def _redact(data, keys):
     """Replace every value under a redacted key name, at any depth."""
     if isinstance(data, dict):
@@ -151,7 +218,7 @@ def install_homeassistant() -> None:
         via_device_id: str
 
     mod("homeassistant.helpers.device_registry", DeviceInfo=DeviceInfo,
-        async_get=lambda _hass: None)
+        async_get=lambda _hass: DEVICE_REGISTRY)
     mod("homeassistant.helpers.entity", Entity=object)
     mod("homeassistant.helpers.entity_platform",
         AddConfigEntryEntitiesCallback=object)
@@ -254,6 +321,11 @@ class FakeCoordinator:
 
     def __init__(self, bus) -> None:
         self.data = bus
+        # The steady state a platform test is about: startup has run, so every
+        # device that was going to name itself has, and nothing is waiting for
+        # a name. A test that is about the wait itself clears this -- see
+        # tests/test_device_naming_race.py and device_is_named below.
+        bus.discovered = True
         self._listeners: list = []
         self.writes: list[tuple[int, str, str, int]] = []
         coordinator = self
@@ -274,6 +346,25 @@ class FakeCoordinator:
 
     def device_info(self, addr: int) -> dict:
         return {"identifiers": {("truma_inetx", f"{self.unique_id}_{addr:04X}")}}
+
+    def device_is_named(self, addr: int) -> bool:
+        """The real rule, in the two lines a platform test needs of it.
+
+        Kept as the rule rather than as ``True`` because it gates entity
+        creation: a double that always says yes cannot show an entity waiting
+        for its device's name, which is the whole of #23's permanent
+        ``climate.bus_device_0x0201``. The real one is
+        ``TrumaCoordinator.device_is_named``, and it also knows about the
+        panel and about _KNOWN_NAMES.
+        """
+        # The panel is named after the config entry, and 0x0601 is the one
+        # address named by a table, so neither ever waits.
+        if addr in (0x0101, 0x0601) or self.data.discovered:
+            return True
+        device = self.data.devices.get(addr)
+        return device is not None and (
+            device.name is not None or device.label is not None
+        )
 
     def _notify(self) -> None:
         for cb in list(self._listeners):

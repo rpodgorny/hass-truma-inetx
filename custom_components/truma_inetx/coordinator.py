@@ -15,6 +15,7 @@ from bleak_retry_connector import BleakClientWithServiceCache
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.storage import Store
@@ -698,14 +699,21 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         LevelControl Rechts". That is the one identity that survives a
         re-pairing: the instance is part of the address and is reassigned,
         while the label is stored in the device. Where no label is published,
-        or two devices share one, the instance separates them instead (two
-        gas-bottle sensors are 0x0603 and 0x0604, and "Truma LevelControl"
-        twice would be no better than the flat reading that mixed them up). A device that publishes no name is
-        named by its address rather than by a class-to-product mapping that
-        cannot be verified -- a Dometic roof air conditioner and a Schaudt
-        electrical block share a device class. The one exception is
-        _KNOWN_NAMES, and it is an exception only for addresses that name
-        nothing themselves.
+        or two devices share one, the class instance separates them instead --
+        but only where there is something to separate. Two gas-bottle sensors
+        publishing "Truma LevelControl" get 0x0603's and 0x0604's instances,
+        because "Truma LevelControl" twice would be no better than the flat
+        reading that mixed them up; a bus whose names are already distinct
+        keeps them as they are. Measured on the bus of #23, where the suffix
+        used to fire on every instance above 1: a Schaudt block and a Dometic
+        roof unit share device class 0x04 and nothing else, and came up as
+        "EBL25x 5" and "FreshJet 6" -- two numbers answering a question the
+        names had already answered.
+
+        A device that publishes no name is named by its address rather than by
+        a class-to-product mapping that cannot be verified -- those same two
+        share a device class. The one exception is _KNOWN_NAMES, and it is an
+        exception only for addresses that name nothing themselves.
         """
         if addr == DEV_PANEL:
             panel = self._bus.devices.get(addr)
@@ -729,7 +737,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             name = label
         elif label and label != base and self._bus.label_is_unique(addr, label):
             name = f"{base} {label}"
-        elif device.instance <= 1:
+        elif self._bus.name_is_unique(addr, base):
             name = base
         else:
             name = f"{base} {device.instance}"
@@ -756,6 +764,84 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             info["via_device"] = (DOMAIN, self.unique_id)
         return info
 
+    def device_is_named(self, addr: int) -> bool:
+        """Whether this address's device name is the one it will keep.
+
+        Home Assistant builds an entity id out of the device's name at the
+        moment the entity is created and never revises it, so an entity built
+        while a device is still "Bus device 0x0201" carries that placeholder
+        for good. Measured on the bus of #23: nine of about seventy entities
+        came up as ``climate.bus_device_0x0201``,
+        ``sensor.bus_device_0x0405_storungscode`` and so on, while their
+        siblings on the same devices came up as ``combi_6_e_*`` and
+        ``ebl25x_5_*`` -- a race, not a rule, and one the owner could only fix
+        by renaming nine entities by hand.
+
+        The race is in the startup order rather than in the bus: subscribing
+        (session.run_startup step 2) makes the panel push values, and the
+        parameter descriptions that carry Identify.Name are not asked for
+        until step 4. So a heater's room temperature routinely arrives a few
+        seconds before the heater's name.
+
+        What the caller waits for is therefore the name, not the value:
+
+        * the panel is named after the config entry and never waits,
+        * a device that has published Identify.Name or its own label is named,
+        * an address in _KNOWN_NAMES is named without publishing anything,
+        * and once discovery has finished, every device that was going to
+          name itself has -- so the address placeholder is the final answer
+          for the rest (0x0601 publishes BleDeviceManagement and no Identify
+          at all) rather than a value still in flight.
+
+        Waiting is safe in a way that not waiting is not: the entities appear
+        seconds later, while a wrong entity id is permanent.
+        """
+        if addr == DEV_PANEL or addr in _KNOWN_NAMES or self._bus.discovered:
+            return True
+        device = self._bus.devices.get(addr)
+        return device is not None and (
+            device.name is not None or device.label is not None
+        )
+
+    @callback
+    def async_sync_device_names(self) -> None:
+        """Rename registered devices whose identity arrived after they were.
+
+        The gate above closes the window for a device that names itself during
+        startup, and this closes it for one that names itself later: a
+        battery-powered gas sensor that wakes up minutes in gets its entities
+        (and therefore its Home Assistant device) as soon as discovery is
+        over, under the address placeholder, and would otherwise keep that
+        name until something else caused an entity to be created.
+
+        The same call is what stops a name going backwards. A device is
+        registered afresh by every entity built on it, so on the vehicle of
+        #23 three named devices fell back to "Bus device 0xNNNN" and lost
+        their model with the name -- an entity created early in a session
+        re-registered the device under the placeholder, and nothing created
+        later put it back.
+
+        ``name_by_user`` is untouched, so a device the owner has renamed keeps
+        the owner's name: Home Assistant shows that in preference to ours.
+        """
+        registry = dr.async_get(self.hass)
+        for addr in list(self._bus.devices):
+            if not self.device_is_named(addr):
+                continue
+            entry = registry.async_get_device(
+                identifiers={(DOMAIN, f"{self.unique_id}_{addr:04X}")}
+            )
+            if entry is None:
+                continue
+            info = self.device_info(addr)
+            if entry.name == info.get("name") and entry.model == info.get("model"):
+                continue
+            registry.async_update_device(
+                entry.id,
+                name=info.get("name"),
+                model=info.get("model"),
+            )
+
     @property
     def poll_interval(self) -> int:
         """Seconds between polls, or 0 to hold the connection open."""
@@ -770,6 +856,11 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         (the connection is up, so the caller resets the backoff).
         """
         await self._run_startup(client)
+        # Every device on the bus has now been asked to describe itself, so
+        # whatever has not named itself by here is not going to: anything
+        # waiting for a device's identity may stop waiting (see
+        # device_is_named).
+        self._bus.discovered = True
         self._session_ok = True
         self._session_transport = client.transport
         if self._last_kind is not None:
@@ -785,6 +876,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         self._bus.connected = True
         self._bus.assigned_addr = client.assigned_addr
         self.async_set_updated_data(self._bus)
+        self.async_sync_device_names()
         LOGGER.info("Truma %s connected and subscribed", self.unique_id)
         self._connected_event.set()
 
@@ -887,6 +979,10 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
 
         if session.handle_frame(self._bus, parsed, self._client, self.unique_id):
             self.async_set_updated_data(self._bus)
+            # A frame can carry the Identify.Name of a device that is already
+            # registered, which is the one thing the entity-creation gate
+            # cannot cover.
+            self.async_sync_device_names()
 
     @callback
     def _mark_disconnected(self) -> None:

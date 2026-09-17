@@ -280,7 +280,9 @@ def test_the_climate_entity_can_reach_a_mode_the_panel_offers() -> None:
     assert "cool" in climate.hvac_modes
 
     asyncio.run(climate.async_set_hvac_mode("cool"))
-    assert coordinator.writes == [(HEATER, "RoomClimate", "Mode", 2)], coordinator.writes
+    assert coordinator.writes == [
+        (HEATER, "RoomClimate", "Mode", 2)
+    ], coordinator.writes
 
 
 def test_our_table_still_applies_where_nothing_was_described() -> None:

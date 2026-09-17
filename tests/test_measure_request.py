@@ -190,6 +190,11 @@ class _Coord:
     _request_measurements = COORD.TrumaCoordinator._request_measurements
     _finish_startup = COORD.TrumaCoordinator._finish_startup
     _on_frame = COORD.TrumaCoordinator._on_frame
+    # Borrowed too: _on_frame reconciles device names on every frame
+    # that changes anything, so a double without it is not the
+    # coordinator this frame path runs on.
+    device_is_named = COORD.TrumaCoordinator.device_is_named
+    async_sync_device_names = COORD.TrumaCoordinator.async_sync_device_names
 
 
 class _StartupCoord(_Coord):

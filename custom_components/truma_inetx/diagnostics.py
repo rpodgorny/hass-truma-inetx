@@ -49,6 +49,11 @@ async def async_get_config_entry_diagnostics(
     if bus is not None:
         bus_dict = {
             "connected": bus.connected,
+            # Whether startup has finished asking every device to describe
+            # itself. A download taken before it has is a bus mid-discovery:
+            # devices may still be nameless and parameters undescribed, which
+            # is worth knowing before concluding anything from what is absent.
+            "discovered": bus.discovered,
             "last_update": bus.last_update,
             "assigned_addr": f"0x{bus.assigned_addr:04X}",
             "devices": {

@@ -56,6 +56,9 @@ APP_ADDR = 0x0501
 PANEL = 0x0101
 COMBI = 0x0201
 ROOF_AC = 0x0406
+# The Schaudt electrical block on the same bus, and the reason the class
+# instance cannot be the tie-break: 0x04 covers both of these.
+BLOCK = 0x0405
 BOTTLE_LEFT = 0x0603
 BOTTLE_RIGHT = 0x0604
 # The panel's own Bluetooth side -- same class as the bottles, which is the
@@ -108,6 +111,11 @@ class _Coord:
 
     _on_frame = COORD.TrumaCoordinator._on_frame
     device_info = COORD.TrumaCoordinator.device_info
+    # Borrowed too: _on_frame reconciles device names on every frame
+    # that changes anything, so a double without it is not the
+    # coordinator this frame path runs on.
+    device_is_named = COORD.TrumaCoordinator.device_is_named
+    async_sync_device_names = COORD.TrumaCoordinator.async_sync_device_names
     async_write = COORD.TrumaCoordinator.async_write
     _client_for_write = COORD.TrumaCoordinator._client_for_write
 
@@ -565,6 +573,134 @@ def test_a_download_reads_back_into_the_same_bus() -> None:
     assert device.bounds("GasBtl", "FillLevelP") == (0, 100)
     assert restored.unattributed == {"System.FlameStatus": 1}
     assert restored.assigned_addr == APP_ADDR
+
+
+def test_two_devices_with_distinct_names_keep_them_whole() -> None:
+    """The class instance separates two of a kind, not two of anything.
+
+    Measured on the bus of #23: a Schaudt electrical block and a Dometic roof
+    unit share device class 0x04, so the old rule -- suffix whenever the
+    instance is above 1 -- named them "EBL25x 5" and "FreshJet 6". Two numbers
+    answering a question the names had already answered.
+    """
+    coord = _Coord()
+    _report(coord, BLOCK, "Identify", "Name", "EBL25x")
+    _report(coord, ROOF_AC, "Identify", "Name", "FreshJet")
+
+    assert coord.device_info(BLOCK)["name"] == "EBL25x"
+    assert coord.device_info(ROOF_AC)["name"] == "FreshJet"
+    # ...and the rule still separates two that really do share a name, even
+    # where both instances are above 1.
+    for addr in (BOTTLE_LEFT, BOTTLE_RIGHT):
+        _report(coord, addr, "Identify", "Name", "Truma LevelControl")
+    assert coord.device_info(BOTTLE_LEFT)["name"] == "Truma LevelControl 3"
+    assert coord.device_info(BOTTLE_RIGHT)["name"] == "Truma LevelControl 4"
+
+
+def test_a_device_is_not_named_until_it_has_said_so() -> None:
+    """What an entity waits for, and what it stops waiting for (#23).
+
+    Home Assistant mints an entity id from its device's name at creation and
+    never revises it, so an entity built while a device is still "Bus device
+    0x0201" carries that placeholder for good -- nine of about seventy
+    entities on that vehicle did, ``climate.bus_device_0x0201`` among them.
+    Subscribing makes the panel push values; the descriptions that carry
+    Identify.Name are not asked for until later in startup, so the value
+    routinely arrives first.
+    """
+    coord = _Coord()
+    _report(coord, COMBI, "AirHeating", "Temp", 228)
+    assert coord.device_is_named(COMBI) is False, "named from a value alone"
+
+    # The panel needs no name off the bus, and the one address named by a
+    # table needs nothing at all.
+    assert coord.device_is_named(PANEL) is True
+    assert coord.device_is_named(BLE_MGMT) is True
+
+    # Its own name settles it...
+    _report(coord, COMBI, "Identify", "Name", "Combi 6 E")
+    assert coord.device_is_named(COMBI) is True
+
+    # ...and so does the owner's label, for a device that publishes no
+    # Identify at all.
+    other = _Coord()
+    _report(other, BOTTLE_LEFT, "GasBtl", "Name", "Links")
+    assert other.device_is_named(BOTTLE_LEFT) is True
+
+    # And nothing waits forever: once discovery has finished, whatever has not
+    # named itself is not going to, so the address placeholder is the final
+    # answer rather than a value still in flight.
+    third = _Coord()
+    _report(third, ROOF_AC, "AirCirculation", "FanLevel", 2)
+    assert third.device_is_named(ROOF_AC) is False
+    third._bus.discovered = True
+    assert third.device_is_named(ROOF_AC) is True
+
+
+def test_a_name_that_arrives_late_reaches_the_device_registry() -> None:
+    """A device is registered by its entities, which may all predate its name.
+
+    The gate above covers a device that names itself during startup. This is
+    the rest: a sensor that wakes up minutes in gets its entities as soon as
+    discovery is over, under the address placeholder, and would otherwise keep
+    that name until something else happened to build an entity on it.
+    """
+    stubs.DEVICE_REGISTRY.clear()
+    coord = _Coord()
+    coord._bus.discovered = True
+    _report(coord, BOTTLE_LEFT, "GasBtl", "FillLevelP", 49)
+    # What an entity's construction does, with the name that was current then.
+    registry = stubs.DEVICE_REGISTRY
+    registry.async_get_or_create(**coord.device_info(BOTTLE_LEFT))
+    entry = registry.async_get_device(
+        identifiers={("truma_inetx", f"{coord.unique_id}_{BOTTLE_LEFT:04X}")}
+    )
+    assert entry.name == "Bus device 0x0603"
+    assert entry.model is None
+
+    _report(coord, BOTTLE_LEFT, "Identify", "Name", "Truma LevelControl")
+    _report(coord, BOTTLE_LEFT, "GasBtl", "Name", "Links")
+
+    assert entry.name == "Truma LevelControl Links"
+    assert entry.model == "Truma LevelControl"
+
+
+def test_a_device_name_does_not_go_backwards() -> None:
+    """Three named devices fell back to "Bus device 0xNNNN" on #23's vehicle.
+
+    Every entity built on a device registers that device afresh, so one built
+    early in a session re-registers it under the placeholder and takes the
+    model with the name. Nothing built later put it back -- the entities that
+    would have were already made.
+    """
+    stubs.DEVICE_REGISTRY.clear()
+    coord = _Coord()
+    coord._bus.discovered = True
+    _report(coord, COMBI, "Identify", "Name", "Combi 6 E")
+    registry = stubs.DEVICE_REGISTRY
+    entry = registry.async_get_or_create(**coord.device_info(COMBI))
+    assert entry.name == "Combi 6 E"
+
+    # An entity constructed while the bus was still empty, the way a restart
+    # does it: the placeholder goes back into the registry.
+    registry.async_get_or_create(
+        identifiers={("truma_inetx", f"{coord.unique_id}_{COMBI:04X}")},
+        name=f"Bus device 0x{COMBI:04X}",
+        model=None,
+    )
+    assert entry.name == "Bus device 0x0201"
+
+    # The next frame that changes anything puts it right.
+    _report(coord, COMBI, "AirHeating", "Temp", 228)
+    assert entry.name == "Combi 6 E"
+    assert entry.model == "Combi 6 E"
+
+    # ...and a device the owner has renamed keeps the owner's name: Home
+    # Assistant shows that in preference to ours, and nothing here may touch
+    # it.
+    entry.name_by_user = "Heizung"
+    _report(coord, COMBI, "AirHeating", "Temp", 229)
+    assert entry.name_by_user == "Heizung"
 
 
 def _main() -> None:

@@ -22,9 +22,19 @@ Devices are named from what the bus says: the panel's name for them
 sensor publishes `GasBtl.Name`, the word you typed at the panel, so two bottles
 are "Truma LevelControl Links" and "… Rechts" rather than two of one name. With
 no label, or two devices sharing one, the address instance separates them
-("Truma LevelControl 3", "… 4"). A device publishing no name at all is named
-after its address, because a device class is not a product: a Dometic air
-conditioner and a Schaudt electrical block share one.
+("Truma LevelControl 3", "… 4") — but only where there is something to
+separate: a bus whose names already differ keeps them whole. A device
+publishing no name at all is named after its address, because a device class
+is not a product: a Dometic air conditioner and a Schaudt electrical block
+share one.
+
+An entity waits for its device to be named before it is created. Home
+Assistant builds an entity id from the device's name and never revises it, and
+the name arrives late — subscribing makes the panel push values seconds before
+the descriptions that carry `Identify.Name` are asked for — so an entity built
+on the value alone would carry `bus_device_0x0201` for good. The wait costs
+seconds and ends when discovery does, so a device that names itself nothing
+still gets its entities, under its address.
 
 Bus addresses are reassigned when a device is re-paired, so a re-pairing means
 new Home Assistant devices and new entities. The label survives it — it is

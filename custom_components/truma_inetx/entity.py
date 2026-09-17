@@ -131,6 +131,13 @@ def async_add_rows(
     def _check() -> None:
         new: list[Entity] = []
         for addr, device in list(coordinator.data.devices.items()):
+            if not coordinator.device_is_named(addr):
+                # Not recorded as made: the entity is built at the update that
+                # settles the device's name. Home Assistant mints an entity id
+                # from the device name at creation and never revises it, so
+                # building now would stamp "bus_device_0x0201" into it for
+                # good -- see TrumaCoordinator.device_is_named.
+                continue
             for key in list(device.params):
                 topic, _, param = key.partition(".")
                 for row in rows_for(topic, param, platform):
@@ -183,6 +190,11 @@ def async_add_per_device(
         new: list[Entity] = []
         for addr, device in list(coordinator.data.devices.items()):
             if addr in made or not device.reports(topic, param):
+                continue
+            # Same wait as async_add_rows, and this is the path the climate
+            # entity is built on -- climate.bus_device_0x0201 is what it cost
+            # on the vehicle of #23.
+            if not coordinator.device_is_named(addr):
                 continue
             made.add(addr)
             new.append(build(addr))
