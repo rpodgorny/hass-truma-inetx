@@ -8,6 +8,7 @@ advertised name and the address is treated as a mutable connection detail.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 import voluptuous as vol
@@ -26,7 +27,15 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
-from .bt import advert_name, async_resolve_device, is_panel_advert
+from .bt import (
+    advert_name,
+    any_panel_named,
+    async_known_name,
+    async_resolve_device,
+    async_sweep_for_names,
+    async_sweep_for_names_soon,
+    is_panel_advert,
+)
 from .const import DOMAIN, LOGGER
 from .coordinator import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
 from .pairing import ensure_bonded
@@ -97,6 +106,11 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         # raw MAC. A name-carrying advertisement follows shortly and keys the
         # flow properly.
         #
+        # "Follows shortly" is not free: the name rides the scan response, and
+        # nothing solicits one on a scanner that is not actively scanning. So
+        # ask for a window on the way out, rate-limited, rather than aborting
+        # here several times a second forever — see bt.async_sweep_for_names.
+        #
         # What is deliberately NOT required is that the name start with the
         # original panel's prefix. That test turned a renamed panel — the iNet X
         # Panel 2 of issue #6 — into a silent abort: the service-UUID matcher
@@ -105,8 +119,11 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         # integration not hearing the panel at all. Reaching us at all means a
         # Truma-proprietary service UUID matched, which is identification
         # enough; the name is only wanted as a key.
-        name = advert_name(discovery_info)
+        name = advert_name(discovery_info) or await async_known_name(
+            discovery_info.address
+        )
         if name is None:
+            async_sweep_for_names_soon(self.hass)
             return self.async_abort(reason="awaiting_name")
         await self.async_set_unique_id(name)
         # The RPA rotates roughly every 15 minutes and every rotation lands
@@ -123,7 +140,13 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             reload_on_update=False,
         )
         self._discovery_info = discovery_info
-        self.context["title_placeholders"] = {"name": discovery_info.name}
+        # The name the flow was keyed on, not the one the advertisement
+        # carried: those differ whenever the advert had none and BlueZ
+        # supplied it, and everything downstream -- the entry title, the
+        # stored CONF_NAME, and the resolver that matches adverts against it
+        # -- needs the key rather than the address that stood in for it.
+        self._name = name
+        self.context["title_placeholders"] = {"name": name}
         return await self.async_step_confirm()
 
     async def async_step_confirm(
@@ -131,14 +154,14 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Confirm adding a discovered panel, then pair."""
         assert self._discovery_info is not None
+        assert self._name is not None
         if user_input is not None:
-            self._name = self._discovery_info.name
             self._address = self._discovery_info.address
             return await self.async_step_pair()
         self._set_confirm_only()
         return self.async_show_form(
             step_id="confirm",
-            description_placeholders={"name": self._discovery_info.name},
+            description_placeholders={"name": self._name},
         )
 
     async def async_step_user(
@@ -155,16 +178,21 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_pair()
 
         configured_names = self._async_current_ids()
-        for info in async_discovered_service_info(self.hass):
-            if not is_panel_advert(info):
-                continue
-            # Same reasoning as async_step_bluetooth: a panel is identified by
-            # its service UUID or its name, but only a real name can key it.
-            name = advert_name(info)
-            if name is None or name in configured_names:
-                continue
-            # dedupe by stable name; keep the most recent advertisement
-            self._discovered[name] = info
+        await self._collect_discovered(configured_names)
+        if not self._discovered:
+            # Nothing that can be keyed. On a scanner that is not actively
+            # scanning that is the normal state, not an empty room: the panel
+            # may well be advertising, and heard, and still have given no name
+            # (bt.async_sweep_for_names). Ask for windows and keep looking
+            # before telling the user there is nothing there -- this step is a
+            # deliberate user action, so it is the one place worth waiting.
+            # The stop condition watches the bus rather than this flow's own
+            # state: collecting needs to ask BlueZ, which cannot be done from
+            # inside a sweep's synchronous check.
+            await async_sweep_for_names(
+                self.hass, until=partial(any_panel_named, self.hass)
+            )
+            await self._collect_discovered(configured_names)
 
         if not self._discovered:
             return self.async_abort(reason="no_devices_found")
@@ -175,6 +203,21 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
                 {vol.Required(CONF_ADDRESS): vol.In(sorted(self._discovered))}
             ),
         )
+
+    async def _collect_discovered(self, configured_names: set[str]) -> None:
+        """Fold every keyable panel advert heard so far into ``_discovered``."""
+        for info in async_discovered_service_info(self.hass):
+            if not is_panel_advert(info):
+                continue
+            # Same reasoning as async_step_bluetooth: a panel is identified by
+            # its service UUID or its name, but only a real name can key it --
+            # from this advert, or failing that from what BlueZ remembers for
+            # the address, which is all a bonded panel leaves us.
+            name = advert_name(info) or await async_known_name(info.address)
+            if name is None or name in configured_names:
+                continue
+            # dedupe by stable name; keep the most recent advertisement
+            self._discovered[name] = info
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None

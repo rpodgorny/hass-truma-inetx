@@ -118,12 +118,29 @@ class _Shown(Exception):
         self.schema = schema
 
 
+class _Hass:
+    """The parts of HomeAssistant the discovery steps touch.
+
+    The background task is recorded and dropped rather than run: what it does
+    -- ask for an active scan window -- has its own test file, and a coroutine
+    left pending when the loop closes warns.
+    """
+
+    def __init__(self) -> None:
+        self.data: dict = {}
+        self.background: list[str] = []
+
+    def async_create_background_task(self, coro, name, eager_start=True):
+        self.background.append(name)
+        coro.close()
+
+
 class _ConfigFlow:
     """The parts of homeassistant.config_entries.ConfigFlow the steps touch."""
 
     # Class attributes, not __init__: TrumaConfigFlow defines its own __init__
     # and does not chain up, exactly as it does under the real base class.
-    hass = object()
+    hass = _Hass()
     unique_id: str | None = None
     source = "bluetooth"
 
@@ -155,6 +172,15 @@ class _ConfigFlow:
         raise _Shown(step_id, data_schema)
 
 
+async def _nothing_remembered(_address):
+    """A BlueZ with no stored device for this address."""
+    return None
+
+
+async def _no_new_adverts(_hass, _duration=None) -> None:
+    """A sweep that finds nothing new: what the adverts say is all there is."""
+
+
 def _load():
     """Import the real const/bt/config_flow with externals stubbed out."""
     _mod("homeassistant", __path__=[])
@@ -178,11 +204,15 @@ def _load():
         async_ble_device_from_address=lambda *a, **kw: None,
         async_discovered_service_info=lambda _hass, connectable=True: list(ADVERTS),
         async_scanner_devices_by_address=lambda *a, **kw: [],
+        async_request_active_scan=_no_new_adverts,
     )
     _mod("truma_pkg", __path__=[str(SRC)])
     # config_flow only reads two names off the coordinator, and pairing is
     # never reached by the steps under test.
     _mod("truma_pkg.coordinator", CONF_POLL_INTERVAL="poll", DEFAULT_POLL_INTERVAL=0)
+    # A BlueZ that remembers no device: this file is about what the air
+    # carries, so the fallback behind advert_name must contribute nothing.
+    _mod("truma_pkg.ble", device_from_bluez=_nothing_remembered)
     _mod("truma_pkg.pairing", ensure_bonded=None)
 
     def _real(name: str):
@@ -202,6 +232,10 @@ def _load():
 
 
 CONST, BT, CF = _load()
+# The retry loop behind the manual step has its own file; here it would only
+# make every empty-room check wait out a real 30 s deadline.
+BT.SWEEP_DEADLINE = 0.0
+BT.SWEEP_RETRY_PAUSE = 0.0
 
 
 def _discover(info: _Info):
@@ -269,6 +303,20 @@ def test_an_address_is_not_a_name() -> None:
     assert BT.advert_name(_Info(name=RPA, address=RPA)) is None
     assert BT.advert_name(_Info(name=RPA.lower(), address=RPA)) is None
     assert BT.advert_name(_Info(name="", address=RPA)) is None
+    # BlueZ spells it with dashes instead, for a device it has no name for,
+    # and that reaches us whenever the object came from BlueZ rather than from
+    # Home Assistant's own scanner. Measured on the van (2026-09-18): it went
+    # straight through a test written against the colon form, and the config
+    # entry was keyed "4D-6B-5F-62-51-68" -- a private address that rotates.
+    assert BT.advert_name(_Info(name=RPA.replace(":", "-"), address=RPA)) is None
+    assert BT.advert_name(_Info(name=RPA.replace(":", ""), address=RPA)) is None
+    assert BT.advert_name(_Info(name=RPA.replace(":", "_"), address=RPA)) is None
+    # A different device's address is still not this one's name, but it is not
+    # this function's job to say so -- only to refuse the address it was given.
+    assert BT.advert_name(_Info(name="AA-BB-CC-DD-EE-FF", address=RPA)) is not None
+    # A name is not reduced to the hex it happens to contain.
+    assert BT.advert_name(_Info(name="Truma iNetX-FFB4D1", address=RPA)) is not None
+    assert BT.advert_name(_Info(name="ABCDEF", address=RPA)) is not None
 
 
 def test_a_renamed_panel_is_discovered_and_keyed_by_its_own_name() -> None:

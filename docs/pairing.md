@@ -14,6 +14,27 @@ actively in add-device mode. It is genuinely finicky — these rules matter:
 
 Pairing normally completes in a few seconds.
 
+## If the panel never appears at all
+
+The panel's advertisement carries one Truma service UUID and nothing else. Its
+name rides the *scan response*, which only an **active** scan asks for. That
+matters because discovery is keyed on the name — the address rotates every few
+minutes, so keying on it would produce a new card per rotation — and a panel
+Home Assistant has heard but cannot name is a panel it cannot offer.
+
+Home Assistant's default scanning mode, `auto`, starts passive and turns the
+radio active only for scheduled windows: four minutes after the scanner starts,
+then once every twelve hours. So both entry points — the discovery card and
+**+ Add Integration** — ask for a short active window of their own when they
+have nothing to offer, rather than waiting one out.
+
+An adapter pinned to `passive` never opens one, and the panel is never offered.
+Pair on `auto` or `active`.
+
+A host that has bonded this panel before hides all of this: BlueZ keeps the
+name and hands it over whatever the scan mode. The cache goes when the bond
+does, which is exactly the state a first pairing is in.
+
 ## If pairing fails
 
 Work through these in order, always re-entering add-device mode before each

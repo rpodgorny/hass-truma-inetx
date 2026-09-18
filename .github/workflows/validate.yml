@@ -53,6 +53,7 @@ jobs:
           # loudly, which is the safe direction to be wrong in.
           needs_library="
           test_panel2_discovery.py
+          test_passive_scan_discovery.py
           test_device_params.py
           test_bus_dump_tool.py
           test_param_discovery.py
@@ -82,6 +83,7 @@ jobs:
       # test drives the real flow rather than a stub of it.
       - run: pip install voluptuous
       - run: python3 tests/test_panel2_discovery.py
+      - run: python3 tests/test_passive_scan_discovery.py
       # The tests that need the protocol library: they build real frames and
       # parse them back rather than trusting a stub to be faithful.
       - run: pip install cbor2==5.6.5

@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from functools import partial
 from typing import TYPE_CHECKING
 
 from bleak.backends.device import BLEDevice
@@ -35,7 +36,7 @@ from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
-from .const import LOGGER, has_truma_uuid, looks_like_panel
+from .const import DOMAIN, LOGGER, has_truma_uuid, looks_like_panel
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -56,6 +57,20 @@ def is_panel_advert(info: BluetoothServiceInfoBleak) -> bool:
     return looks_like_panel(info.name, info.service_uuids)
 
 
+def _as_address(value: str) -> str:
+    """``value`` as bare address hex, or ``""`` when it is not an address.
+
+    Separators only -- a name is not reduced to the hex it happens to contain,
+    so "Truma iNetX-FFB4D1" stays a name. Twelve hex digits or nothing.
+    """
+    bare = value.upper()
+    for sep in (":", "-", "_", " "):
+        bare = bare.replace(sep, "")
+    if len(bare) == 12 and all(c in "0123456789ABCDEF" for c in bare):
+        return bare
+    return ""
+
+
 def advert_name(info: BluetoothServiceInfoBleak) -> str | None:
     """The panel's stable advertised name, or ``None`` if it has not given one.
 
@@ -66,11 +81,191 @@ def advert_name(info: BluetoothServiceInfoBleak) -> str | None:
     add-device mode, measured in issue #6.) That address is a rotating RPA, so
     keying anything on it produces a fresh, MAC-titled discovery every rotation
     instead of one correctly-named panel. Callers that need a key must wait for
-    a named advert; one follows shortly.
+    a named advert -- and, on a scanner that is not actively scanning, ask for
+    one first: see :func:`async_sweep_for_names`.
+
+    The address does not always come back spelled the way ``info.address``
+    spells it. Home Assistant substitutes the colon form, but BlueZ's own
+    fallback for a device it has no name for is the address with dashes, and
+    that reaches us as a name whenever the object it came from is one BlueZ
+    made itself. Measured on the van (2026-09-18): a bond completed while the
+    panel was in add-device mode and still nameless, and the config entry it
+    produced was keyed ``4D-6B-5F-62-51-68`` -- unique_id, title and stored
+    name all a private address due to rotate within the quarter hour. So this
+    compares addresses as addresses, not as strings.
     """
-    if not info.name or info.name.upper() == info.address.upper():
+    if not info.name:
+        return None
+    if (bare := _as_address(info.name)) and bare == _as_address(info.address):
         return None
     return info.name
+
+
+# How long an on-demand active window runs. Home Assistant clamps it to
+# habluetooth's 5..35s; ten seconds is several advertising intervals of a panel
+# that sends roughly one a second.
+SWEEP_SECONDS = 10.0
+# How long to leave the bus alone afterwards. Every advertisement the panel
+# sends reaches the discovery step, a few a second, and each one of them finds
+# no name -- so without this the first nameless panel in range would ask for a
+# window continuously.
+SWEEP_COOLDOWN = 120.0
+# How long to keep asking. One request is not one window: the scheduler skips
+# any scanner that is mid-connect, and on a host with a single adapter and
+# other integrations polling devices over it, that is a large slice of the
+# time. Measured on the van (2026-09-18): the first window asked for opened
+# nothing at all, and habluetooth said why -- "connect in progress and no
+# fallback scanner". A second adapter would have taken the window; there isn't
+# one, so the answer is to come back in a moment and ask again.
+SWEEP_DEADLINE = 30.0
+# Pause between requests. A refused one returns at once, so without this the
+# retry would spin rather than wait for the connect to finish.
+SWEEP_RETRY_PAUSE = 2.0
+_SWEEP_LAST = f"{DOMAIN}_name_sweep"
+
+
+def any_panel_named(hass: HomeAssistant) -> bool:
+    """Whether some advertisement that looks like a panel now carries a name.
+
+    The stop condition for a sweep started by the discovery step, which has
+    already returned and has no flow state left to look at.
+    """
+    return any(
+        advert_name(info) is not None
+        for info in bluetooth.async_discovered_service_info(hass, connectable=False)
+        if is_panel_advert(info)
+    )
+
+
+async def async_sweep_for_names(
+    hass: HomeAssistant,
+    *,
+    cooldown: float = 0.0,
+    until: Callable[[], bool] | None = None,
+) -> bool:
+    """Ask the AUTO-mode scanners for active scans. Was anything asked for?
+
+    A name reaches Home Assistant only in a scan response, and only an active
+    scan asks for one. Home Assistant's default scanning mode is AUTO, which
+    starts passive and turns the radio active only for scheduled windows: once
+    four minutes after the scanner starts, then once every twelve hours
+    (habluetooth ``AUTO_INITIAL_SWEEP_DELAY`` / ``AUTO_REDISCOVERY_INTERVAL``,
+    fifteen seconds a window). There are per-device windows too, but only for
+    an address some integration registered a Bluetooth callback on, and this
+    one registers none -- it reads the advertisement history instead.
+
+    Outside those windows nothing solicits a scan response, so nothing sends
+    one. Measured on the van (2026-09-18): forty-five seconds of passive
+    scanning, 468 advertising reports, not one Name field from any device on
+    the bus. The panel's advertisement proper is twenty-one bytes -- flags, and
+    one Truma service UUID -- which is enough to *recognise* a panel and not
+    enough to *key* one. So discovery aborted "awaiting_name" on every advert
+    and the manual step reported "no devices found", on a panel sitting there
+    advertising, with no way to tell that from not hearing it at all.
+
+    It only looks like it works on a host that has bonded the panel before:
+    BlueZ keeps the name in ``/var/lib/bluetooth/<adapter>/<addr>/info`` and
+    hands it over whatever the scan mode. Drop the bond and the name goes with
+    it, which is exactly the state a first pairing is in.
+
+    ``cooldown``: skip if a sweep was asked for that recently. A sweep is
+    bus-wide and concurrent callers dedupe into one window, so the cost of
+    asking is small -- but not small enough to ask several times a second.
+
+    ``until``: checked after each window; stop as soon as it is true. Without
+    one, keep asking until ``SWEEP_DEADLINE``, since a request the scheduler
+    refused returns success-shaped and there is nothing else to tell us.
+
+    ACTIVE and PASSIVE scanners ignore the request, so this changes nothing on
+    a host that is already active-scanning, and cannot rescue one pinned to
+    passive: no window is ever opened there and no name is ever learnt.
+    """
+    try:
+        from homeassistant.components.bluetooth import async_request_active_scan
+    except ImportError:  # pragma: no cover - Home Assistant before 2026.9
+        return False
+    now = time.monotonic()
+    last = hass.data.get(_SWEEP_LAST)
+    if cooldown and last is not None and now - last < cooldown:
+        return False
+    hass.data[_SWEEP_LAST] = now
+    deadline = now + SWEEP_DEADLINE
+    while True:
+        LOGGER.debug(
+            "Truma: asking for a %ss active scan to learn panel names", SWEEP_SECONDS
+        )
+        try:
+            await async_request_active_scan(hass, SWEEP_SECONDS)
+        except Exception as exc:  # noqa: BLE001 - discovery must survive it
+            LOGGER.debug("Truma: active scan request failed: %s", exc)
+            return False
+        if until is not None and until():
+            return True
+        if time.monotonic() >= deadline:
+            LOGGER.debug(
+                "Truma: %ss of active scans learnt no panel name", SWEEP_DEADLINE
+            )
+            return True
+        await asyncio.sleep(SWEEP_RETRY_PAUSE)
+
+
+async def async_known_name(address: str) -> str | None:
+    """The panel's name as BlueZ remembers it for ``address``, or ``None``.
+
+    The last resort behind :func:`advert_name`, and the only thing that works
+    at all once the panel is bonded. Measured on the van (2026-09-18): after a
+    successful bond the panel stopped answering scan requests entirely -- three
+    active windows, not one scan response -- so nothing on air carried a name
+    any more, and re-adding the integration had nothing to key on. BlueZ had it
+    the whole time, stored beside the keys::
+
+        /var/lib/bluetooth/E4:5F:01:0B:37:DD/50:98:93:FF:B4:D1/info
+        [General]
+        Name=Truma iNetX-FFB4D1
+
+    Home Assistant does not pass it on: advertisements reach it over an MGMT
+    side channel carrying raw AD bytes, and ``local_name or device.name or
+    address`` never consults the BlueZ object. So ask BlueZ directly.
+
+    ``Name`` in preference to ``Alias``: the first is what the panel called
+    itself, the second is what somebody may have renamed it to locally, and a
+    unique_id wants the one the panel will still answer to.
+
+    Imported where it is used: ``ble`` is the transport, and this module is
+    deliberately not built on top of it.
+    """
+    from .ble import device_from_bluez
+
+    device = await device_from_bluez(address)
+    if device is None:
+        return None
+    details = getattr(device, "details", None)
+    props = details.get("props") if isinstance(details, dict) else None
+    name = (props or {}).get("Name") or getattr(device, "name", None)
+    if not name:
+        return None
+    name = str(name)
+    if (bare := _as_address(name)) and bare == _as_address(address):
+        # BlueZ's own fallback for a device it has no name for either.
+        return None
+    return name
+
+
+def async_sweep_for_names_soon(hass: HomeAssistant) -> None:
+    """Start :func:`async_sweep_for_names` in the background, rate-limited.
+
+    For callers that must answer now and cannot wait out the window -- the
+    discovery step, which has to return an abort while the sweep it just asked
+    for is still running. The named advert then arrives on its own and opens a
+    fresh flow, which is how that step already expects to be reached.
+    """
+    hass.async_create_background_task(
+        async_sweep_for_names(
+            hass, cooldown=SWEEP_COOLDOWN, until=partial(any_panel_named, hass)
+        ),
+        "truma_inetx active scan for panel names",
+        eager_start=True,
+    )
 
 
 def is_remote_scanner(scanner: object) -> bool:
