@@ -369,6 +369,36 @@ def test_identity_is_last_resort() -> None:
     assert BT.async_resolve_device(None, PANEL) == f"proxy:{IDENTITY}"
 
 
+def test_an_address_the_panel_has_left_loses_to_a_live_one() -> None:
+    """Issue #32: the kind preference is for addresses that are both on air.
+
+    Measured on the van (2026-09-18). After a bond was dropped, an identity
+    entry stayed in Home Assistant's cache with no signal behind it (rssi
+    -127) while the panel advertised an RPA at -51. Ranking kind above
+    freshness handed back the dead one every time -- for a whole 60 s pairing
+    window, and before that for every reconnect at 45 s a go.
+    """
+    _set_adverts(
+        _Info(name=PANEL, address=RPA, time=1000.0),
+        _Info(name=PANEL, address=IDENTITY, time=100.0),  # left behind long ago
+    )
+    _set_route(
+        _ScannerDevice(RPA, remote=False),
+        _ScannerDevice(IDENTITY, remote=False),
+    )
+    # Even for a host that has learned it connects on the identity address:
+    # a memory says which kind answers, not that a dead entry is alive.
+    assert (
+        BT.async_resolve_device(None, PANEL, prefer_identity=True)
+        == f"local:{RPA}"
+    )
+    # And it is still handed back when it is all there is -- rank, never
+    # remove.
+    _set_adverts(_Info(name=PANEL, address=IDENTITY, time=100.0))
+    _set_route(_ScannerDevice(IDENTITY, remote=False))
+    assert BT.async_resolve_device(None, PANEL) == f"local:{IDENTITY}"
+
+
 def test_remembered_identity_is_dialled_first() -> None:
     """A host that connects on its identity address must not walk the RPAs.
 
@@ -687,6 +717,7 @@ if __name__ == "__main__":
     test_none_when_unreachable()
     test_address_kind()
     test_identity_is_last_resort()
+    test_an_address_the_panel_has_left_loses_to_a_live_one()
     test_remembered_identity_is_dialled_first()
     test_preference_reorders_but_never_excludes()
     test_avoid_outranks_the_preference()

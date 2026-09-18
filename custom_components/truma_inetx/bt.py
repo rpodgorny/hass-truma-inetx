@@ -126,6 +126,15 @@ def async_panel_advertising(hass: HomeAssistant, name: str) -> bool:
 ADDR_IDENTITY = "identity"
 ADDR_RPA = "rpa"
 
+# How far behind the panel's freshest advert a candidate may be and still be
+# treated as on air. The panel rotates its RPA every few minutes, so anything
+# this far back has most likely been left behind; Home Assistant keeps such an
+# entry for much longer, with the rssi it last had or -127 for none at all.
+# Deliberately generous: a live address can itself go a while unheard where a
+# static advert is reported once per discovery session (#31), and the test is
+# relative -- when every candidate is equally old, none of them is stale.
+STALE_ADVERT_SECONDS = 120.0
+
 
 def address_kind(name: str, address: str) -> str:
     """Return whether ``address`` is the panel's identity address or an RPA.
@@ -140,6 +149,33 @@ def address_kind(name: str, address: str) -> str:
     if address.replace(":", "").upper().endswith(suffix):
         return ADDR_IDENTITY
     return ADDR_RPA
+
+
+def async_has_proxy_route(hass: HomeAssistant, name: str) -> bool:
+    """Whether a remote (proxy) scanner can currently reach the panel.
+
+    This is not a transport choice and must not become one -- Home Assistant
+    scores every connectable path at connect time and this module has no say
+    in it. It answers one narrower question, for pairing only: may this host
+    bond over its own adapter *before* trying to connect?
+
+    Where no proxy can hear the panel, yes. The bond then lands on the only
+    route there is, which is the route the session will use. Where a proxy can
+    hear it, no: a local bond on such a host can end up on a path nothing
+    connects over, and every later session then fails at encryption -- the
+    failure c91f711 was written to stop.
+
+    Pairing needs the answer because an unbonded panel drops every link it is
+    offered, so on a proxyless host the connect that bonding used to wait for
+    can never succeed (#26); see ``ensure_bonded``.
+    """
+    for info in _panel_infos(hass, name):
+        for sd in bluetooth.async_scanner_devices_by_address(
+            hass, info.address, connectable=True
+        ):
+            if is_remote_scanner(sd.scanner):
+                return True
+    return False
 
 
 def async_resolve_device(
@@ -207,15 +243,25 @@ def async_resolve_device(
     infos = _panel_infos(hass, name)
     avoid_norm = {a.upper() for a in avoid}
     wanted = ADDR_IDENTITY if prefer_identity else ADDR_RPA
-    # Rank, never remove. Freshest first, but an avoided address sinks below
-    # every other candidate and the unwanted kind of address sinks below the
-    # wanted one:
+    # An address the panel has left goes on advertising in Home Assistant's
+    # cache long after it stops answering, and the kind preference used to
+    # outrank freshness outright -- so a dead RPA beat a live identity every
+    # reconnect (#32), and a dead identity beat the live RPA the panel was
+    # pairing on (measured on the van, 2026-09-18: Pair() paged an entry at
+    # rssi -127 for a whole minute while the panel advertised at -51). The
+    # kind preference is for choosing between addresses that are both on air;
+    # it has nothing to say about one that is not.
+    newest = max((i.time for i in infos), default=0.0)
+    # Rank, never remove -- a stale candidate is still handed back when it is
+    # all there is, on the same reasoning as ``avoid``: the cache may simply
+    # have missed the advert that would refresh it.
     #
-    #   fresh→stale wanted | other kind | avoided wanted | avoided other
+    #   fresh wanted | fresh other kind | stale … | avoided …
     candidates = sorted(
         infos,
         key=lambda i: (
             i.address.upper() in avoid_norm,
+            newest - i.time > STALE_ADVERT_SECONDS,
             address_kind(name, i.address) != wanted,
             -i.time,
         ),

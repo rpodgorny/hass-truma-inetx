@@ -50,14 +50,25 @@ from dbus_fast.service import ServiceInterface, method
 from homeassistant.core import HomeAssistant
 
 from .ble import client_is_proxy
-from .bt import async_resolve_device
-from .const import LOGGER
+from .bt import async_has_proxy_route, async_resolve_device
+from .const import LOGGER, has_truma_uuid
 from .truma.const import CHAR_CMD
 
 BLUEZ = "org.bluez"
 _AGENT_PATH = "/truma_inetx/agent"
 _PAIR_CALL_TIMEOUT = 8.0
 _POLL_INTERVAL = 1.0
+# What the BlueZ path is guaranteed, however the connect rotation spends
+# itself. Measured on the van (2026-09-18): two candidate addresses at the
+# ~20 s bleak takes to give up on each left the hand-over 15 s of a 60 s
+# budget and it timed out; the same bond took 3.2 s when it had the room.
+_BLUEZ_RESERVE = 25.0
+# How long a Pair() call BlueZ is still working on is left alone. The call
+# itself is abandoned at _PAIR_CALL_TIMEOUT, but the daemon carries on --
+# and answers every further call with InProgress, which is not a refusal
+# and must not be retried as one (measured on the van, 2026-09-18: two
+# InProgress answers were the whole of a 15 s window).
+_PAIR_PENDING_WAIT = 12.0
 
 
 # --- bonding -----------------------------------------------------------------
@@ -102,6 +113,33 @@ async def ensure_bonded(
     (and on failure) ``client`` is ``None``. Safe to call when already bonded.
     """
     deadline = time.monotonic() + timeout
+    # Bond before dialling where dialling cannot work. A panel with no bond
+    # drops every link it is offered, so on a host whose own adapter can see
+    # it there is nothing for a connect to learn and a whole budget for it to
+    # spend: this used to reach the BlueZ path with nothing left (#26), and
+    # even with the hand-over in place two candidate addresses left it 15 s of
+    # 60. A proxyless host bonds where it will connect, which is what 0.7.1b5
+    # did before connect-first, and what c91f711 was never arguing against --
+    # its case is the host that has *both*, where a local bond can land on a
+    # path nothing uses. That host still dials first.
+    if not async_has_proxy_route(hass, name) and _live_device_path(
+        hass, name, adapter_path
+    ):
+        LOGGER.debug(
+            "Truma %s: no proxy route, so bonding through BlueZ before dialling",
+            name,
+        )
+        if await _ensure_bonded_bluez(
+            name,
+            address,
+            adapter_path=adapter_path,
+            timeout=max(deadline - time.monotonic(), 0.0),
+            hass=hass,
+        ):
+            return True, None
+        # Not bonded. Fall through rather than give up: the panel may yet
+        # answer a link, and the rotation below is what finds the address it
+        # answers on.
     last_exc: Exception | None = None
     # The panel advertises a post-pairing PHANTOM RPA alongside the live one:
     # same name, both reachable, near-identical timestamps, but the phantom
@@ -120,6 +158,9 @@ async def ensure_bonded(
     # behind it and is the rotation's business, while a connect failure on
     # every candidate means no transport was ever chosen at all (#26).
     connect_failed: set[str] = set()
+    # Never more than half the budget: the reserve is there so a slow rotation
+    # cannot leave the bond nothing, not so a short timeout skips dialling.
+    reserve = min(_BLUEZ_RESERVE, timeout / 2)
     while time.monotonic() < deadline:
         device = async_resolve_device(hass, name, avoid=avoid)
         if device is None:
@@ -131,19 +172,26 @@ async def ensure_bonded(
             avoid.clear()
             await asyncio.sleep(1.5)
             continue
-        if device.address.upper() in connect_failed and _live_device_path(
-            hass, name, adapter_path
-        ):
-            # The resolver has handed back an address we already failed to
-            # connect on, so every candidate the panel is advertising has had
-            # its turn -- the rotation has wrapped with nothing to show. Since
-            # BlueZ can see the panel, bond there: Device1.Pair() brings up its
-            # own link and does the SMP exchange that the plain connect was
-            # waiting for the panel to volunteer.
+        wrapped = device.address.upper() in connect_failed
+        # Only once dialling has actually failed at something. A link that
+        # establishes and then refuses the bond is the rotation's case (the
+        # error-97 path), and handing that to a local bond is the c91f711
+        # mistake; the reserve is for a panel that answers nothing.
+        starved = bool(connect_failed) and time.monotonic() >= deadline - reserve
+        if (wrapped or starved) and _live_device_path(hass, name, adapter_path):
+            # Either the resolver has handed back an address we already
+            # failed to connect on -- every candidate has had its turn and the
+            # rotation has wrapped with nothing to show -- or the connect phase
+            # has spent everything it may and the reserve is all that is left.
+            # Since BlueZ can see the panel, bond there: Device1.Pair() brings
+            # up its own link and does the SMP exchange that the plain connect
+            # was waiting for the panel to volunteer.
             LOGGER.debug(
-                "Truma %s: no address will establish a link; bonding through "
-                "BlueZ instead of re-dialling",
+                "Truma %s: %s; bonding through BlueZ instead of re-dialling",
                 name,
+                "no address will establish a link"
+                if wrapped
+                else "the connect rotation has used its share of the timeout",
             )
             bonded = await _ensure_bonded_bluez(
                 name,
@@ -309,9 +357,15 @@ def _find_device(
     When ``adapter_path`` is given, only devices under that adapter are
     considered, so the bond lands on the adapter HA connects through rather
     than any adapter that happens to see the panel.
+
+    The identity address is matched first, then the name, then the panel's
+    service UUID -- which is the only one of the three a panel in add-device
+    mode offers, since it drops its local name there and every address it puts
+    on air is a fresh RPA (#31).
     """
     address = address.upper()
     name_lc = name.lower()
+    matches: list[tuple[bool, int, str]] = []
     for path, ifaces in objects.items():
         if adapter_path and not path.startswith(f"{adapter_path}/"):
             continue
@@ -322,9 +376,23 @@ def _find_device(
         dev_name = dev.get("Name")
         dev_addr_v = dev_addr.value.upper() if dev_addr else ""
         dev_name_v = str(dev_name.value) if dev_name else ""
-        if dev_addr_v == address or (name_lc and name_lc in dev_name_v.lower()):
-            return path
-    return None
+        uuids = dev.get("UUIDs")
+        if dev_addr_v == address:
+            how = 0
+        elif name_lc and name_lc in dev_name_v.lower():
+            how = 1
+        elif uuids and has_truma_uuid(list(uuids.value)):
+            how = 2
+        else:
+            continue
+        # BlueZ carries RSSI only while it is actually seeing the device, and
+        # drops it when the device goes away. An object without one is a
+        # leftover -- which is what the identity address becomes the moment a
+        # bond is dropped, while the panel goes on advertising fresh RPAs
+        # (measured on the van, 2026-09-18: Pair() spent a whole minute on an
+        # identity object nothing was behind). Being seen beats how it matched.
+        matches.append(("RSSI" not in dev, how, path))
+    return min(matches)[2] if matches else None
 
 
 def _already_bonded(
@@ -434,6 +502,7 @@ async def _ensure_bonded_bluez(
     bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
     agent = _JustWorksAgent()
     registered = False
+    adapter_iface = None
     try:
         object_manager = await _get_interface(
             bus, "/", "org.freedesktop.DBus.ObjectManager"
@@ -467,6 +536,26 @@ async def _ensure_bonded_bluez(
         await agent_manager.call_request_default_agent(_AGENT_PATH)
         registered = True
 
+        # Ask BlueZ to look for the panel itself. Home Assistant's scanner
+        # reads adverts off the MGMT socket, which creates no Device1 objects,
+        # so without our own discovery the only objects on the bus are
+        # leftovers -- and Pair() can only be called on an object. This is why
+        # a manual ``bluetoothctl scan on`` always found the panel while
+        # pairing did not (measured on the van, 2026-09-18).
+        adapter_iface = None
+        if adapter_path:
+            try:
+                adapter_iface = await _get_interface(
+                    bus, adapter_path, "org.bluez.Adapter1"
+                )
+                await adapter_iface.call_set_discovery_filter(
+                    {"Transport": Variant("s", "le"), "DuplicateData": Variant("b", True)}
+                )
+                await adapter_iface.call_start_discovery()
+                LOGGER.debug("Truma %s: BlueZ discovery started for pairing", name)
+            except Exception as exc:  # noqa: BLE001 - best effort
+                LOGGER.debug("Truma %s: could not start BlueZ discovery: %s", name, exc)
+
         LOGGER.info("Truma %s: attempting Just Works bond (%ss)", name, timeout)
         start = time.monotonic()
         # Whether a bond BlueZ reports is one this call can believe. A bond
@@ -477,19 +566,31 @@ async def _ensure_bonded_bluez(
         # remaining timeout into a retry loop.
         suspect = not trust_existing_bond
         removal_tried = False
+        pair_pending_until = 0.0
         while time.monotonic() - start < timeout:
             objects = await object_manager.call_get_managed_objects()
-            path = _live_device_path(hass, name, adapter_path) or _find_device(
+            # BlueZ first: it is what Pair() is called on, and it knows
+            # which of its objects it can currently see. Home Assistant's
+            # resolver is the fallback for the case where BlueZ has nothing
+            # yet but the panel has been heard.
+            path = _find_device(
                 objects, name=name, address=address, adapter_path=adapter_path
-            )
+            ) or _live_device_path(hass, name, adapter_path)
             if path and _is_paired(objects, path) and not suspect:
                 LOGGER.info("Truma %s bonded", name)
                 return True
-            if path:
+            if path and time.monotonic() < pair_pending_until:
+                # BlueZ is still working on the call we already made. Watch the
+                # Paired property instead of asking again -- a second Pair()
+                # only earns an InProgress and throws away the poll.
+                LOGGER.debug("Truma %s: a pairing attempt is still running", name)
+            elif path:
                 failure = await _try_pair(bus, path)
                 if failure is None:
                     # Ours now, whatever was there before.
                     suspect = False
+                elif _is_in_progress(failure):
+                    pair_pending_until = time.monotonic() + _PAIR_PENDING_WAIT
                 elif suspect and not removal_tried and _is_paired(objects, path):
                     # Try-then-remove: the panel refused while BlueZ still
                     # claims a bond, so the key on this host is one the panel
@@ -507,12 +608,28 @@ async def _ensure_bonded_bluez(
         LOGGER.warning("Truma %s: pairing timed out after %ss", name, timeout)
         return False
     finally:
+        if adapter_iface is not None:
+            try:
+                await adapter_iface.call_stop_discovery()
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                LOGGER.debug("Truma stop discovery failed: %s", exc)
         if registered:
             try:
                 await agent_manager.call_unregister_agent(_AGENT_PATH)
             except Exception as exc:  # noqa: BLE001 - best effort cleanup
                 LOGGER.debug("Truma agent unregister failed: %s", exc)
         bus.disconnect()
+
+
+def _is_in_progress(failure: str) -> bool:
+    """Whether a failed ``Pair()`` means "already pairing" rather than "no".
+
+    BlueZ answers ``org.bluez.Error.InProgress`` while a pairing it accepted
+    earlier is still running -- including one this module started and stopped
+    waiting for at ``_PAIR_CALL_TIMEOUT``. Treating that as a refusal turns the
+    loop into a caller of a call it has already made.
+    """
+    return "inprogress" in failure.replace(" ", "").replace(".", "").lower()
 
 
 async def _try_pair(bus: MessageBus, path: str) -> str | None:

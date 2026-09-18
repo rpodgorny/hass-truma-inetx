@@ -56,6 +56,11 @@ IDENTITY = "84:72:93:40:1D:00"
 OTHER = "5E:2F:65:64:A0:74"
 HCI0 = "/org/bluez/hci0"
 DEV = f"{HCI0}/dev_84_72_93_40_1D_00"
+# The RPA a panel in add-device mode advertises on, and the service UUID that
+# is all it offers to recognise it by.
+RPA = "46:01:42:5A:64:5F"
+RPA_DEV = f"{HCI0}/dev_46_01_42_5A_64_5F"
+TRUMA_UUID = "fc310002-f3b2-11e8-8eb2-f2801f1b9fd1"
 
 # The wording bleak_retry_connector produced on the reporter's host, verbatim.
 NO_SERVICES = (
@@ -118,9 +123,21 @@ def _load_pairing():
     )
 
     _mod("truma_pkg", __path__=[str(SRC)])
-    _mod("truma_pkg.bt", async_resolve_device=lambda *a, **k: None)
+    _mod(
+        "truma_pkg.bt",
+        async_resolve_device=lambda *a, **k: None,
+        # Default: no proxy in earshot, which is the #26 host. Tests that
+        # need the other kind set pairing.async_has_proxy_route themselves.
+        async_has_proxy_route=lambda *a, **k: False,
+    )
     _mod("truma_pkg.ble", client_is_proxy=lambda _client: True)
-    _mod("truma_pkg.const", LOGGER=_Logger())
+    _mod(
+        "truma_pkg.const",
+        LOGGER=_Logger(),
+        has_truma_uuid=lambda uuids: any(
+            str(u).lower().startswith("fc31") for u in uuids
+        ),
+    )
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", CHAR_CMD="cmd-char")
 
@@ -151,17 +168,59 @@ class _AuthFailed(Exception):
         return "[org.bluez.Error.AuthenticationFailed] Authentication Failed"
 
 
+class _InProgress(Exception):
+    """What BlueZ answers Pair() with while a pairing it took is still running."""
+
+    def __str__(self) -> str:
+        return "[org.bluez.Error.InProgress] In Progress"
+
+
 class _Bluez:
     """BlueZ plus the panel behind it, recording every call it is asked for."""
 
-    def __init__(self, *, paired: bool, accepts: bool, removable: bool = True):
+    def __init__(
+        self,
+        *,
+        paired: bool,
+        accepts: bool,
+        removable: bool = True,
+        pairs_after: int | None = None,
+    ):
         self.paired = paired
         self.accepts = accepts
         self.removable = removable
+        # Polls after which a Pair() the daemon is still working on completes.
+        # Until then every further call earns InProgress, as on the van.
+        self.pairs_after = pairs_after
+        self.polls = 0
+        self.discovering = False
+        self.paired_path: str | None = None
+        # A leftover object for the identity address with no RSSI behind it,
+        # beside the RPA the panel is really on -- the van's state after a
+        # bond was dropped.
+        self.stale_identity = False
         self.calls: list[str] = []
 
     def objects(self) -> dict:
-        return {
+        self.polls += 1
+        if self.pairs_after is not None and self.polls > self.pairs_after:
+            self.paired = True
+        if not self.stale_identity:
+            return {
+                DEV: {
+                    "org.bluez.Device1": {
+                        "Address": _V(IDENTITY),
+                        "Name": _V(PANEL),
+                        "Paired": _V(self.paired),
+                        "RSSI": _V(-52),
+                    }
+                }
+            }
+        # The identity object is a leftover: matched by address, but BlueZ is
+        # not seeing it, so it carries no RSSI. The live RPA is nameless, as a
+        # panel in add-device mode is, and only BlueZ's own discovery creates
+        # an object for it at all.
+        objects = {
             DEV: {
                 "org.bluez.Device1": {
                     "Address": _V(IDENTITY),
@@ -170,9 +229,22 @@ class _Bluez:
                 }
             }
         }
+        if self.discovering:
+            objects[RPA_DEV] = {
+                "org.bluez.Device1": {
+                    "Address": _V(RPA),
+                    "Paired": _V(self.paired),
+                    "RSSI": _V(-51),
+                    "UUIDs": _V([TRUMA_UUID]),
+                }
+            }
+        return objects
 
     async def pair(self) -> None:
         self.calls.append("pair")
+        if self.pairs_after is not None and not self.paired:
+            # The daemon took the first call and is still working on it.
+            raise _InProgress
         if self.paired:
             # BlueZ will not pair a device it already has a key for, which is
             # exactly the state a panel that forgot its half leaves behind.
@@ -233,10 +305,12 @@ class _AgentManager:
 
 
 class _Device1:
-    def __init__(self, bluez: _Bluez) -> None:
+    def __init__(self, bluez: _Bluez, path: str) -> None:
         self._bluez = bluez
+        self._path = path
 
     async def call_pair(self) -> None:
+        self._bluez.paired_path = self._path
         await self._bluez.pair()
 
 
@@ -255,6 +329,17 @@ class _Adapter1:
     async def call_remove_device(self, path) -> None:
         await self._bluez.remove(path)
 
+    async def call_set_discovery_filter(self, _filter) -> None:
+        self._bluez.calls.append("discovery_filter")
+
+    async def call_start_discovery(self) -> None:
+        self._bluez.calls.append("start_discovery")
+        self._bluez.discovering = True
+
+    async def call_stop_discovery(self) -> None:
+        self._bluez.calls.append("stop_discovery")
+        self._bluez.discovering = False
+
 
 def _interfaces(bluez: _Bluez):
     """A ``_get_interface`` that answers from ``bluez``, asserting the paths."""
@@ -267,8 +352,8 @@ def _interfaces(bluez: _Bluez):
             assert path == "/org/bluez", path
             return _AgentManager(bluez)
         if interface == "org.bluez.Device1":
-            assert path == DEV, path
-            return _Device1(bluez)
+            assert path in (DEV, RPA_DEV), path
+            return _Device1(bluez, path)
         if interface == "org.freedesktop.DBus.Properties":
             return _Properties(bluez)
         if interface == "org.bluez.Adapter1":
@@ -306,12 +391,15 @@ def _run_ensure_bonded(
     *,
     addresses: list[str],
     bluez_sees: bool,
+    has_proxy: bool = True,
     connects: bool = False,
+    connect_delay: float = 0.0,
+    fresh_addresses: bool = False,
     bonds: bool = False,
     stop_after: int = 200,
 ):
     """Drive ``ensure_bonded`` and report what it tried and where it went."""
-    log: dict = {"tried": [], "handover": [], "bonded_over_link": 0}
+    log: dict = {"tried": [], "handover": [], "budget": [], "bonded_over_link": 0}
 
     def resolve(_hass, _name, *, avoid=(), local_only=False, prefer_identity=False):
         if local_only:
@@ -322,12 +410,20 @@ def _run_ensure_bonded(
             # Only a guard against a loop that never reaches its deadline; the
             # tests below are meant to end on the deadline, not here.
             raise _StopTest
+        if fresh_addresses:
+            # A panel whose RPA rotates faster than the rotation can wrap: no
+            # candidate is ever offered twice, so nothing but the reserve can
+            # end the dialling.
+            n = len(log["tried"])
+            return _Device(f"4{n % 10}:00:00:00:{n // 10:02X}:{n % 10:02X}")
         demoted = {a.upper() for a in avoid}
         ranked = sorted(addresses, key=lambda a: a.upper() in demoted)
         return _Device(ranked[0]) if ranked else None
 
     async def connect(_cls, device, _address, **_kw):
         log["tried"].append(device.address)
+        if connect_delay:
+            await asyncio.sleep(connect_delay)
         if not connects:
             raise RuntimeError(NO_SERVICES)
         return object()
@@ -338,6 +434,7 @@ def _run_ensure_bonded(
 
     async def bluez_bond(_name, _address, **kwargs):
         log["handover"].append(kwargs.get("trust_existing_bond"))
+        log["budget"].append(kwargs.get("timeout"))
         return True
 
     # Put every one of these back afterwards. _ensure_bonded_bluez is stubbed
@@ -349,6 +446,7 @@ def _run_ensure_bonded(
         "client_is_proxy": lambda _client: True,
         "_bond_over_link": bond_over_link,
         "_ensure_bonded_bluez": bluez_bond,
+        "async_has_proxy_route": lambda *_a, **_k: has_proxy,
         # The loop's back-off is wall-clock seconds and its deadline is not;
         # skip most of the waiting without touching asyncio.wait_for, which the
         # D-Bus helpers still need.
@@ -380,7 +478,7 @@ def test_a_panel_that_refuses_every_link_is_bonded_through_bluez(pairing) -> Non
     loop re-dialled it for the whole timeout and never registered an agent.
     """
     (bonded, client), log = _run_ensure_bonded(
-        pairing, addresses=[IDENTITY], bluez_sees=True
+        pairing, addresses=[IDENTITY], bluez_sees=True, has_proxy=True
     )
     assert bonded is True
     assert client is None, "the BlueZ path holds no link to hand off"
@@ -399,7 +497,7 @@ def test_every_address_is_tried_before_handing_over(pairing) -> None:
     would bond locally while a proxy-carried address was still untried.
     """
     (bonded, _client), log = _run_ensure_bonded(
-        pairing, addresses=[IDENTITY, OTHER], bluez_sees=True
+        pairing, addresses=[IDENTITY, OTHER], bluez_sees=True, has_proxy=True
     )
     assert bonded is True
     assert log["tried"] == [IDENTITY, OTHER], f"rotation cut short: {log['tried']}"
@@ -418,6 +516,7 @@ def test_a_bond_failure_is_not_a_connect_failure(pairing) -> None:
         pairing,
         addresses=[IDENTITY, OTHER],
         bluez_sees=True,
+        has_proxy=True,
         connects=True,
         bonds=False,
     )
@@ -433,12 +532,66 @@ def test_nothing_is_claimed_without_a_bluez_path(pairing) -> None:
     bond was made, because there is no local adapter to make one on.
     """
     (bonded, client), log = _run_ensure_bonded(
-        pairing, addresses=[IDENTITY], bluez_sees=False
+        pairing, addresses=[IDENTITY], bluez_sees=False, has_proxy=True
     )
     assert bonded is False
     assert client is None
     assert log["handover"] == [], "handed over with no adapter to pair on"
     assert len(log["tried"]) > 1, "should have kept retrying the connect"
+
+
+def test_a_proxyless_host_bonds_before_it_dials(pairing) -> None:
+    """The regression c91f711 left behind, and what 0.7.1b5 did instead.
+
+    A panel with no bond drops every link it is offered, so on a host where no
+    proxy can hear it a connect cannot succeed and only spends the budget --
+    ~20 s per candidate address, of a 60 s timeout. Before connect-first this
+    host went straight to BlueZ with the whole of it.
+    """
+    (bonded, client), log = _run_ensure_bonded(
+        pairing, addresses=[IDENTITY, OTHER], bluez_sees=True, has_proxy=False
+    )
+    assert bonded is True
+    assert client is None
+    assert log["tried"] == [], f"dialled a panel that cannot answer: {log['tried']}"
+    assert len(log["handover"]) == 1
+
+
+def test_a_host_with_a_proxy_still_dials_first(pairing) -> None:
+    """The case c91f711 is actually about, and it keeps its behaviour.
+
+    Where a proxy can hear the panel, a local bond can land on a path nothing
+    connects over, and every later session then fails at encryption. So the
+    link in hand still decides, and BlueZ is the fallback it always was.
+    """
+    (bonded, _client), log = _run_ensure_bonded(
+        pairing, addresses=[IDENTITY], bluez_sees=True, has_proxy=True
+    )
+    assert bonded is True
+    assert log["tried"] == [IDENTITY], "bonded locally without dialling"
+
+
+def test_the_connect_rotation_cannot_starve_the_bond(pairing) -> None:
+    """The hand-over is guaranteed its reserve, however slow the dialling.
+
+    Measured on the van (2026-09-18): two addresses, ~20 s each to give up on,
+    and the hand-over inherited 15 s of a 60 s budget and timed out. The same
+    bond took 3.2 s when the rotation had left it room. Here the panel offers
+    a fresh address every time, so the rotation can never wrap and only the
+    reserve can end it.
+    """
+    (bonded, _client), log = _run_ensure_bonded(
+        pairing,
+        addresses=[],
+        bluez_sees=True,
+        has_proxy=True,
+        connect_delay=0.02,
+        fresh_addresses=True,
+    )
+    assert bonded is True
+    assert log["tried"], "handed over without dialling at all"
+    assert len(log["handover"]) == 1, f"never handed over: {log['handover']}"
+    assert log["budget"][0] > 0, f"handed over with nothing left: {log['budget']}"
 
 
 # --- part two: try, then remove ----------------------------------------------
@@ -493,6 +646,43 @@ def test_a_stale_bond_is_dropped_only_after_the_panel_refuses(pairing) -> None:
     # The procedure the reporter's host never reached at all.
     assert "register_agent" in bluez.calls
     assert "unregister_agent" in bluez.calls
+
+
+def test_the_panel_is_paired_where_bluez_can_see_it(pairing) -> None:
+    """A leftover object must not outrank the address the panel is on.
+
+    Measured on the van (2026-09-18): after the bond was dropped, BlueZ kept a
+    Device1 for the identity address -- matched by address, carrying no RSSI
+    because nothing was behind it -- while the panel advertised fresh RPAs.
+    Pair() went to the leftover and spent the whole 60 s on it. BlueZ creates
+    no object for those RPAs at all unless it is discovering, which Home
+    Assistant's MGMT-socket scanner does not make it do.
+    """
+    bluez = _Bluez(paired=False, accepts=True)
+    bluez.stale_identity = True
+    assert _run_bluez_bond(pairing, bluez, trust=True) is True
+    assert "start_discovery" in bluez.calls, "never asked BlueZ to look"
+    assert "stop_discovery" in bluez.calls, "left discovery running"
+    assert bluez.paired_path == RPA_DEV, (
+        f"paired the leftover instead of the live address: {bluez.paired_path}"
+    )
+
+
+def test_a_pairing_still_running_is_not_asked_again(pairing) -> None:
+    """InProgress is BlueZ working, not the panel refusing.
+
+    ``Device1.Pair()`` is abandoned at _PAIR_CALL_TIMEOUT but the daemon keeps
+    going, and answers every further call with InProgress. Measured on the van
+    (2026-09-18): two InProgress answers were the whole of a 15 s window, and
+    the bond that completed underneath them was never noticed. The loop has to
+    watch Paired instead of re-issuing the call.
+    """
+    bluez = _Bluez(paired=False, accepts=True, pairs_after=3)
+    assert _run_bluez_bond(pairing, bluez, trust=True) is True
+    assert bluez.calls.count("pair") == 1, (
+        f"re-issued a call BlueZ was still running: {bluez.calls}"
+    )
+    assert "remove" not in bluez.calls, "InProgress was read as a refusal"
 
 
 def test_a_proven_bond_is_taken_from_the_loop_too(pairing) -> None:

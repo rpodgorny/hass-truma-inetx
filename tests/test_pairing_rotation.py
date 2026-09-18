@@ -66,11 +66,24 @@ def _load_pairing():
     # A stand-in package so pairing.py's relative imports resolve without
     # executing the integration's real __init__ (which needs Home Assistant).
     _mod("truma_pkg", __path__=[str(SRC)])
-    _mod("truma_pkg.bt", async_resolve_device=lambda *a, **k: None)
+    _mod(
+        "truma_pkg.bt",
+        async_resolve_device=lambda *a, **k: None,
+        # This file is about the RPA rotation, which is the proxy-carried
+        # case; a proxyless host bonds before it dials (see
+        # test_pairing_local_fallback).
+        async_has_proxy_route=lambda *a, **k: True,
+    )
     # pairing asks the connected client which transport it got. The real check
     # imports bleak; the tests override this per run anyway.
     _mod("truma_pkg.ble", client_is_proxy=lambda _client: True)
-    _mod("truma_pkg.const", LOGGER=_Logger())
+    _mod(
+        "truma_pkg.const",
+        LOGGER=_Logger(),
+        has_truma_uuid=lambda uuids: any(
+            str(u).lower().startswith("fc31") for u in uuids
+        ),
+    )
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", CHAR_CMD="cmd-char")
 
