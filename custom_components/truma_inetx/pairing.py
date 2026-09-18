@@ -70,6 +70,14 @@ _BLUEZ_RESERVE = 25.0
 # and must not be retried as one (measured on the van, 2026-09-18: two
 # InProgress answers were the whole of a 15 s window).
 _PAIR_PENDING_WAIT = 12.0
+# How long a pairing BlueZ keeps answering InProgress is left to run before it
+# is cancelled and re-issued. A bond that is going to take does so in seconds
+# (3.2 s measured on the van); InProgress past this means the daemon is dialling
+# an address nothing answers on -- which is what the identity address becomes
+# the moment the host's bond, and with it the panel's IRK, is dropped. Waiting
+# it out spends the whole budget on a call that cannot finish (measured on the
+# van, 2026-09-18: 51 s of InProgress, not one connection attempt on air).
+_PAIR_PENDING_LIMIT = 20.0
 # How long the link Pair() opened is given to go away. Best effort: a
 # disconnect that hangs must not hold up a bond that already succeeded.
 _DISCONNECT_TIMEOUT = 5.0
@@ -590,6 +598,12 @@ async def _ensure_bonded_bluez(
         suspect = not trust_existing_bond
         removal_tried = False
         pair_pending_until = 0.0
+        # The object the last Pair() was issued against. BlueZ pairs one device
+        # at a time per adapter, so a call still running against the wrong one
+        # is not just a wasted poll: it answers every other object InProgress
+        # too, and the loop cannot pair anything until it is called off.
+        pending_path: str | None = None
+        pending_since = 0.0
         while time.monotonic() - start < timeout:
             objects = await object_manager.call_get_managed_objects()
             # BlueZ first: it is what Pair() is called on, and it knows
@@ -599,6 +613,35 @@ async def _ensure_bonded_bluez(
             path = _find_device(
                 objects, name=name, address=address, adapter_path=adapter_path
             ) or _live_device_path(hass, name, adapter_path)
+            # Dropping this host's bond takes the panel's IRK with it, so the
+            # identity address stops resolving to the RPA the panel is actually
+            # advertising on and a Pair() against it can never connect. The
+            # object to pair moves at exactly that moment, and the call already
+            # running has to be called off for the new one to be taken at all.
+            if pending_path is not None and path is not None and path != pending_path:
+                LOGGER.debug(
+                    "Truma %s: the panel is on %s now; cancelling the pairing "
+                    "still running against %s",
+                    name,
+                    path,
+                    pending_path,
+                )
+                await _cancel_pairing(bus, pending_path, name)
+                pair_pending_until = 0.0
+                pending_path = None
+            elif pending_path is not None and pending_since and (
+                time.monotonic() - pending_since > _PAIR_PENDING_LIMIT
+            ):
+                LOGGER.debug(
+                    "Truma %s: the pairing on %s has run %.0fs without "
+                    "finishing; cancelling it and asking again",
+                    name,
+                    pending_path,
+                    time.monotonic() - pending_since,
+                )
+                await _cancel_pairing(bus, pending_path, name)
+                pair_pending_until = 0.0
+                pending_path = None
             if path and _is_paired(objects, path) and not suspect:
                 LOGGER.info("Truma %s bonded", name)
                 await _release_link(bus, path, name)
@@ -607,12 +650,26 @@ async def _ensure_bonded_bluez(
                 # BlueZ is still working on the call we already made. Watch the
                 # Paired property instead of asking again -- a second Pair()
                 # only earns an InProgress and throws away the poll.
-                LOGGER.debug("Truma %s: a pairing attempt is still running", name)
+                LOGGER.debug(
+                    "Truma %s: a pairing attempt is still running on %s",
+                    name,
+                    pending_path or path,
+                )
             elif path:
+                LOGGER.debug("Truma %s: pairing %s", name, path)
                 failure = await _try_pair(bus, path)
+                if failure is not None:
+                    # Whatever BlueZ answered, it may be carrying the call --
+                    # a client-side timeout at _PAIR_CALL_TIMEOUT is the one
+                    # that says nothing, and the daemon goes on regardless.
+                    if pending_path is None:
+                        pending_since = time.monotonic()
+                    pending_path = path
                 if failure is None:
                     # Ours now, whatever was there before.
                     suspect = False
+                    pending_path = None
+                    pending_since = 0.0
                 elif _is_in_progress(failure):
                     pair_pending_until = time.monotonic() + _PAIR_PENDING_WAIT
                 elif suspect and not removal_tried and _is_paired(objects, path):
@@ -654,6 +711,25 @@ def _is_in_progress(failure: str) -> bool:
     loop into a caller of a call it has already made.
     """
     return "inprogress" in failure.replace(" ", "").replace(".", "").lower()
+
+
+async def _cancel_pairing(bus: MessageBus, path: str, name: str) -> None:
+    """Call off a pairing BlueZ is still running against ``path``.
+
+    Best effort, and usually against an object that is on its way out: the
+    reason to cancel is that the panel has moved to an address this one cannot
+    reach, and the drop that moved it may already have taken the object with
+    it. What matters is the daemon's side -- while it carries a pairing, every
+    Pair() on any other object earns InProgress, so the panel's live address
+    cannot be paired until this one is released.
+    """
+    try:
+        device = await _get_interface(bus, path, "org.bluez.Device1")
+        await asyncio.wait_for(
+            device.call_cancel_pairing(), timeout=_PAIR_CALL_TIMEOUT
+        )
+    except Exception as exc:  # noqa: BLE001 - best effort
+        LOGGER.debug("Truma %s: cancelling the pairing on %s: %s", name, path, exc)
 
 
 async def _try_pair(bus: MessageBus, path: str) -> str | None:

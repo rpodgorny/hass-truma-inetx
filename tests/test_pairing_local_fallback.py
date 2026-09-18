@@ -187,10 +187,24 @@ class _Bluez:
         accepts: bool,
         removable: bool = True,
         pairs_after: int | None = None,
+        hangs_on: str | None = None,
+        stale_after: int | None = None,
     ):
         self.paired = paired
         self.accepts = accepts
         self.removable = removable
+        # An object whose Pair() the daemon takes and never finishes, the way
+        # the identity address behaves once the bond -- and with it the IRK
+        # that reached the panel's RPA -- has been dropped. Cancelling it is
+        # what lets go.
+        self.hangs_on = hangs_on
+        # The poll after which the identity object goes stale: the drop is not
+        # visible in the objects until BlueZ stops seeing anything behind it.
+        self.stale_after = stale_after
+        # The object BlueZ is carrying a Pair() for. While it holds one, every
+        # other object answers InProgress -- one pairing per adapter.
+        self.pending_on: str | None = None
+        self.pair_paths: list[str] = []
         # Polls after which a Pair() the daemon is still working on completes.
         # Until then every further call earns InProgress, as on the van.
         self.pairs_after = pairs_after
@@ -210,6 +224,8 @@ class _Bluez:
         self.polls += 1
         if self.pairs_after is not None and self.polls > self.pairs_after:
             self.paired = True
+        if self.stale_after is not None and self.polls > self.stale_after:
+            self.stale_identity = True
         if not self.stale_identity:
             return {
                 DEV: {
@@ -245,8 +261,14 @@ class _Bluez:
             }
         return objects
 
-    async def pair(self) -> None:
+    async def pair(self, path: str) -> None:
         self.calls.append("pair")
+        self.pair_paths.append(path)
+        if self.pending_on is not None and self.pending_on != path:
+            # One pairing per adapter: the object the daemon is carrying a call
+            # for is the only one that can make progress, and every other one
+            # is answered InProgress however reachable it is.
+            raise _InProgress
         if self.pairs_after is not None and not self.paired:
             # The daemon took the first call and is still working on it.
             raise _InProgress
@@ -254,11 +276,21 @@ class _Bluez:
             # BlueZ will not pair a device it already has a key for, which is
             # exactly the state a panel that forgot its half leaves behind.
             raise _AlreadyExists
+        if path == self.hangs_on:
+            self.pending_on = path
+            raise _InProgress
         if not self.accepts:
             raise _AuthFailed
         self.paired = True
         # Pair() bonds over a link of its own, and BlueZ keeps it afterwards.
         self.connected = True
+
+    async def cancel_pairing(self, path: str) -> None:
+        self.calls.append("cancel_pairing")
+        if self.pending_on == path:
+            self.pending_on = None
+            # The daemon has let go, so the address is pairable again.
+            self.hangs_on = None
 
     async def remove(self, path: str) -> None:
         self.calls.append("remove")
@@ -318,7 +350,10 @@ class _Device1:
 
     async def call_pair(self) -> None:
         self._bluez.paired_path = self._path
-        await self._bluez.pair()
+        await self._bluez.pair(self._path)
+
+    async def call_cancel_pairing(self) -> None:
+        await self._bluez.cancel_pairing(self._path)
 
     async def call_disconnect(self) -> None:
         self._bluez.calls.append("disconnect")
@@ -638,15 +673,23 @@ def _run_bluez_bond(
     trust: bool,
     timeout: float = 1.0,
     adapter_path: str | None = HCI0,
+    pending_limit: float | None = None,
 ):
     """Drive the real ``_ensure_bonded_bluez`` against a fake BlueZ."""
     saved = {
         name: getattr(pairing, name)
-        for name in ("_get_interface", "async_resolve_device", "_POLL_INTERVAL")
+        for name in (
+            "_get_interface",
+            "async_resolve_device",
+            "_POLL_INTERVAL",
+            "_PAIR_PENDING_LIMIT",
+        )
     }
     pairing._get_interface = _interfaces(bluez)
     pairing.async_resolve_device = lambda *a, **k: _BluezDevice(DEV)
     pairing._POLL_INTERVAL = 0
+    if pending_limit is not None:
+        pairing._PAIR_PENDING_LIMIT = pending_limit
     _Bus.current = bluez
     try:
         return asyncio.run(
@@ -680,6 +723,42 @@ def test_a_stale_bond_is_dropped_only_after_the_panel_refuses(pairing) -> None:
     # The procedure the reporter's host never reached at all.
     assert "register_agent" in bluez.calls
     assert "unregister_agent" in bluez.calls
+
+
+def test_a_pairing_left_on_the_old_address_is_called_off(pairing) -> None:
+    """Dropping the bond moves the panel, and the running call has to follow.
+
+    Measured on the van (2026-09-18). Pair() came back AlreadyExists, the
+    host's bond was dropped -- and that took the panel's IRK with it, so the
+    identity address stopped resolving to the RPA the panel was advertising
+    on. The Pair() already running against the identity could no longer reach
+    anything (51 s, not one connection attempt on air), and because BlueZ
+    pairs one device at a time it answered InProgress for the live RPA too.
+    The loop sat out the whole 60 s watching a call that could not finish.
+    """
+    bluez = _Bluez(paired=True, accepts=True, hangs_on=DEV, stale_after=2)
+    assert _run_bluez_bond(pairing, bluez, trust=False) is True
+    assert "cancel_pairing" in bluez.calls, (
+        f"waited out a pairing on an address nothing answers: {bluez.calls}"
+    )
+    assert bluez.pair_paths[-1] == RPA_DEV, (
+        f"never paired where the panel actually is: {bluez.pair_paths}"
+    )
+
+
+def test_a_pairing_that_never_finishes_is_not_waited_out(pairing) -> None:
+    """InProgress is not a reason to wait forever, even on the right object.
+
+    A bond that is going to take does so in seconds. One that answers
+    InProgress past the limit is a call the daemon cannot finish, and asking
+    again is only possible once it has been called off.
+    """
+    bluez = _Bluez(paired=False, accepts=True, hangs_on=DEV)
+    assert (
+        _run_bluez_bond(pairing, bluez, trust=True, pending_limit=0.01) is True
+    )
+    assert "cancel_pairing" in bluez.calls, f"never let go: {bluez.calls}"
+    assert bluez.calls.count("pair") >= 2, f"never asked again: {bluez.calls}"
 
 
 def test_the_panel_is_paired_where_bluez_can_see_it(pairing) -> None:
