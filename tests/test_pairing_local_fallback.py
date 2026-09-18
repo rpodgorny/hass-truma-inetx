@@ -34,7 +34,9 @@ What it pins:
    or the loop is what reads it,
 7. one removal attempt per call, so a RemoveDevice BlueZ refuses cannot eat
    the timeout,
-8. and a bond this host holds alone is never reported as success.
+8. a bond this host holds alone is never reported as success,
+9. and the link ``Pair()`` opened is dropped before the bond is reported --
+   BlueZ keeps it, and the kernel then refuses the session's every connect.
 
 Run: ``python3 tests/test_pairing_local_fallback.py``
 """
@@ -195,6 +197,9 @@ class _Bluez:
         self.polls = 0
         self.discovering = False
         self.paired_path: str | None = None
+        # Whether BlueZ currently holds a link to the panel. Pair() opens one
+        # and keeps it, which is what _release_link exists to undo.
+        self.connected = False
         # A leftover object for the identity address with no RSSI behind it,
         # beside the RPA the panel is really on -- the van's state after a
         # bond was dropped.
@@ -252,6 +257,8 @@ class _Bluez:
         if not self.accepts:
             raise _AuthFailed
         self.paired = True
+        # Pair() bonds over a link of its own, and BlueZ keeps it afterwards.
+        self.connected = True
 
     async def remove(self, path: str) -> None:
         self.calls.append("remove")
@@ -313,6 +320,10 @@ class _Device1:
         self._bluez.paired_path = self._path
         await self._bluez.pair()
 
+    async def call_disconnect(self) -> None:
+        self._bluez.calls.append("disconnect")
+        self._bluez.connected = False
+
 
 class _Properties:
     def __init__(self, bluez: _Bluez) -> None:
@@ -320,6 +331,10 @@ class _Properties:
 
     async def call_set(self, _interface, prop, _value) -> None:
         self._bluez.calls.append(f"set:{prop}")
+
+    async def call_get(self, _interface, prop) -> _V:
+        assert prop == "Connected", prop
+        return _V(self._bluez.connected)
 
 
 class _Adapter1:
@@ -736,6 +751,57 @@ def test_a_refused_removal_is_attempted_once_and_claims_nothing(pairing) -> None
     assert _run_bluez_bond(pairing, bluez, trust=False) is False
     assert bluez.calls.count("remove") == 1, f"retried the removal: {bluez.calls}"
     assert bluez.calls.count("pair") > 1, "should have kept asking the panel"
+
+
+def test_the_link_the_bond_was_made_over_is_dropped(pairing) -> None:
+    """The bond is not the end of it: what pairing opened has to be closed.
+
+    ``Device1.Pair()`` bonds over a link of its own and BlueZ keeps it, so the
+    session that follows finds the panel already connected -- and the kernel
+    refuses a second link to the same peer, instantly, every time. Measured on
+    the van (2026-09-18): bonded at 11:24:42, then 32 connects failed with
+    ``[org.bluez.Error.Failed] Input/output error`` while that link sat idle
+    for fifteen minutes. One device, one entity, disconnected.
+    """
+    bluez = _Bluez(paired=False, accepts=True)
+    assert _run_bluez_bond(pairing, bluez, trust=True) is True
+    assert "disconnect" in bluez.calls, f"left the pairing link up: {bluez.calls}"
+    assert bluez.connected is False
+    assert bluez.calls.index("pair") < bluez.calls.index("disconnect"), (
+        f"disconnected before pairing: {bluez.calls}"
+    )
+
+
+def test_a_bond_that_was_already_there_leaves_no_link_either(pairing) -> None:
+    """The fast path is where a *retry* lands, which is where this bit.
+
+    A pairing attempt that left a link behind makes the next attempt cheap --
+    BlueZ still reports Paired, so the loop is never entered -- and the link is
+    still there afterwards. That is the second failed pairing in a row the
+    reporter sees, with nothing in the log to say why.
+    """
+    bluez = _Bluez(paired=True, accepts=True)
+    bluez.connected = True
+    assert _run_bluez_bond(pairing, bluez, trust=True) is True
+    assert "pair" not in bluez.calls, f"re-paired needlessly: {bluez.calls}"
+    assert "disconnect" in bluez.calls, f"left the link up: {bluez.calls}"
+    assert bluez.connected is False
+
+
+def test_nothing_is_disconnected_when_no_link_is_up(pairing) -> None:
+    """A bond reported with no link of its own is left entirely alone.
+
+    Over a proxy the coordinator adopts the live client, and a Disconnect()
+    fired on the way past would drop the session the caller is about to hand
+    over. So the property is read first and the call only follows a link that
+    is actually there.
+    """
+    bluez = _Bluez(paired=True, accepts=True)
+    assert bluez.connected is False
+    assert _run_bluez_bond(pairing, bluez, trust=True) is True
+    assert "disconnect" not in bluez.calls, (
+        f"disconnected a link nobody had: {bluez.calls}"
+    )
 
 
 def main() -> None:

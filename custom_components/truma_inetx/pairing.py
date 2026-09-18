@@ -19,8 +19,9 @@ can hear the panel:
   one: BlueZ needs an agent registered to answer the Just Works confirmation.
   A faithful port of ``scripts/ha_pair.py``: register a NoInputNoOutput
   auto-accept agent, then busy-loop ``Device1.Pair()`` until the device
-  reports ``Paired``. Not yet validated end-to-end from inside HA against a
-  capable adapter.
+  reports ``Paired``, and drop the link that pairing opened (see
+  ``_release_link``, without which nothing can connect afterwards).
+  Validated end-to-end on the van, 2026-09-18: bonded in 6 s.
 
 Bonding where HA will *connect* is the whole point of the order: a bond that
 lives on a path HA does not use fails every later connect at encryption, which
@@ -69,6 +70,9 @@ _BLUEZ_RESERVE = 25.0
 # and must not be retried as one (measured on the van, 2026-09-18: two
 # InProgress answers were the whole of a 15 s window).
 _PAIR_PENDING_WAIT = 12.0
+# How long the link Pair() opened is given to go away. Best effort: a
+# disconnect that hangs must not hold up a bond that already succeeded.
+_DISCONNECT_TIMEOUT = 5.0
 
 
 # --- bonding -----------------------------------------------------------------
@@ -518,6 +522,8 @@ async def _ensure_bonded_bluez(
             objects, path=path, adapter_path=adapter_path
         ):
             LOGGER.debug("Truma %s already bonded on %s", name, adapter_path)
+            assert path is not None  # _already_bonded is False without one
+            await _release_link(bus, path, name)
             return True
         if path and not adapter_path:
             LOGGER.debug(
@@ -578,6 +584,7 @@ async def _ensure_bonded_bluez(
             ) or _live_device_path(hass, name, adapter_path)
             if path and _is_paired(objects, path) and not suspect:
                 LOGGER.info("Truma %s bonded", name)
+                await _release_link(bus, path, name)
                 return True
             if path and time.monotonic() < pair_pending_until:
                 # BlueZ is still working on the call we already made. Watch the
@@ -657,6 +664,51 @@ async def _try_pair(bus: MessageBus, path: str) -> str | None:
         LOGGER.debug("Truma pair attempt: %s", str(exc)[:80])
         return str(exc)[:80] or type(exc).__name__
     return None
+
+
+async def _release_link(bus: MessageBus, path: str, name: str) -> None:
+    """Drop the link the bond was made over, so the session can dial the panel.
+
+    ``Device1.Pair()`` brings up an ACL of its own and BlueZ keeps it after the
+    bond completes: encrypted, services resolved, owned by nobody. Home
+    Assistant then cannot connect at all. The kernel refuses a second link to a
+    peer it is already connected to, so every dial fails instantly --
+
+        Failed to connect after 3 attempt(s):
+        [org.bluez.Error.Failed] Input/output error
+
+    -- and the panel, being connected, stops advertising, so the resolver sees
+    it go stale on top. Measured on the van (2026-09-18): a bond at 11:24:42
+    left that link up, 32 connects failed against it over the next fifteen
+    minutes, and dropping it by hand changed the failure the same second. The
+    integration looked exactly like a panel that had paired and then vanished
+    -- one device, one entity, disconnected.
+
+    Not a hand-over: the proxy path returns its live client for the coordinator
+    to adopt, and doing the same here would mean handing out a ``BLEDevice``
+    pointing at this object path. That is worth doing, and it is not what this
+    is. One extra dial costs a couple of seconds and needs no new machinery.
+
+    Best effort throughout, and silent when there is no link: a bond that
+    succeeded is not undone by a disconnect that does not.
+    """
+    try:
+        properties = await _get_interface(
+            bus, path, "org.freedesktop.DBus.Properties"
+        )
+        connected = await properties.call_get("org.bluez.Device1", "Connected")
+        if not connected.value:
+            return
+        device = await _get_interface(bus, path, "org.bluez.Device1")
+        await asyncio.wait_for(
+            device.call_disconnect(), timeout=_DISCONNECT_TIMEOUT
+        )
+    except Exception as exc:  # noqa: BLE001 - best effort cleanup
+        LOGGER.debug("Truma %s: releasing the pairing link: %s", name, str(exc)[:80])
+    else:
+        LOGGER.debug(
+            "Truma %s: released the link the bond was made over (%s)", name, path
+        )
 
 
 async def _forget(
