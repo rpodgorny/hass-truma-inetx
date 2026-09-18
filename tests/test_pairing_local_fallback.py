@@ -92,8 +92,33 @@ class _ServiceInterface:
         pass
 
 
+class _Mgmt:
+    """habluetooth's MGMT socket: records what gets loaded for which address."""
+
+    def __init__(self) -> None:
+        self.loads: list[tuple[int, str, int, str]] = []
+        # A host where habluetooth has no socket to offer.
+        self.available = True
+
+    def load_conn_params(self, index, address, address_type, params) -> bool:
+        self.loads.append((index, address, address_type, params.value))
+        return True
+
+
+MGMT = _Mgmt()
+
+
+class _Manager:
+    """habluetooth's central manager, for the one method pairing asks it."""
+
+    def get_bluez_mgmt_ctl(self):
+        return MGMT if MGMT.available else None
+
+
 def _load_pairing():
     """Import ``pairing.py`` with every external dependency stubbed out."""
+    MGMT.loads.clear()
+    MGMT.available = True
 
     def _mod(name: str, **attrs):
         module = types.ModuleType(name)
@@ -142,6 +167,18 @@ def _load_pairing():
     )
     _mod("truma_pkg.truma", __path__=[])
     _mod("truma_pkg.truma.const", CHAR_CMD="cmd-char")
+    # What Home Assistant loads into the kernel before every dial of its own,
+    # and what the bond has to load for itself because nothing else will.
+    habluetooth = _mod("habluetooth", __path__=[], get_manager=lambda: _Manager())
+    habluetooth.const = _mod(
+        "habluetooth.const",
+        BDADDR_LE_PUBLIC=1,
+        BDADDR_LE_RANDOM=2,
+        ConnectParams=types.SimpleNamespace(
+            FAST=types.SimpleNamespace(value="fast"),
+            MEDIUM=types.SimpleNamespace(value="medium"),
+        ),
+    )
 
     spec = importlib.util.spec_from_file_location(
         "truma_pkg.pairing", SRC / "pairing.py"
@@ -231,6 +268,7 @@ class _Bluez:
                 DEV: {
                     "org.bluez.Device1": {
                         "Address": _V(IDENTITY),
+                        "AddressType": _V("public"),
                         "Name": _V(PANEL),
                         "Paired": _V(self.paired),
                         "RSSI": _V(-52),
@@ -245,6 +283,7 @@ class _Bluez:
             DEV: {
                 "org.bluez.Device1": {
                     "Address": _V(IDENTITY),
+                    "AddressType": _V("public"),
                     "Name": _V(PANEL),
                     "Paired": _V(self.paired),
                 }
@@ -254,6 +293,7 @@ class _Bluez:
             objects[RPA_DEV] = {
                 "org.bluez.Device1": {
                     "Address": _V(RPA),
+                    "AddressType": _V("random"),
                     "Paired": _V(self.paired),
                     "RSSI": _V(-51),
                     "UUIDs": _V([TRUMA_UUID]),
@@ -744,6 +784,64 @@ def test_a_pairing_left_on_the_old_address_is_called_off(pairing) -> None:
     assert bluez.pair_paths[-1] == RPA_DEV, (
         f"never paired where the panel actually is: {bluez.pair_paths}"
     )
+
+
+def test_the_bond_dials_with_home_assistants_connection_parameters(pairing) -> None:
+    """``Pair()`` makes BlueZ dial, and BlueZ dials with the kernel's defaults.
+
+    Measured on the van (2026-09-18), one adapter, same minutes, one btmon
+    capture. Every connection habluetooth made went out at a 7.50 ms interval
+    with a 10000 ms supervision timeout, because it loads those over MGMT
+    before each dial: 155 of them, all successful. The bond's own dial went out
+    at 30.00-50.00 ms with a 420 ms timeout -- nine connection events of budget
+    -- and died 274 ms after ``LE Connection Complete, Status: Success``, which
+    is six events, the link-layer limit for establishment. 73 attempts that
+    day, not one SMP frame, and from D-Bus it read as
+    ``le-connection-abort-by-local``: our side, not the panel.
+    """
+    MGMT.loads.clear()
+    bluez = _Bluez(paired=False, accepts=True)
+    assert _run_bluez_bond(pairing, bluez, trust=False) is True
+    assert MGMT.loads, "paired with whatever the kernel had lying around"
+    index, address, address_type, params = MGMT.loads[0]
+    assert index == 0, f"loaded for the wrong adapter: {MGMT.loads}"
+    assert address == IDENTITY
+    assert address_type == 1, "an identity address is public"
+    assert params == "fast"
+
+
+def test_the_parameters_follow_the_panel_and_are_not_reloaded_per_poll(
+    pairing,
+) -> None:
+    """They are stored per address, so a rotation needs its own load -- one.
+
+    The loop polls about once a second for a minute; loading on every pass
+    would put sixty MGMT commands on the socket to say the same thing twice.
+    """
+    MGMT.loads.clear()
+    bluez = _Bluez(paired=True, accepts=True, hangs_on=DEV, stale_after=2)
+    assert _run_bluez_bond(pairing, bluez, trust=False) is True
+    loaded = [(addr, kind) for _i, addr, kind, _p in MGMT.loads]
+    assert (RPA, 2) in loaded, f"never loaded for the live RPA: {loaded}"
+    assert loaded.count((RPA, 2)) == 1, f"reloaded per poll: {loaded}"
+    assert loaded.count((IDENTITY, 1)) == 1, f"reloaded per poll: {loaded}"
+
+
+def test_a_host_with_no_mgmt_socket_still_pairs(pairing) -> None:
+    """The parameters are an improvement, not a dependency.
+
+    Stock parameters are what this did before and they did sometimes work, so
+    a habluetooth that has moved the API costs us only what we already had.
+    """
+    MGMT.loads.clear()
+    MGMT.available = False
+    try:
+        bluez = _Bluez(paired=False, accepts=True)
+        assert _run_bluez_bond(pairing, bluez, trust=False) is True
+        assert MGMT.loads == []
+        assert "pair" in bluez.calls
+    finally:
+        MGMT.available = True
 
 
 def test_a_pairing_that_never_finishes_is_not_waited_out(pairing) -> None:

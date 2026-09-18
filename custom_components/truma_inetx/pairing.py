@@ -604,6 +604,12 @@ async def _ensure_bonded_bluez(
         # too, and the loop cannot pair anything until it is called off.
         pending_path: str | None = None
         pending_since = 0.0
+        # Objects the kernel has been given connection parameters for. A set
+        # rather than the last one: they are stored per address, so a rotation
+        # needs its own load -- but the loop can be handed the same two objects
+        # alternately for a whole minute, and reloading on every flip would put
+        # sixty MGMT commands on the socket to say the same two things.
+        params_loaded: set[str] = set()
         while time.monotonic() - start < timeout:
             objects = await object_manager.call_get_managed_objects()
             # BlueZ first: it is what Pair() is called on, and it knows
@@ -656,6 +662,9 @@ async def _ensure_bonded_bluez(
                     pending_path or path,
                 )
             elif path:
+                if path not in params_loaded:
+                    _load_fast_conn_params(objects, path, name, adapter_path)
+                    params_loaded.add(path)
                 LOGGER.debug("Truma %s: pairing %s", name, path)
                 failure = await _try_pair(bus, path)
                 if failure is not None:
@@ -700,6 +709,102 @@ async def _ensure_bonded_bluez(
             except Exception as exc:  # noqa: BLE001 - best effort cleanup
                 LOGGER.debug("Truma agent unregister failed: %s", exc)
         bus.disconnect()
+
+
+def _device_address(objects: dict, path: str) -> tuple[str, bool] | None:
+    """``(address, is_random)`` for a BlueZ device path, or ``None``.
+
+    Prefers what BlueZ says over what the path spells, and falls back to the
+    path for an object the resolver found that this pass of GetManagedObjects
+    did not carry. A panel in add-device mode is only ever on a resolvable
+    private address, which is random, so that is the fallback.
+    """
+    dev = objects.get(path, {}).get("org.bluez.Device1")
+    if dev:
+        addr = dev.get("Address")
+        kind = dev.get("AddressType")
+        if addr is not None:
+            return (
+                str(addr.value).upper(),
+                kind is None or str(kind.value).lower() != "public",
+            )
+    tail = path.rsplit("/", 1)[-1]
+    if tail.startswith("dev_"):
+        return tail[4:].replace("_", ":").upper(), True
+    return None
+
+
+def _load_fast_conn_params(
+    objects: dict, path: str, name: str, adapter_path: str | None
+) -> None:
+    """Give the bond the connection parameters Home Assistant's own dials get.
+
+    ``Device1.Pair()`` makes BlueZ dial the panel itself, and BlueZ dials with
+    the kernel's stock parameters unless something has loaded better ones for
+    that address. Home Assistant always has: every connection habluetooth makes
+    is preceded by an MGMT ``Load Connection Parameters`` carrying its FAST
+    preset. Nothing does it for us, because nothing else in Home Assistant
+    reaches past habluetooth to BlueZ the way this function's caller has to.
+
+    The difference is not marginal. Measured on the van (2026-09-18), one
+    adapter, same minutes, from the same btmon capture::
+
+        peer                 interval        supervision timeout   outcome
+        14:9C:EF:03:68:81    7.50 ms         10000 ms              65x success
+        C4:D3:6A:8C:B5:38    7.50 ms         10000 ms              90x success
+        the panel            30.00-50.00 ms    420 ms              connects, dies
+
+    420 ms at a 45 ms connection interval is nine connection events of budget.
+    The link came up -- ``LE Connection Complete, Status: Success`` -- and was
+    gone 274 ms later, six events, which is the link-layer limit for
+    establishment: the panel had not got a single packet in before the central
+    gave up. Every one of the 73 attempts that day failed that way, none
+    reached SMP, and from D-Bus it looked like ``le-connection-abort-by-local``
+    -- our side, not a panel refusing to pair.
+
+    Best effort throughout. Pairing with the stock parameters is what this did
+    before and it did sometimes work, so a habluetooth that has moved this API
+    or a host with no MGMT socket costs us what we already had.
+    """
+    if not adapter_path:
+        return
+    try:
+        from habluetooth import get_manager
+        from habluetooth.const import (
+            BDADDR_LE_PUBLIC,
+            BDADDR_LE_RANDOM,
+            ConnectParams,
+        )
+    except ImportError:  # pragma: no cover - habluetooth always present in HA
+        return
+    found = _device_address(objects, path)
+    if found is None:
+        return
+    address, is_random = found
+    try:
+        index = int(adapter_path.rsplit("hci", 1)[-1])
+    except ValueError:
+        return
+    try:
+        mgmt = get_manager().get_bluez_mgmt_ctl()
+        if mgmt is None:
+            LOGGER.debug("Truma %s: no MGMT socket; pairing %s as-is", name, address)
+            return
+        loaded = mgmt.load_conn_params(
+            index,
+            address,
+            BDADDR_LE_RANDOM if is_random else BDADDR_LE_PUBLIC,
+            ConnectParams.FAST,
+        )
+    except Exception as exc:  # noqa: BLE001 - best effort
+        LOGGER.debug("Truma %s: loading connection parameters failed: %s", name, exc)
+        return
+    LOGGER.debug(
+        "Truma %s: %s fast connection parameters for %s",
+        name,
+        "loaded" if loaded else "could not load",
+        address,
+    )
 
 
 def _is_in_progress(failure: str) -> bool:
