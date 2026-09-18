@@ -139,6 +139,16 @@ async def ensure_bonded(
             adapter_path=adapter_path,
             timeout=max(deadline - time.monotonic(), 0.0),
             hass=hass,
+            # Nothing has been proven about the panel here -- that is the
+            # point of arriving before the first dial -- so a bond BlueZ
+            # reports is exactly the half-held one this path exists to
+            # replace. Measured on the van (2026-09-18): a record holding
+            # only signature keys and no LongTermKey still reads back as
+            # Paired *and* Bonded, pairing returned success in under a
+            # millisecond with not one SMP frame on air, and the panel sat
+            # in add-device mode having seen nothing while every later
+            # connect timed out.
+            trust_existing_bond=False,
         ):
             return True, None
         # Not bonded. Fall through rather than give up: the panel may yet
@@ -483,12 +493,18 @@ async def _ensure_bonded_bluez(
     ``trust_existing_bond`` is whether BlueZ reporting ``Paired`` may be taken
     as the answer. Normally it may: the caller got as far as a link before
     handing over, so a bond on this adapter is one the panel honours. It may
-    not when the caller arrives here *because* nothing would establish a link
-    (#26) -- a bond is half-held by definition then. BlueZ will offer a key the
-    panel has forgotten and the panel drops the link the moment it cannot
-    decrypt, which is indistinguishable from a panel that was never paired, so
-    a host-side ``Paired`` would report success against a panel that has seen
-    nothing.
+    not when the caller has never seen the panel answer one -- because nothing
+    would establish a link (#26), or because it has not dialled yet -- and a
+    bond is half-held by definition then. BlueZ will offer a key the panel has
+    forgotten and the panel drops the link the moment it cannot decrypt, which
+    is indistinguishable from a panel that was never paired, so a host-side
+    ``Paired`` would report success against a panel that has seen nothing.
+
+    ``Paired`` is not even evidence that a key exists. BlueZ reports it (and
+    ``Bonded``) for a stored record carrying nothing but the signature keys,
+    which is what the van's adapter held on 2026-09-18 after the panel's own
+    bond was deleted: no ``LongTermKey``, no session possible, and a fast path
+    that believed it answered in under a millisecond.
 
     Unproven, the order is try **then** remove: ``Device1.Pair()`` goes first
     and the bond is dropped only once that has failed with BlueZ still claiming
@@ -513,7 +529,8 @@ async def _ensure_bonded_bluez(
         )
 
         # Fast path: already bonded (on the connecting adapter)? Not open to
-        # a caller that could not establish a link -- see trust_existing_bond.
+        # a caller that has not seen the panel answer a link -- see
+        # trust_existing_bond.
         objects = await object_manager.call_get_managed_objects()
         path = _find_device(
             objects, name=name, address=address, adapter_path=adapter_path

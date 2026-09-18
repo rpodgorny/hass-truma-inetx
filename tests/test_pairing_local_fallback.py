@@ -572,6 +572,25 @@ def test_a_proxyless_host_bonds_before_it_dials(pairing) -> None:
     assert len(log["handover"]) == 1
 
 
+def test_a_predial_bond_does_not_trust_what_bluez_reports(pairing) -> None:
+    """Bonding before the first dial has proven nothing, so it trusts nothing.
+
+    Observed on the van (2026-09-18) with the panel's own bond freshly
+    deleted: the adapter still held a record with the signature keys and no
+    LongTermKey, BlueZ reported it as Paired *and* Bonded, and this path took
+    the fast path out in under a millisecond. No SMP frame reached the air,
+    the panel stayed in add-device mode, Home Assistant reported the pairing a
+    success, and every session after it timed out connecting.
+    """
+    (bonded, _client), log = _run_ensure_bonded(
+        pairing, addresses=[IDENTITY], bluez_sees=True, has_proxy=False
+    )
+    assert bonded is True
+    assert log["handover"] == [False], (
+        f"pre-dial bond trusted a bond it never proved: {log['handover']}"
+    )
+
+
 def test_a_host_with_a_proxy_still_dials_first(pairing) -> None:
     """The case c91f711 is actually about, and it keeps its behaviour.
 
