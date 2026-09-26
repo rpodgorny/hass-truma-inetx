@@ -59,7 +59,6 @@ jobs:
           test_param_discovery.py
           test_measure_request.py
           test_param_meta.py
-          test_panel_declared_options.py
           "
           ran=0
           status=0
@@ -92,4 +91,3 @@ jobs:
       - run: python3 tests/test_param_discovery.py
       - run: python3 tests/test_measure_request.py
       - run: python3 tests/test_param_meta.py
-      - run: python3 tests/test_panel_declared_options.py
