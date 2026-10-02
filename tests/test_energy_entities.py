@@ -112,9 +112,15 @@ def test_gas_is_reflected_and_never_commanded() -> None:
     written from Home Assistant.
     """
     rows = PROFILES.ROWS[("EnergySrc", "GasLevel")]
-    assert [row.platform for row in rows] == ["binary_sensor"], (
-        "gas was given a control again"
-    )
+    # The one exception is an Alde, whose gas the owner switches at the panel
+    # (tests/test_alde_entities.py). Every row a Truma heater can be given is
+    # still a reading.
+    truma = BUS.Bus()
+    truma.update("Identify", "Supplier", "Truma", HEATER)
+    heater = truma.device(HEATER)
+    assert [
+        row.platform for row in rows if row.when is None or row.when(heater)
+    ] == ["binary_sensor"], "gas was given a control again"
 
     # ...and no platform names the parameter at all: the table decides, and
     # the table makes it a reading.
@@ -299,9 +305,10 @@ def test_a_name_is_not_an_identity() -> None:
     The unique_id used to end in the row's translation_key, which made every
     name permanent -- correcting one orphaned the entity and took its history.
     Identity is the device, the topic, the parameter and the platform now, and
-    the platform is only enough because no parameter carries two rows on one
-    platform. That is the invariant; it is pinned here rather than guarded in
-    the code.
+    the platform is only enough because no device is ever given two rows of
+    one parameter on one platform: where two exist, each carries a ``when``
+    and they pick between makes of appliance. That is the invariant; it is
+    pinned here rather than guarded in the code.
     """
     coordinator = _coordinator()
     made = stubs.setup_platform(BINARY, coordinator)
@@ -311,11 +318,16 @@ def test_a_name_is_not_an_identity() -> None:
     assert "heating" not in heating.unique_id, heating.unique_id
     assert heating.unique_id.endswith("_System.FlameStatus_binary_sensor")
 
+    # Rows that share a platform are allowed only where each is gated by
+    # ``when``, which picks one per device -- an Alde's electric steps and a
+    # Combi's are the same select, named differently.
     seen: set[tuple[str, str, str]] = set()
     for (topic, param), rows in PROFILES.ROWS.items():
         for row in rows:
             ident = (topic, param, str(row.platform))
-            assert ident not in seen, ident
+            if ident in seen:
+                shared = [r for r in rows if str(r.platform) == ident[2]]
+                assert all(r.when is not None for r in shared), ident
             seen.add(ident)
 
 

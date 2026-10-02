@@ -43,6 +43,9 @@
   },
   "entity": {
     "binary_sensor": {
+      "air_heating_active": {
+        "name": "Luftheizung aktiv"
+      },
       "connection": {
         "name": "BLE-Verbindung"
       },
@@ -96,6 +99,9 @@
       },
       "electric_level": {
         "name": "Elektrische Heizung"
+      },
+      "energy_priority": {
+        "name": "Priorität Energiequelle"
       },
       "water_mode": {
         "name": "Warmwasser"
@@ -175,6 +181,9 @@
       "logic_supply": {
         "name": "Logikspannung"
       },
+      "outside_temp": {
+        "name": "Außentemperatur"
+      },
       "panel_clock": {
         "name": "Uhrzeit im Bedienteil"
       },
@@ -210,6 +219,9 @@
       "faster_water_heating": {
         "name": "Schnelles Wasseraufheizen"
       },
+      "gas_switch": {
+        "name": "Gas"
+      },
       "panel_screensaver": {
         "name": "Bildschirmschoner"
       },
@@ -221,6 +233,9 @@
       },
       "water_boost": {
         "name": "Warmwasser-Boost"
+      },
+      "water_heating": {
+        "name": "Warmwasser"
       },
       "water_pump": {
         "name": "Frischwasserpumpe"

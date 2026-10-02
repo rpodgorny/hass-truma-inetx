@@ -131,6 +131,10 @@ def async_add_rows(
     not it has six timers, and publishes all six, marking the empty ones
     ``avail`` 0. Waiting for the flag is still waiting for evidence; it is just
     the evidence that this copy of the parameter means something.
+
+    A row with a ``when`` asks the device whether it is the one the row is
+    for -- an Alde and a Combi publish ``EnergySrc.GasLevel`` alike and want
+    different entities from it -- and waits while the device has not said.
     """
     made: set[tuple[int, str, str, Platform]] = set()
 
@@ -162,6 +166,22 @@ def async_add_rows(
                         #
                         # Not recorded as made: a slot filled later is built
                         # at the update that fills it.
+                        continue
+                    if row.when is not None and not (
+                        device.reports("Identify", "Supplier")
+                        or coordinator.data.discovered
+                    ):
+                        # The make is not known yet. A device is named as soon
+                        # as Identify.Name arrives, and Supplier can follow it
+                        # in a later frame: measured on an Alde Compact, whose
+                        # gas and electric level were built on the Combi rows
+                        # in that gap and kept them. Once discovery is over, a
+                        # device that has named no supplier never will.
+                        continue
+                    if row.when is not None and row.when(device) is not True:
+                        # Not this device's row -- see Row.when. Not recorded
+                        # as made either: the other row for the same platform
+                        # may be the one.
                         continue
                     made.add(ident)
                     new.append(build(addr, topic, param, row))

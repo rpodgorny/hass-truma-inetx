@@ -43,6 +43,9 @@
   },
   "entity": {
     "binary_sensor": {
+      "air_heating_active": {
+        "name": "Air heating active"
+      },
       "connection": {
         "name": "BLE connection"
       },
@@ -96,6 +99,9 @@
       },
       "electric_level": {
         "name": "Electric heating"
+      },
+      "energy_priority": {
+        "name": "Energy source priority"
       },
       "water_mode": {
         "name": "Water heating"
@@ -175,6 +181,9 @@
       "logic_supply": {
         "name": "Logic supply"
       },
+      "outside_temp": {
+        "name": "Outside temperature"
+      },
       "panel_clock": {
         "name": "Panel clock"
       },
@@ -210,6 +219,9 @@
       "faster_water_heating": {
         "name": "Faster water heating"
       },
+      "gas_switch": {
+        "name": "Gas"
+      },
       "panel_screensaver": {
         "name": "Screensaver"
       },
@@ -221,6 +233,9 @@
       },
       "water_boost": {
         "name": "Water boost"
+      },
+      "water_heating": {
+        "name": "Hot water"
       },
       "water_pump": {
         "name": "Fresh water pump"
