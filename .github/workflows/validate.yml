@@ -58,6 +58,7 @@ jobs:
           test_bus_dump_tool.py
           test_param_discovery.py
           test_measure_request.py
+          test_keep_alive.py
           test_param_meta.py
           "
           ran=0
@@ -90,4 +91,5 @@ jobs:
       - run: python3 tests/test_bus_dump_tool.py
       - run: python3 tests/test_param_discovery.py
       - run: python3 tests/test_measure_request.py
+      - run: python3 tests/test_keep_alive.py
       - run: python3 tests/test_param_meta.py

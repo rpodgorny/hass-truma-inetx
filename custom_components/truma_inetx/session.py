@@ -20,6 +20,7 @@ from .bus import Bus, MeasureMiss
 from .const import LOGGER
 from .truma.const import (
     CTRL_MBP,
+    DEV_BLE_MGMT,
     DEV_BROADCAST,
     DEV_MSG_BROKER,
     DEVICE_SEED,
@@ -261,6 +262,29 @@ async def discover_params(client, bus: Bus, name: str, now) -> None:
     # entities at all -- where naming those devices after their addresses is
     # the right answer, and was what happened before the wait existed.
     bus.discovered = True
+
+
+async def keep_alive(client) -> bool:
+    """Ask the panel something small, so that a quiet bus is not a dead one.
+
+    A panel only pushes what changes. With the heater off and nothing moving
+    it can say nothing for minutes -- measured on an iNet X with an Alde
+    Compact, where the stall watchdog then tore down a healthy link every
+    90 s, all evening, and kept a phone from holding a connection beside it.
+
+    The question is a parameter discovery of the panel's own BLE device
+    management, the smallest device that answers one (ten parameters on that
+    panel), and the answer that matters is the transport's acknowledgement:
+    a half-open link cannot give one, so the watchdog still catches those.
+    Sent as a probe, so an unanswered one leaves the decision to the
+    watchdog rather than ending the session itself.
+    """
+    return await client.send(
+        build_v3_frame(
+            DEV_BLE_MGMT, client.assigned_addr, CTRL_MBP, MBP_PARAM_DISC, 0, b""
+        ),
+        probe=True,
+    )
 
 
 async def request_measurements(client, bus: Bus, name: str) -> None:

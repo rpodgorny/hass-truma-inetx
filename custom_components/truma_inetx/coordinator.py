@@ -83,6 +83,11 @@ _RECONNECT_DELAY_MAX = 45  # seconds
 # noticed): drop it and reconnect rather than sit "connected" forever with
 # stale data. This is what recovers the session without a manual power-cycle.
 _DATA_STALL_TIMEOUT = 90  # seconds
+# ...but a healthy panel does not always push. It sends what changes, and an
+# Alde Compact behind one, heater off, left it silent long enough to trip the
+# watchdog every 90 s. So a link quiet for this long is asked a question first
+# (session.keep_alive), and an acknowledged answer counts as a frame.
+_KEEPALIVE_AFTER = 45  # seconds
 # ...and the same question for the startup that runs before that watchdog does.
 # Startup is the only part of a session with no deadline of its own: every step
 # in it waits on the panel, and the watchdog above only starts once all of them
@@ -913,9 +918,17 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # Connected mode: hold the link, watching for a data stall and keeping
         # the on-demand sensors measuring.
         next_measure = self.hass.loop.time() + _MEASURE_INTERVAL
+        last_probe = self.hass.loop.time()
         while not self._stop and client.connected:
             await asyncio.sleep(1)
             now = self.hass.loop.time()
+            if (
+                now - self._last_frame >= _KEEPALIVE_AFTER
+                and now - last_probe >= _KEEPALIVE_AFTER
+            ):
+                last_probe = now
+                if await session.keep_alive(client):
+                    self._last_frame = self.hass.loop.time()
             if now >= next_measure:
                 # Schedule from now rather than from the previous slot: a send
                 # that blocks on its acknowledgement must not leave a backlog
