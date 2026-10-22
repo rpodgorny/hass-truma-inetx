@@ -217,14 +217,26 @@ def test_a_restriction_the_panel_lifts_is_lifted_here_too() -> None:
     lifted = json.loads(json.dumps(restricted))
     for element in lifted["enum"]:
         element["a"] = True
+
+    # The lifting frame must register as a *change to the description*. That
+    # gates exactly one thing: the debug line in ``session.learn_param``. It is
+    # not what refreshes the entities -- ``session.handle_frame`` returns True
+    # for every discovery response, whatever the description did -- so this pins
+    # the signal, not the refresh. An earlier version of this test asserted
+    # ``coord.updates == 2`` for that purpose, and it passed against *unpatched*
+    # main: the count comes from the frame being a discovery response, so it
+    # proved nothing about the fix.
+    assert coord._bus.learn_param("System", "DescribedState", lifted, HEATER) is True
+
+    # And the frame path applies it too -- the same payload arriving as a
+    # discovery response, which is how the panel actually delivers it. This
+    # second call is a no-op for the description (it is already applied) and
+    # exists so the test covers the wire path, not only the function.
     _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([lifted]))
 
     meta = device.meta("System", "DescribedState")
     assert meta["enum_unavailable"] == [], meta
     assert device.allowed_values("System", "DescribedState") == [0, 1, 2]
-    # And it has to reach the entity that was built from the shorter list --
-    # a mode nobody re-reads is a mode the user still cannot pick.
-    assert coord.updates == 2, "the frame mattered and did not reach the entities"
 
 
 def test_a_later_frame_that_says_less_erases_nothing() -> None:
