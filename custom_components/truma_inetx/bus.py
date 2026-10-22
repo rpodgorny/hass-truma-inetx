@@ -473,7 +473,13 @@ class Bus:
                     unavailable.append(str(value))
             if names:
                 meta["enum"] = names
-            if unavailable:
+                # Always, including when it is empty. An empty list is the
+                # panel saying there is no restriction left -- not a frame
+                # that says less -- and the merge below keeps whatever is not
+                # overwritten, so omitting this key is what pinned the cooling
+                # modes unavailable for hours after shore power returned
+                # (#34). A frame whose enum names nothing at all leaves both
+                # keys, and therefore the previous answer, alone.
                 meta["enum_unavailable"] = unavailable
 
         if not meta:

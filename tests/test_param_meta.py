@@ -179,6 +179,54 @@ def test_a_value_this_vehicle_cannot_produce_is_marked() -> None:
     assert meta["enum_unavailable"] == ["1"], meta
 
 
+def test_a_restriction_the_panel_lifts_is_lifted_here_too() -> None:
+    """Issue #34: the panel stops marking a value, and nothing here notices.
+
+    Measured on a Combi 6 E + FreshJet over an iNet X Pro (#34). The owner cuts
+    shore power every night; the panel re-publishes ``RoomClimate.Mode`` with
+    automatic and cooling marked unavailable within 3.5-9.5 s of the cut, and
+    marks them available again about a second after power returns.
+
+    The integration took the restriction in under a minute and then kept it for
+    **4 h 31 min** on 19 September, and five minutes in a deliberate
+    reproduce-on-demand run on b25 -- so ``climate`` kept offering only
+    off/heat/fan_only and Home Assistant refused ``set_hvac_mode cool`` with
+    ``not_valid_hvac_mode``. Reloading the config entry fixed it; nothing else
+    did.
+
+    The description is merged rather than replaced, which is right -- a bare
+    value update must not erase a discovery answer. But an *empty*
+    ``enum_unavailable`` is the panel saying there is no restriction left, not
+    a frame that says less, and merging kept the old one.
+    """
+    coord = _Coord()
+    restricted = {
+        "pn": "DescribedState",
+        "v": 3,
+        "enum": [
+            {"n": "Off", "a": True, "v": 0},
+            {"n": "Low", "a": False, "v": 1},
+            {"n": "High", "a": True, "v": 2},
+        ],
+    }
+    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([restricted]))
+    device = coord._bus.device(HEATER)
+    assert device.meta("System", "DescribedState")["enum_unavailable"] == ["1"]
+    assert device.allowed_values("System", "DescribedState") == [0, 2]
+
+    lifted = json.loads(json.dumps(restricted))
+    for element in lifted["enum"]:
+        element["a"] = True
+    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([lifted]))
+
+    meta = device.meta("System", "DescribedState")
+    assert meta["enum_unavailable"] == [], meta
+    assert device.allowed_values("System", "DescribedState") == [0, 1, 2]
+    # And it has to reach the entity that was built from the shorter list --
+    # a mode nobody re-reads is a mode the user still cannot pick.
+    assert coord.updates == 2, "the frame mattered and did not reach the entities"
+
+
 def test_a_later_frame_that_says_less_erases_nothing() -> None:
     """Most frames are bare values. They must not undo the discovery answer."""
     coord = _Coord()
