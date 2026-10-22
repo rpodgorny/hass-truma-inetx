@@ -473,14 +473,22 @@ class Bus:
                     unavailable.append(str(value))
             if names:
                 meta["enum"] = names
-                # Always, including when it is empty. An empty list is the
-                # panel saying there is no restriction left -- not a frame
-                # that says less -- and the merge below keeps whatever is not
-                # overwritten, so omitting this key is what pinned the cooling
-                # modes unavailable for hours after shore power returned
-                # (#34). A frame whose enum names nothing at all leaves both
-                # keys, and therefore the previous answer, alone.
-                meta["enum_unavailable"] = unavailable
+                # Availability is overwritten only by a frame that states it:
+                # at least one element carrying the panel's ``a`` flag. A
+                # name-only enum says nothing about availability, and
+                # ``element.get("a", True)`` reads an absent flag as
+                # "available" -- harmless while this key was only written when
+                # a restriction existed, destructive once it is written
+                # unconditionally, because it would erase a standing
+                # restriction and offer a mode this vehicle cannot produce.
+                # Every enum fixture in this repo carries ``a`` on every
+                # element, and #34's own tightening arrived live, which it
+                # could not have done without the flag -- but no wire enum has
+                # ever been captured, so absence is treated as silence.
+                if any(
+                    "a" in element for element in elements if isinstance(element, dict)
+                ):
+                    meta["enum_unavailable"] = unavailable
 
         if not meta:
             return False
