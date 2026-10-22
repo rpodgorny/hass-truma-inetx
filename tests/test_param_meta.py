@@ -239,6 +239,49 @@ def test_a_restriction_the_panel_lifts_is_lifted_here_too() -> None:
     assert device.allowed_values("System", "DescribedState") == [0, 1, 2]
 
 
+def test_a_name_only_enum_says_nothing_about_availability() -> None:
+    """The mirror of #34: values named, no ``a`` flag on any element.
+
+    ``element.get("a", True)`` reads an absent flag as *available*, so a frame
+    shaped like this carries no availability information at all. Before #34 that
+    was a harmless no-op -- the key was only written when a restriction existed
+    -- and writing it unconditionally would let this frame *erase* a standing
+    restriction. That is the dangerous direction: it offers a mode the panel
+    said this vehicle cannot produce, and the user finds out by having the write
+    refused or ignored.
+
+    No enum has ever been captured off a wire in this repo to settle which shape
+    the panel really sends, so absence is treated as silence: the names are
+    learned, the availability is left alone.
+    """
+    coord = _Coord()
+    restricted = {
+        "pn": "DescribedState",
+        "v": 3,
+        "enum": [
+            {"n": "Off", "a": True, "v": 0},
+            {"n": "Low", "a": False, "v": 1},
+            {"n": "High", "a": True, "v": 2},
+        ],
+    }
+    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([restricted]))
+    device = coord._bus.device(HEATER)
+    assert device.meta("System", "DescribedState")["enum_unavailable"] == ["1"]
+    assert device.allowed_values("System", "DescribedState") == [0, 2]
+
+    name_only = {
+        "pn": "DescribedState",
+        "v": 3,
+        "enum": [{"n": "Off", "v": 0}, {"n": "Low", "v": 1}, {"n": "High", "v": 2}],
+    }
+    _feed(coord, TC.MBP_PARAM_DISC_RESP, _discovery([name_only]))
+
+    meta = device.meta("System", "DescribedState")
+    assert meta["enum"] == {"0": "Off", "1": "Low", "2": "High"}, meta
+    assert meta["enum_unavailable"] == ["1"], meta
+    assert device.allowed_values("System", "DescribedState") == [0, 2]
+
+
 def test_a_later_frame_that_says_less_erases_nothing() -> None:
     """Most frames are bare values. They must not undo the discovery answer."""
     coord = _Coord()
