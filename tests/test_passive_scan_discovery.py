@@ -48,7 +48,13 @@ What it pins:
    altogether (three active windows, no scan response, 2026-09-18), so nothing
    on air carried a name and re-adding had nothing to key on,
 8. asking degrades quietly: an older Home Assistant without the API, or a
-   request that raises, leaves discovery working exactly as it did before.
+   request that raises, leaves discovery working exactly as it did before,
+9. what the scanner modes are, per scanner -- requested (configured) versus
+   current (live) -- because on the default AUTO "passive right now" is normal
+   and warning about it would be noise, while an adapter *pinned* passive can
+   never yield a name,
+10. the warning says which scanner and why, is said once, and on an AUTO host
+    waits for the grace before it calls the nameless state a problem.
 
 Run: ``python3 tests/test_passive_scan_discovery.py``
 """
@@ -57,6 +63,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import sys
 import types
 from pathlib import Path
@@ -132,6 +139,29 @@ class _BluezDevice:
 async def _remembered(address):
     name = REMEMBERED.get(address.upper())
     return _BluezDevice(address.upper(), name) if name else None
+
+
+class _Mode:
+    """Stand-in for habluetooth's BluetoothScanningMode enum."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _Scanner:
+    """Stand-in for a HaScanner, with the two mode attributes that matter."""
+
+    def __init__(self, name, source, requested, current, connectable=True):
+        self.name = name
+        self.source = source
+        self.requested_mode = _Mode(requested) if requested else None
+        self.current_mode = _Mode(current) if current else None
+        self.connectable = connectable
+
+
+# The scanners this fake host has. Passive-on-the-wire is the default state of
+# an AUTO host, which is why requested and current are separate questions.
+SCANNERS: list = []
 
 
 class _Aborted(Exception):
@@ -244,6 +274,7 @@ def _load():
         async_discovered_service_info=lambda _hass, connectable=True: list(ADVERTS),
         async_scanner_devices_by_address=lambda *a, **kw: [],
         async_request_active_scan=_request_active_scan,
+        async_current_scanners=lambda _hass: list(SCANNERS),
     )
     _mod("truma_pkg", __path__=[str(SRC)])
     # config_flow only reads two names off the coordinator, and pairing is
@@ -279,6 +310,7 @@ def _reset() -> None:
     SWEEPS.clear()
     SWEEP_RAISES.clear()
     REMEMBERED.clear()
+    SCANNERS.clear()
     _ConfigFlow.hass = _Hass()
     # One window and stop, unless a test says otherwise: the retry loop is the
     # subject of two tests below and only slows down the other seven.
@@ -476,6 +508,99 @@ def test_a_sweep_that_raises_is_not_a_failed_discovery() -> None:
     # AUTO scanner at all is not asked once per advertisement forever.
     _discover(_nameless())
     assert SWEEPS == [BT.SWEEP_SECONDS]
+
+
+def test_the_scan_mode_is_read_per_scanner() -> None:
+    """Requested vs current: the difference between "pinned passive" and "auto"."""
+    _reset()
+    SCANNERS.extend(
+        [
+            _Scanner("hci0", "hci0", "passive", "passive"),
+            _Scanner("hci1", "hci1", "auto", "passive"),
+            _Scanner("proxy-kitchen", "B4:BF:E9:62:27:02", "active", "active", False),
+        ]
+    )
+    report = BT.scan_mode_report(_ConfigFlow.hass)
+    assert [r["scanner"] for r in report] == ["hci0", "hci1", "proxy-kitchen"]
+    assert [r["requested"] for r in report] == ["passive", "auto", "active"]
+    # Passive on the wire is what AUTO looks like almost all the time, and it
+    # must not be described as a fault.
+    assert [r["current"] for r in report] == ["passive", "passive", "active"]
+    assert [r["connectable"] for r in report] == [True, True, False]
+
+
+def test_the_description_names_the_reason_not_just_the_mode() -> None:
+    _reset()
+    SCANNERS.extend(
+        [_Scanner("hci0", "hci0", "passive", "passive"), _Scanner("hci1", "hci1", "auto", "passive")]
+    )
+    text = BT.describe_scan_modes(_ConfigFlow.hass)
+    assert "hci0 requested=passive" in text
+    assert "never opens an active window" in text
+    assert "hci1 requested=auto" in text
+    assert "scheduled windows" in text
+    # The word "passive" alone would read as a fault on an AUTO host.
+    assert "auto, passive except for short scheduled windows" in text
+
+
+def test_the_description_survives_a_host_that_has_no_scanners() -> None:
+    """A diagnostic must never be the thing that raises."""
+    _reset()
+    assert BT.scan_mode_report(_ConfigFlow.hass) == []
+    assert BT.describe_scan_modes(_ConfigFlow.hass) == "no Bluetooth scanners are registered"
+
+
+def test_a_nameless_panel_warns_once_with_the_scan_mode() -> None:
+    """The log is where a user looks, so it has to name the layer."""
+    _reset()
+    SCANNERS.append(_Scanner("hci0", "hci0", "passive", "passive"))
+    records: list[str] = []
+
+    class _Grab(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    handler = _Grab(level=logging.WARNING)
+    logger = logging.getLogger(BT.LOGGER.name)
+    logger.addHandler(handler)
+    try:
+        _discover(_nameless())
+        _discover(_nameless())
+        _discover(_nameless())
+    finally:
+        logger.removeHandler(handler)
+    warnings = [r for r in records if "advertises without a name" in r]
+    assert len(warnings) == 1, warnings
+    assert "hci0 requested=passive" in warnings[0]
+    assert "scan response" in warnings[0]
+
+
+def test_an_auto_host_is_not_warned_about_the_normal_state() -> None:
+    """AUTO is passive between windows; that is not a fault worth printing."""
+    _reset()
+    SCANNERS.append(_Scanner("hci0", "hci0", "auto", "passive"))
+    records: list[str] = []
+
+    class _Grab(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    handler = _Grab(level=logging.WARNING)
+    logger = logging.getLogger(BT.LOGGER.name)
+    logger.addHandler(handler)
+    try:
+        for _ in range(5):
+            _discover(_nameless())
+        assert [r for r in records if "advertises without a name" in r] == []
+        # Still nameless once the grace has passed: now it is news.
+        hass = _ConfigFlow.hass
+        hass.data[BT.DOMAIN][BT._NAMELESS_SINCE][RPA] -= BT.NAMELESS_GRACE + 1.0
+        _discover(_nameless())
+    finally:
+        logger.removeHandler(handler)
+    warnings = [r for r in records if "advertises without a name" in r]
+    assert len(warnings) == 1, warnings
+    assert "hci0 requested=auto" in warnings[0]
 
 
 def main() -> None:

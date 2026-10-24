@@ -199,6 +199,7 @@ class _Coord:
         # these fixtures dial nothing, so there is nothing to record.
         self._last_kind = None
         self._session_ok = False
+        self._silent_sessions = 0
         self._writes_pending = 0
         self._connected_event = asyncio.Event()
         self._identity = {
@@ -207,6 +208,13 @@ class _Coord:
 
     def async_set_updated_data(self, _data) -> None:
         pass
+
+    # _finish_startup now also clears the "deaf panel" streak. These fixtures
+    # never raise that issue, so the stub only has to keep the counter honest;
+    # the real method (and the issue registry call behind it) is exercised in
+    # test_panel_silent_issue.py.
+    def _async_clear_silent(self) -> None:
+        self._silent_sessions = 0
 
     async def _run_startup(self, _client) -> None:
         """Stand in for registration + discovery, which have their own file."""

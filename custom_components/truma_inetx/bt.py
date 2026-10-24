@@ -36,7 +36,7 @@ from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, LOGGER, has_truma_uuid, looks_like_panel
+from .const import DOMAIN, LOGGER, describe_scan_modes, scan_mode_report, has_truma_uuid, looks_like_panel
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -123,6 +123,16 @@ SWEEP_DEADLINE = 30.0
 SWEEP_RETRY_PAUSE = 2.0
 _SWEEP_LAST = f"{DOMAIN}_name_sweep"
 
+# How often the "names cannot arrive" warning may be repeated.
+NAMELESS_WARN_COOLDOWN = 600.0
+_NAMELESS_WARNED = f"{DOMAIN}_nameless_warned"
+# How long a nameless advertisement is tolerated before it is called a problem.
+# On an AUTO scanner the radio is passive between scheduled windows and turns
+# active when asked, so a nameless advert is the *normal* state for a few
+# seconds; only a nameless panel that outlives the windows we ask for is news.
+NAMELESS_GRACE = 120.0
+_NAMELESS_SINCE = "nameless_since"
+
 
 def any_panel_named(hass: HomeAssistant) -> bool:
     """Whether some advertisement that looks like a panel now carries a name.
@@ -207,6 +217,48 @@ async def async_sweep_for_names(
             )
             return True
         await asyncio.sleep(SWEEP_RETRY_PAUSE)
+
+
+def warn_about_names(hass, address: str) -> bool:
+    """Say once, in plain words, why a nameless panel cannot be offered.
+
+    A user reading "the panel is not discovered" has no way to know that the
+    reason is a scan mode two layers below this integration. Say the mode, say
+    what follows from it, and do not repeat it every advertisement.
+    """
+    now = time.monotonic()
+    since = hass.data.setdefault(DOMAIN, {}).setdefault(_NAMELESS_SINCE, {})
+    key = address.upper()
+    first_seen = since.setdefault(key, now)
+    pinned = any(
+        str(entry.get("requested") or "") == "passive"
+        for entry in scan_mode_report(hass)
+    )
+    # An adapter pinned passive will never open a window, so waiting is pointless
+    # and the warning is due now. On any other mode, wait out the grace first:
+    # AUTO is passive most of the time and opens a window when asked, and a
+    # warning about the normal state would be noise nobody could act on.
+    if not pinned and now - first_seen < NAMELESS_GRACE:
+        return False
+    last = hass.data.get(_NAMELESS_WARNED)
+    if last is not None and now - last < NAMELESS_WARN_COOLDOWN:
+        return False
+    hass.data[_NAMELESS_WARNED] = now
+    LOGGER.warning(
+        "Truma: the panel at %s advertises without a name, so there is no "
+        "discovery card to offer. A name arrives only in a scan response, and "
+        "that needs an active scan. Scanners: %s",
+        address,
+        describe_scan_modes(hass),
+    )
+    return True
+
+
+def note_named(hass, address: str) -> None:
+    """The panel has a name now: the nameless episode, if any, is over."""
+    since = hass.data.get(DOMAIN, {}).get(_NAMELESS_SINCE)
+    if since:
+        since.pop(address.upper(), None)
 
 
 async def async_known_name(address: str) -> str | None:
