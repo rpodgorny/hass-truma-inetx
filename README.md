@@ -44,16 +44,19 @@ install **Truma iNet X (BLE)**, restart Home Assistant. Without HACS, copy
 ## Pair
 
 The panel uses **Just Works** pairing and bonds only while its add-device
-screen is up:
+screen is up — so the order matters more than the arming:
 
-1. Put the panel **freshly** into add-device mode (Truma iNet X app, or at the
-   panel).
-2. Settings → Devices & Services: the panel should be discovered. Otherwise
-   **+ Add Integration** → *Truma iNet X (BLE)*.
-3. Press **Submit once**. Repeated submits make the panel need re-arming.
+1. Leave the panel on its **normal screen** first: an armed panel advertises no
+   name, and discovery is keyed on the name.
+2. Settings → Devices & Services: get to the **"Pair with the Truma panel"**
+   screen — the discovered card, or **+ Add Integration** → *Truma iNet X (BLE)*.
+3. **Then** put the panel into add-device mode (Truma iNet X app, or at the panel).
+4. Press **Submit once**. Repeated submits make the panel need re-arming.
 
-Usually done in seconds. If not — the panel stores only ~4 bonds and rejects
-new ones when full: [pairing](docs/pairing.md).
+A virgin pairing is usually done in seconds; a re-pair over a panel that still
+knows this Home Assistant can take over a minute. If the panel is already
+configured, use **Configure → Reconfigure** instead of adding it again. If the
+panel stores only ~4 bonds and rejects new ones when full: [pairing](docs/pairing.md).
 
 ## What you get
 

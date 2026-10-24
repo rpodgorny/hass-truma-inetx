@@ -3,16 +3,26 @@
 [← README](../README.md)
 
 The panel uses **Just Works** pairing (no passkey) and bonds only while it is
-actively in add-device mode. It is genuinely finicky — these rules matter:
+actively in add-device mode. It is genuinely finicky — these rules matter, and
+the first one is the counter-intuitive part:
 
-1. Put the panel **freshly** into add-device mode (Truma iNet X app, or on the
-   panel itself) so its pairing screen is up.
-2. In Home Assistant the panel should appear as a discovered device. Otherwise
-   Settings → Devices & Services → **+ Add Integration** → *Truma iNet X (BLE)*.
-3. Press **Submit once.** Repeated submits against a panel that is not cleanly
+1. Leave the panel on its **normal screen** — *not* in add-device mode. Its
+   advertisement only carries a name in the scan response while it is idle, and
+   discovery is keyed on that name, so an armed panel cannot be discovered on a
+   first pairing.
+2. In Home Assistant, get to the **"Pair with the Truma panel"** screen: either
+   the discovered card, or Settings → Devices & Services → **+ Add Integration**
+   → *Truma iNet X (BLE)*.
+3. **Now** put the panel into add-device mode (Truma iNet X app, or on the panel
+   itself) so its pairing screen is up.
+4. Press **Submit once.** Repeated submits against a panel that is not cleanly
    ready make it show "something went wrong", and it then needs re-arming.
 
-Pairing normally completes in a few seconds.
+A virgin pairing usually completes in a few seconds. A *re-pair* over a panel
+that still holds a bond for this Home Assistant can take longer than a minute —
+that is the panel finishing a security exchange with a peer it already knows, not
+a fault. If the panel is already configured, use **Configure → Reconfigure** on
+its entry rather than adding it again.
 
 ## If the panel never appears at all
 
@@ -21,6 +31,10 @@ name rides the *scan response*, which only an **active** scan asks for. That
 matters because discovery is keyed on the name — the address rotates every few
 minutes, so keying on it would produce a new card per rotation — and a panel
 Home Assistant has heard but cannot name is a panel it cannot offer.
+
+**A panel in add-device mode advertises no name and no scan response at all**, so
+it is exactly the panel that cannot be offered. That is why the pairing order puts
+arming *after* the card is on screen.
 
 Home Assistant's default scanning mode, `auto`, starts passive and turns the
 radio active only for scheduled windows: four minutes after the scanner starts,
