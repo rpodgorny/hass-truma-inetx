@@ -714,6 +714,7 @@ def _run_bluez_bond(
     timeout: float = 1.0,
     adapter_path: str | None = HCI0,
     pending_limit: float | None = None,
+    may_forget: bool = False,
 ):
     """Drive the real ``_ensure_bonded_bluez`` against a fake BlueZ."""
     saved = {
@@ -740,6 +741,7 @@ def _run_bluez_bond(
                 timeout=timeout,
                 hass=object(),
                 trust_existing_bond=trust,
+                may_forget_bond=may_forget,
             )
         )
     finally:
@@ -755,7 +757,7 @@ def test_a_stale_bond_is_dropped_only_after_the_panel_refuses(pairing) -> None:
     Only then is the bond dropped, and the pass after it bonds clean.
     """
     bluez = _Bluez(paired=True, accepts=True)
-    assert _run_bluez_bond(pairing, bluez, trust=False) is True
+    assert _run_bluez_bond(pairing, bluez, trust=False, may_forget=True) is True
     pairs = [c for c in bluez.calls if c in ("pair", "remove")]
     assert pairs[0] == "pair", f"removed before asking the panel: {bluez.calls}"
     assert pairs.count("remove") == 1, f"removed more than once: {bluez.calls}"
@@ -763,6 +765,25 @@ def test_a_stale_bond_is_dropped_only_after_the_panel_refuses(pairing) -> None:
     # The procedure the reporter's host never reached at all.
     assert "register_agent" in bluez.calls
     assert "unregister_agent" in bluez.calls
+
+
+def test_a_working_bond_survives_an_unarmed_attempt(pairing) -> None:
+    """The A2 regression: an attempt with the panel idle must not cost the bond.
+
+    A panel whose add-device screen is not up refuses a link exactly as a panel
+    that has forgotten this host does -- BlueZ answers ``AlreadyExists`` or
+    ``AuthenticationFailed`` for both -- so "the panel refused while BlueZ
+    claims a bond" is not evidence of a stale key. Acting on it anyway removed a
+    working bond and then failed (proven offline 2026-10-22; this is what
+    pressing the documented Reconfigure button with an idle panel used to do).
+    Removal therefore requires the caller to ask, and the config flow maps that
+    to the user ticking "forget the stale bond" after a failed attempt. Without
+    that consent: pair, fail, and leave the key where it is.
+    """
+    bluez = _Bluez(paired=True, accepts=True)
+    assert _run_bluez_bond(pairing, bluez, trust=False) is False
+    assert "remove" not in bluez.calls, f"removed without consent: {bluez.calls}"
+    assert bluez.paired is True, "the host's bond is gone and nothing re-made it"
 
 
 def test_a_pairing_left_on_the_old_address_is_called_off(pairing) -> None:
@@ -777,7 +798,7 @@ def test_a_pairing_left_on_the_old_address_is_called_off(pairing) -> None:
     The loop sat out the whole 60 s watching a call that could not finish.
     """
     bluez = _Bluez(paired=True, accepts=True, hangs_on=DEV, stale_after=2)
-    assert _run_bluez_bond(pairing, bluez, trust=False) is True
+    assert _run_bluez_bond(pairing, bluez, trust=False, may_forget=True) is True
     assert "cancel_pairing" in bluez.calls, (
         f"waited out a pairing on an address nothing answers: {bluez.calls}"
     )
@@ -820,7 +841,7 @@ def test_the_parameters_follow_the_panel_and_are_not_reloaded_per_poll(
     """
     MGMT.loads.clear()
     bluez = _Bluez(paired=True, accepts=True, hangs_on=DEV, stale_after=2)
-    assert _run_bluez_bond(pairing, bluez, trust=False) is True
+    assert _run_bluez_bond(pairing, bluez, trust=False, may_forget=True) is True
     loaded = [(addr, kind) for _i, addr, kind, _p in MGMT.loads]
     assert (RPA, 2) in loaded, f"never loaded for the live RPA: {loaded}"
     assert loaded.count((RPA, 2)) == 1, f"reloaded per poll: {loaded}"
@@ -944,7 +965,7 @@ def test_a_refused_removal_is_attempted_once_and_claims_nothing(pairing) -> None
     retrying a D-Bus call that has already said no.
     """
     bluez = _Bluez(paired=True, accepts=True, removable=False)
-    assert _run_bluez_bond(pairing, bluez, trust=False) is False
+    assert _run_bluez_bond(pairing, bluez, trust=False, may_forget=True) is False
     assert bluez.calls.count("remove") == 1, f"retried the removal: {bluez.calls}"
     assert bluez.calls.count("pair") > 1, "should have kept asking the panel"
 

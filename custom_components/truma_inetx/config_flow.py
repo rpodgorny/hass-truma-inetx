@@ -44,6 +44,13 @@ from .pairing import ensure_bonded
 # mode before reporting failure.
 _PAIR_TIMEOUT = 60.0
 
+# Offered on the pairing step *after* a failed attempt. Ticking it is the only
+# way an existing bond on this host is ever removed: the panel refuses an
+# unarmed attempt and a forgotten key identically, so the code cannot tell them
+# apart and must not guess. The user can -- they know whether the panel's
+# add-device screen was up.
+CONF_FORGET_BOND = "forget_bond"
+
 
 class TrumaOptionsFlow(OptionsFlow):
     """One knob: how often to talk to the panel, or stay connected."""
@@ -239,6 +246,7 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         assert self._name is not None and self._address is not None
         errors: dict[str, str] = {}
+        forget_bond = bool((user_input or {}).get(CONF_FORGET_BOND))
         if user_input is not None:
             try:
                 bonded, client = await ensure_bonded(
@@ -247,6 +255,7 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._address,
                     adapter_path=self._connectable_adapter_path(),
                     timeout=_PAIR_TIMEOUT,
+                    may_forget_bond=forget_bond,
                 )
             except Exception:  # noqa: BLE001 - surface as a flow error, not a crash
                 LOGGER.exception("Truma pairing error")
@@ -267,9 +276,16 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=self._name, data=data)
             errors["base"] = "pairing_failed"
 
+        # The destructive option appears only alongside a failure: before the
+        # first attempt there is nothing to forget, and a success ends the flow.
         return self.async_show_form(
             step_id="pair",
             errors=errors,
+            data_schema=(
+                vol.Schema({vol.Optional(CONF_FORGET_BOND, default=False): bool})
+                if errors
+                else None
+            ),
             description_placeholders={"name": self._name},
         )
 

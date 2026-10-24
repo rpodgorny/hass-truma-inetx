@@ -17,7 +17,13 @@
       },
       "pair": {
         "title": "Pair with the Truma panel",
-        "description": "Put the panel {name} into add-device mode (in the Truma InetX app, or on the panel itself), then select **Submit** once. Pairing can take up to a minute.\n\n**If pairing fails, work through these in order:**\n\n1. **Clear the panel's saved Bluetooth device list.** It stores only about four devices and silently rejects new bonds once full. Put the panel back into add-device mode and try again.\n2. **If clearing the list did not help, power-cycle the panel and start over** — switch it off, back on, put it into add-device mode again, and repeat this step. A power-cycle drops stale connections that hold a slot and makes the panel advertise a fresh Bluetooth address, which pairs cleanly. This resolves most stubborn cases.\n\nAlways re-enter add-device mode before each attempt: the panel only accepts a bond while its pairing screen is up."
+        "description": "Put the panel {name} into add-device mode (in the Truma InetX app, or on the panel itself), then select **Submit** once. Pairing can take up to a minute.\n\n**If pairing fails, work through these in order:**\n\n1. **Clear the panel's saved Bluetooth device list.** It stores only about four devices and silently rejects new bonds once full. Put the panel back into add-device mode and try again.\n2. **If clearing the list did not help, power-cycle the panel and start over** — switch it off, back on, put it into add-device mode again, and repeat this step. A power-cycle drops stale connections that hold a slot and makes the panel advertise a fresh Bluetooth address, which pairs cleanly. This resolves most stubborn cases.\n\nAlways re-enter add-device mode before each attempt: the panel only accepts a bond while its pairing screen is up.",
+        "data": {
+          "forget_bond": "Forget this host's existing bond and retry"
+        },
+        "data_description": {
+          "forget_bond": "Tick this only if arming the panel did not help. A panel that is not in add-device mode refuses a pairing attempt in exactly the same way as a panel that has forgotten this Home Assistant, so removing an existing bond on that evidence can destroy a working one. Ticking this discards the bond on this host and pairs from scratch."
+        }
       }
     },
     "error": {

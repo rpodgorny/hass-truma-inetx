@@ -93,6 +93,7 @@ async def ensure_bonded(
     *,
     adapter_path: str | None = None,
     timeout: float = 60.0,
+    may_forget_bond: bool = False,
 ) -> tuple[bool, BleakClientWithServiceCache | None]:
     """Ensure the Truma panel is BLE-bonded, over whatever transport HA gives us.
 
@@ -157,6 +158,7 @@ async def ensure_bonded(
             # in add-device mode having seen nothing while every later
             # connect timed out.
             trust_existing_bond=False,
+            may_forget_bond=may_forget_bond,
         ):
             return True, None
         # Not bonded. Fall through rather than give up: the panel may yet
@@ -222,6 +224,7 @@ async def ensure_bonded(
                 timeout=max(deadline - time.monotonic(), 0.0),
                 hass=hass,
                 trust_existing_bond=False,
+                may_forget_bond=may_forget_bond,
             )
             return bonded, None
         try:
@@ -487,6 +490,7 @@ async def _ensure_bonded_bluez(
     timeout: float = 60.0,
     hass: HomeAssistant | None = None,
     trust_existing_bond: bool = True,
+    may_forget_bond: bool = False,
 ) -> bool:
     """Bond the Truma panel over local BlueZ (D-Bus). Return ``True`` if bonded.
 
@@ -497,6 +501,11 @@ async def _ensure_bonded_bluez(
 
     ``adapter_path`` (e.g. ``/org/bluez/hci0``) scopes the bond to the adapter
     HA connects through; when omitted, any adapter that sees the panel is used.
+
+    ``may_forget_bond`` is the user's consent to drop an existing bond on this
+    adapter when the panel refuses it. It defaults to ``False`` because the
+    evidence does not distinguish a stale key from an unarmed panel, and the
+    caller is the only party that asked -- see the removal branch below.
 
     ``trust_existing_bond`` is whether BlueZ reporting ``Paired`` may be taken
     as the answer. Normally it may: the caller got as far as a link before
@@ -597,6 +606,7 @@ async def _ensure_bonded_bluez(
         # remaining timeout into a retry loop.
         suspect = not trust_existing_bond
         removal_tried = False
+        removal_skipped = False
         pair_pending_until = 0.0
         # The object the last Pair() was issued against. BlueZ pairs one device
         # at a time per adapter, so a call still running against the wrong one
@@ -681,16 +691,45 @@ async def _ensure_bonded_bluez(
                     pending_since = 0.0
                 elif _is_in_progress(failure):
                     pair_pending_until = time.monotonic() + _PAIR_PENDING_WAIT
-                elif suspect and not removal_tried and _is_paired(objects, path):
-                    # Try-then-remove: the panel refused while BlueZ still
-                    # claims a bond, so the key on this host is one the panel
-                    # no longer has. Drop it and let the next pass pair clean.
-                    # Not conditioned on the error text -- BlueZ words this
-                    # several ways (AlreadyExists, AuthenticationFailed) and
-                    # every one of them means the same thing here.
+                elif suspect and may_forget_bond and not removal_tried and _is_paired(
+                    objects, path
+                ):
+                    # Try-then-remove, and only with the user's consent.
+                    #
+                    # The panel refused while BlueZ still claims a bond, which
+                    # has two readings this loop cannot tell apart: this host
+                    # holds a key the panel has forgotten (remove it, the next
+                    # pass pairs clean) or the panel is simply not in add-device
+                    # mode, where it refuses *every* link it is offered. Not
+                    # conditioned on the error text on purpose -- BlueZ words
+                    # both readings the same way (AlreadyExists,
+                    # AuthenticationFailed), so a "stale key" heuristic built on
+                    # the text would be a guess. The only evidence that
+                    # separates them belongs to the user, who knows whether the
+                    # panel is armed -- so ``may_forget_bond`` is their answer,
+                    # never this module's inference. Removing a working bond
+                    # after a mistimed Reconfigure is the one outcome here that
+                    # cannot be undone from Home Assistant.
                     removal_tried = True
                     if await _forget(bus, path, name, adapter_path=adapter_path):
                         suspect = False
+                elif suspect and _is_paired(objects, path) and not removal_skipped:
+                    # Same evidence as the branch above, without the consent:
+                    # say so once, in words a support log can carry, and leave
+                    # the bond alone.
+                    removal_skipped = True
+                    LOGGER.warning(
+                        "Truma %s: the panel refused, and BlueZ still holds a "
+                        "bond on %s. Leaving it in place: a panel that is not "
+                        "in add-device mode refuses exactly like one that has "
+                        "forgotten this host, so dropping the bond on this "
+                        "evidence can destroy a working one. Put the panel into "
+                        "add-device mode and retry; if the bond really is "
+                        "stale, retry with 'forget the stale bond' selected.",
+                        name,
+                        path,
+                    )
+
             else:
                 LOGGER.debug("Truma %s: no device object to pair yet", name)
             await asyncio.sleep(_POLL_INTERVAL)
