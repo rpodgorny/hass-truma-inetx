@@ -34,7 +34,13 @@ Home Assistant has heard but cannot name is a panel it cannot offer.
 
 **A panel in add-device mode advertises no name and no scan response at all**, so
 it is exactly the panel that cannot be offered. That is why the pairing order puts
-arming *after* the card is on screen.
+arming *after* the card is on screen. It does still put its Truma service UUID on
+air, so Home Assistant *hears* an armed panel — it just cannot name it, which is
+why the log shows `awaiting_name` rather than silence.
+
+**If you armed it too early**, leave the add-device screen: the scan response
+comes back, and the card appears within a minute. Then arm it again and press
+**Submit once**.
 
 Home Assistant's default scanning mode, `auto`, starts passive and turns the
 radio active only for scheduled windows: four minutes after the scanner starts,
