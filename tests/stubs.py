@@ -201,7 +201,13 @@ def install_homeassistant() -> None:
     mod("homeassistant", __path__=[])
     mod("homeassistant.core", HomeAssistant=object, callback=lambda f: f,
         Event=object)
-    mod("homeassistant.config_entries", ConfigEntry=dict)
+    mod(
+        "homeassistant.config_entries",
+        ConfigEntry=dict,
+        ConfigEntryState=type(
+            "ConfigEntryState", (), {"LOADED": "loaded", "NOT_LOADED": "not_loaded"}
+        ),
+    )
     mod(
         "homeassistant.const",
         ATTR_TEMPERATURE="temperature",

@@ -21,6 +21,7 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import (
     SOURCE_RECONFIGURE,
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -248,6 +249,27 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         forget_bond = bool((user_input or {}).get(CONF_FORGET_BOND))
         if user_input is not None:
+            # One dialler at a time (#33). The coordinator's reconnect loop
+            # competes with this pairing for the panel's single connection slot,
+            # and the panel refuses the flow's link while the session holds one.
+            # Measured on the van 2026-10-24: same panel, same arming, entry
+            # loaded -> every Pair() earned InProgress, cancel at 20 s, re-issue,
+            # pairing_failed at 60 s, no bond; entry unloaded -> bonded in
+            # seconds with 32 SMP frames. So unload for the attempt, and put the
+            # entry back afterwards, success or failure.
+            entry = (
+                self._get_reconfigure_entry()
+                if self.source == SOURCE_RECONFIGURE
+                else None
+            )
+            unloaded = False
+            if entry is not None and entry.state is ConfigEntryState.LOADED:
+                unloaded = await self.hass.config_entries.async_unload(
+                    entry.entry_id
+                )
+                LOGGER.debug(
+                    "Truma: entry unloaded for the pairing attempt (one dialler)"
+                )
             try:
                 bonded, client = await ensure_bonded(
                     self.hass,
@@ -260,6 +282,13 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             except Exception:  # noqa: BLE001 - surface as a flow error, not a crash
                 LOGGER.exception("Truma pairing error")
                 bonded, client = False, None
+            finally:
+                if (
+                    unloaded
+                    and entry is not None
+                    and entry.state is ConfigEntryState.NOT_LOADED
+                ):
+                    await self.hass.config_entries.async_setup(entry.entry_id)
             if bonded:
                 if client is not None:
                     # Hand the live pairing connection to the coordinator that

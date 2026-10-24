@@ -222,6 +222,12 @@ def _load():
         "homeassistant.config_entries",
         SOURCE_RECONFIGURE="reconfigure",
         ConfigEntry=dict,
+        # config_flow imports the enum to tell a loaded entry from an unloaded
+        # one before it unloads anything (#33: one dialler at a time). The stub
+        # only needs the two states the flow compares against.
+        ConfigEntryState=type(
+            "ConfigEntryState", (), {"LOADED": "loaded", "NOT_LOADED": "not_loaded"}
+        ),
         ConfigFlow=_ConfigFlow,
         ConfigFlowResult=dict,
         OptionsFlow=object,
