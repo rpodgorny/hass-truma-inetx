@@ -552,6 +552,11 @@ async def _ensure_bonded_bluez(
         path = _find_device(
             objects, name=name, address=address, adapter_path=adapter_path
         )
+        # Whether a bond record was already there when we started. The loop's
+        # post-timeout re-check may only call a bond "made" if there was none
+        # before -- otherwise it would bless the very stale record this call may
+        # have been trying to get rid of.
+        had_bond_at_start = bool(path and _is_paired(objects, path))
         if trust_existing_bond and _already_bonded(
             objects, path=path, adapter_path=adapter_path
         ):
@@ -735,6 +740,32 @@ async def _ensure_bonded_bluez(
             await asyncio.sleep(_POLL_INTERVAL)
 
         LOGGER.warning("Truma %s: pairing timed out after %ss", name, timeout)
+        # The deadline is not the truth. Measured on the van 2026-10-24: two
+        # Reconfigure attempts both returned pairing_failed at 60.0 s -- the
+        # bond landed afterwards, with a complete LTK+IRK record and a live
+        # session. Reporting that as a failure is the mirror of 0.7's false
+        # success, and it is actively harmful: the error text tells the user to
+        # try again, and a retry on a build without the consent gate deletes
+        # the bond that was just written. So look once more before saying no.
+        for wait in (0.0, 3.0):
+            if wait:
+                await asyncio.sleep(wait)
+            try:
+                objects = await object_manager.call_get_managed_objects()
+                path = _find_device(
+                    objects, name=name, address=address, adapter_path=adapter_path
+                )
+                if path and _is_paired(objects, path) and not had_bond_at_start:
+                    LOGGER.info(
+                        "Truma %s bonded -- the bond landed after the %ss "
+                        "deadline, so this is a success, not a timeout",
+                        name,
+                        timeout,
+                    )
+                    await _release_link(bus, path, name)
+                    return True
+            except Exception as exc:  # noqa: BLE001 - never fail on the re-check
+                LOGGER.debug("Truma %s: post-timeout bond check: %s", name, exc)
         return False
     finally:
         if adapter_iface is not None:
