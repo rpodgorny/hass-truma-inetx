@@ -477,6 +477,28 @@ class _Device:
         self.address = address
 
 
+class _Link:
+    """A live client as ``establish_connection`` returns one (local adapter)."""
+
+    def __init__(self, *, bonds: bool) -> None:
+        self.bonds = bonds
+        self.calls: list[str] = []
+
+    async def pair(self) -> None:
+        self.calls.append("pair")
+        if not self.bonds:
+            raise RuntimeError("[org.bluez.Error.AuthenticationFailed]")
+
+    async def start_notify(self, *_a, **_kw) -> None:
+        self.calls.append("start_notify")
+
+    async def stop_notify(self, *_a, **_kw) -> None:
+        self.calls.append("stop_notify")
+
+    async def disconnect(self) -> None:
+        self.calls.append("disconnect")
+
+
 class _StopTest(Exception):
     """Ends a loop that is meant to run until its deadline."""
 
@@ -491,10 +513,20 @@ def _run_ensure_bonded(
     connect_delay: float = 0.0,
     fresh_addresses: bool = False,
     bonds: bool = False,
+    own_the_link: bool = False,
+    link_bonds: bool = False,
+    local_link: bool = False,
     stop_after: int = 200,
 ):
     """Drive ``ensure_bonded`` and report what it tried and where it went."""
-    log: dict = {"tried": [], "handover": [], "budget": [], "bonded_over_link": 0}
+    log: dict = {
+        "tried": [],
+        "handover": [],
+        "budget": [],
+        "bonded_over_link": 0,
+        "links": [],
+        "local_bond": 0,
+    }
 
     def resolve(_hass, _name, *, avoid=(), local_only=False, prefer_identity=False):
         if local_only:
@@ -521,11 +553,20 @@ def _run_ensure_bonded(
             await asyncio.sleep(connect_delay)
         if not connects:
             raise RuntimeError(NO_SERVICES)
-        return object()
+        link = _Link(bonds=link_bonds)
+        log["links"].append(link)
+        return link
 
     async def bond_over_link(_name, _client):
         log["bonded_over_link"] += 1
         return bonds
+
+    async def bond_over_local_link(_name, _client):
+        # The exchange itself is exercised directly in
+        # test_bonding_over_a_dialled_link_needs_an_agent_and_proves_the_bond;
+        # here what matters is whether the re-pair path reaches for it at all.
+        log["local_bond"] += 1
+        return link_bonds
 
     async def bluez_bond(_name, _address, **kwargs):
         log["handover"].append(kwargs.get("trust_existing_bond"))
@@ -538,10 +579,13 @@ def _run_ensure_bonded(
     patches = {
         "async_resolve_device": resolve,
         "establish_connection": connect,
-        "client_is_proxy": lambda _client: True,
         "_bond_over_link": bond_over_link,
+        "_bond_over_local_link": bond_over_local_link,
         "_ensure_bonded_bluez": bluez_bond,
         "async_has_proxy_route": lambda *_a, **_k: has_proxy,
+        # Which transport the client in hand came from. A local link is the case
+        # that used to drop the link and hand the bond to Device1.Pair().
+        "client_is_proxy": lambda _client: not local_link,
         # The loop's back-off is wall-clock seconds and its deadline is not;
         # skip most of the waiting without touching asyncio.wait_for, which the
         # D-Bus helpers still need.
@@ -554,7 +598,12 @@ def _run_ensure_bonded(
     async def main():
         try:
             return await pairing.ensure_bonded(
-                object(), PANEL, IDENTITY, adapter_path=HCI0, timeout=0.25
+                object(),
+                PANEL,
+                IDENTITY,
+                adapter_path=HCI0,
+                timeout=0.25,
+                own_the_link=own_the_link,
             )
         except _StopTest:
             return None, None
@@ -564,6 +613,107 @@ def _run_ensure_bonded(
     finally:
         for name, value in saved.items():
             setattr(pairing, name, value)
+
+
+def test_a_re_pair_that_cannot_dial_still_bonds_through_bluez(pairing) -> None:
+    """A cleared panel drops every link, so there the second dialler is the way in.
+
+    That is #26's shape and exactly what today's S3 cure used (panel list
+    cleared, then armed): no link to bond over, so bonding through BlueZ must
+    still be tried. Only a panel that *answers* and refuses is left alone.
+    """
+    (bonded, client), log = _run_ensure_bonded(
+        pairing,
+        addresses=[IDENTITY],
+        bluez_sees=True,
+        connects=False,
+        own_the_link=True,
+        local_link=True,
+    )
+    assert bonded is True
+    assert client is None, "the BlueZ path holds no link to hand off"
+    assert log["handover"] == [False], (
+        f"gave up without bonding at all: {log['handover']}"
+    )
+    assert log["local_bond"] == 0, "claimed a link it never had"
+
+
+def test_a_re_pair_bonds_over_the_link_home_assistant_dialled(pairing) -> None:
+    """A re-pair must use the connection it already has, not open a second one.
+
+    `Device1.Pair()` dials the panel itself. On a host whose own adapter is
+    connecting, that made two diallers for one panel: our link was dropped so
+    BlueZ could have its own, BlueZ kept it afterwards (`Connected: no`,
+    an ACL nothing could close), and the panel was asked for a bond ~60 times a
+    minute while it was not in add-device mode.
+
+    The link is already up and encrypted-capable, so the Just Works exchange can
+    run over it, and the same link then carries the session.
+    """
+    (bonded, client), log = _run_ensure_bonded(
+        pairing,
+        addresses=[IDENTITY],
+        bluez_sees=True,
+        connects=True,
+        own_the_link=True,
+        local_link=True,
+        link_bonds=True,
+    )
+    assert bonded is True
+    assert client is not None, "the link that bonded was not handed on"
+    assert log["local_bond"] == 1, "never asked to bond over the link in hand"
+    assert "disconnect" not in client.calls, "closed the link it just bonded"
+    assert log["handover"] == [], (
+        f"escalated to a second dialler while holding a link: {log['handover']}"
+    )
+
+
+def test_a_re_pair_the_panel_refuses_is_not_escalated_to_a_pair_storm(pairing) -> None:
+    """When the panel refuses, stop -- do not start the `Pair()` loop.
+
+    Measured on the van 2026-10-25: with the panel idle, `Reconfigure` spent
+    sixty seconds re-asking for a bond, the panel stopped honouring our key
+    entirely (47 x HCI 0x0E in six minutes), and an ACL was left behind.
+    A re-pair that cannot bond over its own link reports failure and lets go.
+    """
+    (bonded, client), log = _run_ensure_bonded(
+        pairing,
+        addresses=[IDENTITY],
+        bluez_sees=True,
+        connects=True,
+        own_the_link=True,
+        local_link=True,
+        link_bonds=False,
+    )
+    assert bonded is False
+    assert client is None
+    assert log["handover"] == [], f"fell back to Device1.Pair(): {log['handover']}"
+    assert log["links"], "never dialled at all"
+    assert "disconnect" in log["links"][0].calls, (
+        "left the link open after refusing to bond over it"
+    )
+
+
+def test_a_first_pairing_still_bonds_before_dialling(pairing) -> None:
+    """#26 is untouched: with no bond known, bonding still comes first.
+
+    A panel with no bond drops every link it is offered, so a proxyless host
+    has nothing to learn from dialling -- that is the whole of #26. Only the
+    re-pair path (an entry that already has a bond) may dial first.
+    """
+    (bonded, client), log = _run_ensure_bonded(
+        pairing,
+        addresses=[IDENTITY],
+        bluez_sees=True,
+        has_proxy=False,
+        own_the_link=False,
+    )
+    assert bonded is True
+    assert client is None, "the BlueZ path holds no link to hand off"
+    assert log["handover"] == [False], (
+        f"expected one hand-over with the bond unproven: {log['handover']}"
+    )
+    assert log["tried"] == [], f"dialled before bonding: {log['tried']}"
 
 
 def test_a_panel_that_refuses_every_link_is_bonded_through_bluez(pairing) -> None:
@@ -1049,6 +1199,41 @@ def test_a_failed_attempt_releases_the_link_it_opened(pairing) -> None:
     # And the bond that was already there is still there.
     assert bluez.paired is True
     assert "remove" not in bluez.calls, f"removed without consent: {bluez.calls}"
+
+
+def test_bonding_over_a_dialled_link_needs_an_agent_and_proves_the_bond(pairing) -> None:
+    """The exchange over a link we hold: agent first, pair, prove it, clean up.
+
+    ``client.pair()`` is ``Device1.Pair()``, and that only completes if something
+    answers the Just Works confirmation -- so the agent has to be registered
+    before the call and gone afterwards. Proving the bond is the protected
+    characteristic write ``_bond_over_link`` already uses: a CCCD write only
+    lands on an encrypted link.
+    """
+    bluez = _Bluez(paired=False, accepts=True)
+    link = _Link(bonds=True)
+    saved = {
+        name: getattr(pairing, name)
+        for name in ("MessageBus", "_get_interface", "asyncio")
+    }
+    pairing.MessageBus = _Bus
+    pairing._get_interface = _interfaces(bluez)
+    pairing.asyncio = types.SimpleNamespace(sleep=lambda _s: asyncio.sleep(0))
+    _Bus.current = bluez
+    try:
+        assert asyncio.run(pairing._bond_over_local_link(PANEL, link)) is True
+    finally:
+        for name, value in saved.items():
+            setattr(pairing, name, value)
+        _Bus.current = None
+    assert "pair" in link.calls, f"never asked for the bond: {link.calls}"
+    assert "start_notify" in link.calls, "claimed a bond it never proved"
+    assert "register_agent" in bluez.calls, "paired with no agent to confirm it"
+    assert "unregister_agent" in bluez.calls, "left a default agent registered"
+    # Asking for the bond is the first thing done over the link; the proof comes
+    # after it. (The fake cannot prove the agent was in place *before* the call,
+    # only that it was offered.)
+    assert link.calls[0] == "pair", f"proved the bond before asking: {link.calls}"
 
 
 def main() -> None:

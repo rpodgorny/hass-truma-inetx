@@ -37,12 +37,22 @@ failed on every address the panel is advertising falls back to the BlueZ path,
 which needs no link of its own in order to bond. Only the fallback is new: a
 connect that *succeeds* still decides the transport, because a link in hand is
 the only thing that ever predicted it.
+
+A *re-pair* of an entry that already exists takes the opposite order, on purpose
+(``own_the_link``): the panel is known to answer links, so the link Home
+Assistant dials is kept, the Just Works exchange runs over it, and that same
+link goes on to carry the session. Bonding through BlueZ while a session holds a
+link meant two diallers for one panel, and on 2026-10-25 that ended with the
+panel refusing our key outright -- 47 x HCI 0x0E in six minutes -- after sixty
+seconds of re-asking. If a re-pair cannot dial at all, that is #26's shape again
+and the BlueZ path is still taken, once, with the budget that is left.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import asynccontextmanager
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 from dbus_fast import BusType, Variant
@@ -94,6 +104,7 @@ async def ensure_bonded(
     adapter_path: str | None = None,
     timeout: float = 60.0,
     may_forget_bond: bool = False,
+    own_the_link: bool = False,
 ) -> tuple[bool, BleakClientWithServiceCache | None]:
     """Ensure the Truma panel is BLE-bonded, over whatever transport HA gives us.
 
@@ -124,6 +135,17 @@ async def ensure_bonded(
     avoids the disconnect/reconnect that wedges the just-bonded RPA); the caller
     owns it and must disconnect it if it does not hand it off. Over local BlueZ
     (and on failure) ``client`` is ``None``. Safe to call when already bonded.
+
+    ``own_the_link`` is for the caller that knows a bond already exists -- a
+    Reconfigure of a configured entry. It inverts the ordering below: rather
+    than bonding through BlueZ *before* dialling, the link Home Assistant dials
+    is kept, the Just Works exchange runs over it, and that same link is handed
+    back for the session. The difference is not cosmetic. `Device1.Pair()` dials
+    the panel itself, so bonding through BlueZ while a session holds a link
+    means two diallers for one panel: ours is dropped, BlueZ keeps its own
+    afterwards (``Connected: no``, an ACL nothing in Home Assistant can close),
+    and the panel -- measured on the van 2026-10-25 -- stops honouring our key
+    after 60 s of repeated requests. One dialler, one link, both ours.
     """
     deadline = time.monotonic() + timeout
     # Bond before dialling where dialling cannot work. A panel with no bond
@@ -135,8 +157,10 @@ async def ensure_bonded(
     # did before connect-first, and what c91f711 was never arguing against --
     # its case is the host that has *both*, where a local bond can land on a
     # path nothing uses. That host still dials first.
-    if not async_has_proxy_route(hass, name) and _live_device_path(
-        hass, name, adapter_path
+    if (
+        not own_the_link
+        and not async_has_proxy_route(hass, name)
+        and _live_device_path(hass, name, adapter_path)
     ):
         LOGGER.debug(
             "Truma %s: no proxy route, so bonding through BlueZ before dialling",
@@ -185,6 +209,12 @@ async def ensure_bonded(
     # Never more than half the budget: the reserve is there so a slow rotation
     # cannot leave the bond nothing, not so a short timeout skips dialling.
     reserve = min(_BLUEZ_RESERVE, timeout / 2)
+    # Whether any address gave us a link at all. A re-pair that cannot dial is a
+    # different failure from one that dials and is refused: the first is #26's
+    # shape (a panel with no bond drops every link), where bonding through BlueZ
+    # is the only way in and must still be tried; the second is a panel that is
+    # reachable and refusing, where a second dialler is exactly what to avoid.
+    dialled = False
     while time.monotonic() < deadline:
         device = async_resolve_device(hass, name, avoid=avoid)
         if device is None:
@@ -238,12 +268,30 @@ async def ensure_bonded(
             connect_failed.add(device.address.upper())
             await asyncio.sleep(2.0)
             continue
+        dialled = True
 
         if not client_is_proxy(client):
-            # HA put us on the host's own adapter. Bonding there is BlueZ's job
-            # and cannot be done through bleak: it needs an agent registered to
-            # answer the Just Works confirmation, and Device1.Pair() on the
-            # BlueZ object. Drop the link and hand the rest over.
+            if own_the_link:
+                # A re-pair: this link is already up, so the exchange runs over
+                # it and the same link goes on to carry the session. Nothing
+                # else touches the panel, which is the point -- Device1.Pair()
+                # would dial it a second time, keep that link afterwards, and
+                # leave the panel refusing us (measured on the van 2026-10-25).
+                if await _bond_over_local_link(name, client):
+                    return True, client
+                # Refused. Let the link go and report failure: falling through
+                # to the Pair() loop is what turned one refusal into 47 x 0x0E.
+                LOGGER.debug(
+                    "Truma %s: the panel refused a bond over the link we "
+                    "dialled; not escalating to Device1.Pair()",
+                    name,
+                )
+                await _drop(client, name)
+                avoid.add(device.address.upper())
+                await asyncio.sleep(2.0)
+                continue
+            # First pairing, or a host that cannot dial: BlueZ holds the bond.
+            # HA put us on the host's own adapter.
             LOGGER.debug(
                 "Truma %s: Home Assistant connected over a local adapter; "
                 "bonding through BlueZ",
@@ -270,6 +318,27 @@ async def ensure_bonded(
         avoid.add(device.address.upper())
         await asyncio.sleep(2.0)
     LOGGER.warning("Truma %s: pairing timed out (%s)", name, last_exc)
+    # A re-pair that never got a link is #26's shape, not a refusal: the panel
+    # drops every link it is offered when it has no bond for us, which is the
+    # state a cleared device list leaves. There the second dialler is the only
+    # way in, so take it -- once, and with whatever budget is left.
+    if own_the_link and not dialled and _live_device_path(hass, name, adapter_path):
+        LOGGER.debug(
+            "Truma %s: no link could be dialled, so bonding through BlueZ after all",
+            name,
+        )
+        return (
+            await _ensure_bonded_bluez(
+                name,
+                address,
+                adapter_path=adapter_path,
+                timeout=max(deadline - time.monotonic(), 0.0),
+                hass=hass,
+                trust_existing_bond=False,
+                may_forget_bond=may_forget_bond,
+            ),
+            None,
+        )
     return False, None
 
 
@@ -320,6 +389,69 @@ async def _bond_over_link(name: str, client: BleakClientWithServiceCache) -> boo
 
 
 # --- local BlueZ pairing (D-Bus) — when HA connects over a host adapter -----
+
+
+@asynccontextmanager
+async def _agent_registered(bus: MessageBus):
+    """Offer the auto-accept agent to BlueZ for the duration of the block.
+
+    ``client.pair()`` is ``Device1.Pair()`` on the BlueZ backend, and that needs
+    an agent to answer the Just Works confirmation. It is registered here rather
+    than left in place for the life of the process: a default agent that answers
+    everything would also confirm pairing requests nothing in this integration
+    asked for.
+
+    Yields whether the agent is registered. A failure is not fatal on its own --
+    the caller finds out when the exchange has no one to confirm it.
+    """
+    agent = _JustWorksAgent()
+    registered = False
+    agent_manager = None
+    bus.export(_AGENT_PATH, agent)
+    try:
+        agent_manager = await _get_interface(
+            bus, "/org/bluez", "org.bluez.AgentManager1"
+        )
+        await agent_manager.call_register_agent(_AGENT_PATH, "NoInputNoOutput")
+        registered = True
+        await agent_manager.call_request_default_agent(_AGENT_PATH)
+    except Exception as exc:  # noqa: BLE001 - best effort, reported below
+        LOGGER.debug("Truma: could not register the pairing agent: %s", exc)
+    try:
+        yield registered
+    finally:
+        if registered and agent_manager is not None:
+            try:
+                await agent_manager.call_unregister_agent(_AGENT_PATH)
+            except Exception as exc:  # noqa: BLE001 - best effort cleanup
+                LOGGER.debug("Truma agent unregister failed: %s", exc)
+
+
+async def _bond_over_local_link(
+    name: str, client: BleakClientWithServiceCache
+) -> bool:
+    """Bond over the local link Home Assistant already dialled.
+
+    The same exchange ``_bond_over_link`` runs for a proxy, plus the agent the
+    local path needs. What matters is what it does **not** do: no second dial.
+    The ACL this runs on is the one ``establish_connection`` opened, so there is
+    no link of BlueZ's own to be left behind and nothing to release afterwards.
+    """
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        async with _agent_registered(bus) as registered:
+            if not registered:
+                LOGGER.debug(
+                    "Truma %s: no pairing agent, so a bond over this link "
+                    "cannot be confirmed",
+                    name,
+                )
+            return await _bond_over_link(name, client)
+    except Exception as exc:  # noqa: BLE001 - reported by the caller
+        LOGGER.debug("Truma %s: bonding over the dialled link: %s", name, exc)
+        return False
+    finally:
+        bus.disconnect()
 
 
 class _JustWorksAgent(ServiceInterface):

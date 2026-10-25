@@ -293,6 +293,12 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
                     adapter_path=self._connectable_adapter_path(),
                     timeout=_PAIR_TIMEOUT,
                     may_forget_bond=forget_bond,
+                    # A configured entry already has a bond, so the panel
+                    # answers links: keep the one Home Assistant dials and bond
+                    # over it. Bonding through BlueZ instead makes a second
+                    # dialler, which is what left the panel refusing us on
+                    # 2026-10-25. A first pairing has no such evidence (#26).
+                    own_the_link=self.source == SOURCE_RECONFIGURE,
                 )
             except Exception:  # noqa: BLE001 - surface as a flow error, not a crash
                 LOGGER.exception("Truma pairing error")
