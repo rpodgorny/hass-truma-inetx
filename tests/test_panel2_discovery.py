@@ -99,6 +99,9 @@ class _Info:
 
 
 ADVERTS: list[_Info] = []
+# Every issue the integration raised or cleared, in order: ("create"|"delete",
+# domain, issue_id[, kwargs]).
+ISSUES: list = []
 
 
 class _Aborted(Exception):
@@ -212,6 +215,24 @@ def _load():
         async_scanner_devices_by_address=lambda *a, **kw: [],
         async_request_active_scan=_no_new_adverts,
     )
+    class _IssueSeverity:
+        WARNING = "warning"
+
+    def _create_issue(_hass, domain, issue_id, **kw):
+        ISSUES.append(("create", domain, issue_id, kw))
+
+    def _delete_issue(_hass, domain, issue_id):
+        ISSUES.append(("delete", domain, issue_id))
+
+    helpers = _mod("homeassistant.helpers", __path__=[])
+    registry = _mod(
+        "homeassistant.helpers.issue_registry",
+        async_create_issue=_create_issue,
+        async_delete_issue=_delete_issue,
+        IssueSeverity=_IssueSeverity,
+    )
+    helpers.issue_registry = registry
+
     _mod("truma_pkg", __path__=[str(SRC)])
     # config_flow only reads two names off the coordinator, and pairing is
     # never reached by the steps under test.
@@ -454,6 +475,81 @@ def test_no_card_when_a_truma_entry_already_exists() -> None:
         CF.TrumaConfigFlow._async_current_ids = current
         CF.TrumaConfigFlow.hass = old_hass
     assert (kind, detail) == ("aborted", "awaiting_name"), (kind, detail)
+
+
+def _pinned_passive(source: str = "hci0"):
+    """Make the stubbed Bluetooth stack report one scanner pinned to passive.
+
+    ``warn_about_names`` waits out a grace period unless a scanner is *pinned*
+    passive -- AUTO is passive most of the time and can still open a window, so
+    warning about it would be noise. Returns a callable that restores the stub.
+    """
+    bluetooth_stub = sys.modules["homeassistant.components.bluetooth"]
+    previous = getattr(bluetooth_stub, "async_current_scanners", None)
+
+    class _Scanner:
+        requested_mode = "passive"
+        current_mode = "passive"
+        connectable = True
+        name: str
+        source: str
+
+    # Attributes on the instance, not the class body: a class body cannot read
+    # the enclosing function's locals, so `name = source` there is a NameError.
+    scanner = _Scanner()
+    scanner.name = source
+    scanner.source = source
+    setattr(bluetooth_stub, "async_current_scanners", lambda _hass: [scanner])
+
+    def restore() -> None:
+        if previous is None:
+            delattr(bluetooth_stub, "async_current_scanners")
+        else:
+            setattr(bluetooth_stub, "async_current_scanners", previous)
+
+    return restore
+
+
+def test_a_nameless_panel_raises_a_repairs_entry() -> None:
+    """The card is shown once; Repairs is where the state waits to be seen.
+
+    A user who was not looking at the moment the card appeared would otherwise
+    have nothing at all to go on, and a passively pinned adapter never fixes
+    itself, so the state is exactly the kind Repairs exists for.
+    """
+    restore = _pinned_passive()
+    hass = _Hass()
+    ISSUES.clear()
+    try:
+        warned = BT.warn_about_names(hass, RPA, _Info(name=RPA))
+    finally:
+        restore()
+    assert warned is True
+    creates = [i for i in ISSUES if i[0] == "create"]
+    assert len(creates) == 1, ISSUES
+    _kind, domain, issue_id, kw = creates[0]
+    assert (domain, issue_id) == ("truma_inetx", CONST.ISSUE_PANEL_UNNAMED)
+    assert kw["translation_key"] == CONST.ISSUE_PANEL_UNNAMED
+    assert kw["translation_placeholders"]["address"] == RPA
+    assert "passive" in kw["translation_placeholders"]["scanners"]
+
+
+def test_the_repairs_entry_goes_away_when_the_panel_is_named() -> None:
+    """A named advert is the cure, so the entry must not outlive it.
+
+    note_named() already marks the end of a nameless episode for the warning;
+    the Repairs entry is the same fact stated where a user will find it.
+    """
+    restore = _pinned_passive()
+    hass = _Hass()
+    ISSUES.clear()
+    try:
+        BT.warn_about_names(hass, RPA, _Info(name=RPA))
+        BT.note_named(hass, RPA)
+    finally:
+        restore()
+    assert [i[0] for i in ISSUES] == ["create", "delete"], ISSUES
+    assert ISSUES[-1][2] == CONST.ISSUE_PANEL_UNNAMED
 
 
 def main() -> None:

@@ -57,6 +57,10 @@
     "panel_refusing": {
       "title": "Das Truma-Panel verweigert die Verbindung",
       "description": "Das Panel sendet Werbung und Home Assistant hat einen Bond dafür, aber jede Verbindung wird abgelehnt.\n\nMeistens liegt es daran, dass das Panel diesen Home Assistant nicht mehr kennt. Es verliert ein gekoppeltes Gerät, wenn seine Bluetooth-Software abstürzt (auf dem Display steht dann eventuell \"Bluetooth nicht verfügbar\"), oder wenn seine Geräteliste geleert wird.\n\nSo behebst du es:\n\n1. Entferne diesen Home Assistant auf dem Panel aus der Geräteliste — oder leere die Liste.\n2. Öffne die Integration, wähle **Konfigurieren → Neu konfigurieren** und setze den Haken bei **veralteten Bond vergessen**.\n3. Versetze das Panel in den Kopplungsmodus (Add-Device) und bestätige einmal.\n\nWenn das Panel danach weiter ablehnt, hat sich sein Bluetooth nicht erholt: Panel kurz vom Strom nehmen (zehn Sekunden aus, dann ein) und erneut versuchen."
+    },
+    "panel_unnamed": {
+      "title": "Truma-Panel gehört, aber ohne Namen",
+      "description": "Ein Truma-Panel sendet unter **{address}** und wird von Home Assistant gehört, aber sein Name kommt nicht an — und der Name ist das, worauf ein Truma-Eintrag geschlüsselt wird. Es kann daher keine Einrichtungs-Karte angeboten werden.\n\nDer Name steht in einer *Scan Response*, und nur ein **aktiver** Scan fordert diese an. Ein rein passiv lauschender Scanner bekommt sie nie zu sehen. Mit dem Panel ist alles in Ordnung.\n\nScanner hier:\n\n> {scanners}\n\n**Lösung:** aktives Scannen am betreffenden Adapter einschalten oder — bei einem ESP32-Proxy — `bluetooth_proxy: active: true` setzen (die offizielle Bluetooth-Proxy-Firmware macht das bereits). Dieser Eintrag verschwindet von selbst, sobald der Name des Panels gehört wird."
     }
   },
   "entity": {

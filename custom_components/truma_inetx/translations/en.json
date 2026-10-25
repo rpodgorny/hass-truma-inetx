@@ -57,6 +57,10 @@
     "panel_refusing": {
       "title": "The Truma panel refuses to connect",
       "description": "The panel is advertising and Home Assistant holds a bond for it, but every connection is refused.\n\nThe usual cause is that the panel no longer recognises this Home Assistant. It forgets a paired device if its Bluetooth stack crashes (the panel itself may show something like \"bluetooth not available\" on its screen), or when its device list is cleared.\n\nTo fix it:\n\n1. On the panel, remove this Home Assistant from its device list — or clear the list if that is easier.\n2. Open the integration, choose **Configure → Reconfigure**, and tick **forget the stale bond**.\n3. Put the panel into add-device (pairing) mode when asked, and submit once.\n\nIf the panel still refuses afterwards, its Bluetooth has not recovered: power-cycle the panel (off for ten seconds, then on) and try again."
+    },
+    "panel_unnamed": {
+      "title": "Truma panel heard, but it cannot be named",
+      "description": "A Truma panel is advertising at **{address}** and Home Assistant is hearing it, but its name is not arriving — and the name is what a Truma entry is keyed on, so no discovery card can offer it for setup.\n\nThe name travels in a *scan response*, and only an **active** scan asks for one. A scanner that is passively listening therefore never receives it. Nothing is wrong with the panel.\n\nScanners here:\n\n> {scanners}\n\n**To fix it:** enable active scanning on that adapter, or — if it is an ESP32 proxy — set `bluetooth_proxy: active: true` (the official Bluetooth Proxy firmware already does). This entry disappears by itself once the panel's name is heard."
     }
   },
   "entity": {

@@ -154,7 +154,7 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             async_sweep_for_names_soon(self.hass)
             # Say why, in words that name the layer: a user cannot guess that
             # the reason is a scan mode, and the log is where they look.
-            warned = warn_about_names(self.hass, discovery_info.address)
+            warned = warn_about_names(hass=self.hass, address=discovery_info.address, info=discovery_info)
             # The log is not where a user looks. If the reason is one waiting
             # cannot fix -- a scanner pinned passive -- offer a card that says
             # the panel was heard and why it cannot be added.

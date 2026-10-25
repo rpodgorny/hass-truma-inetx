@@ -36,7 +36,7 @@ from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, LOGGER, describe_scan_modes, scan_mode_report, has_truma_uuid, looks_like_panel
+from .const import DOMAIN, LOGGER, describe_scan_modes, scan_mode_report, has_truma_uuid, looks_like_panel, ISSUE_PANEL_UNNAMED
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -219,12 +219,19 @@ async def async_sweep_for_names(
         await asyncio.sleep(SWEEP_RETRY_PAUSE)
 
 
-def warn_about_names(hass, address: str) -> bool:
+def warn_about_names(hass, address: str, info: object | None = None) -> bool:
     """Say once, in plain words, why a nameless panel cannot be offered.
 
     A user reading "the panel is not discovered" has no way to know that the
     reason is a scan mode two layers below this integration. Say the mode, say
     what follows from it, and do not repeat it every advertisement.
+
+    Also raises the Repairs entry, because the discovery card is shown once and a
+    user who was not looking at that moment would otherwise see nothing at all.
+
+    ``info`` is the advertisement, when the caller has it: what it carried is
+    worth recording, since a panel nobody can name is exactly the case where the
+    next person needs to know what the air actually had on it.
     """
     now = time.monotonic()
     since = hass.data.setdefault(DOMAIN, {}).setdefault(_NAMELESS_SINCE, {})
@@ -247,11 +254,52 @@ def warn_about_names(hass, address: str) -> bool:
     LOGGER.warning(
         "Truma: the panel at %s advertises without a name, so there is no "
         "discovery card to offer. A name arrives only in a scan response, and "
-        "that needs an active scan. Scanners: %s",
+        "that needs an active scan. Scanners: %s; advert carried: uuid(s) %s, "
+        "manufacturer %s",
         address,
         describe_scan_modes(hass),
+        list(getattr(info, "service_uuids", []) or []),
+        {
+            hex(int(mid)): bytes(payload).hex()
+            for mid, payload in (getattr(info, "manufacturer_data", {}) or {}).items()
+        },
     )
+    _raise_unnamed_issue(hass, address)
     return True
+
+
+def _raise_unnamed_issue(hass, address: str) -> None:
+    """Put "heard but unnameable" in Settings -> Repairs, where it stays put.
+
+    The discovery card is offered once per run; someone who was not looking at
+    the right moment would otherwise see nothing at all, and this state persists
+    until the scan mode changes. The issue carries the address and the scanner
+    modes, and :func:`note_named` deletes it as soon as the panel says who it is.
+
+    Best effort throughout: a diagnostic must never take discovery down with it,
+    and the import is local so that this module still loads where Home Assistant
+    is not installed (the offline test harness).
+    """
+    try:
+        from homeassistant.helpers import issue_registry as ir
+    except Exception as exc:  # noqa: BLE001 - no repairs without Home Assistant
+        LOGGER.debug("Truma: no issue registry here: %s", exc)
+        return
+    try:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            ISSUE_PANEL_UNNAMED,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_PANEL_UNNAMED,
+            translation_placeholders={
+                "address": address.upper(),
+                "scanners": describe_scan_modes(hass),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - best effort
+        LOGGER.debug("Truma: could not raise the nameless-panel issue: %s", exc)
 
 
 def note_named(hass, address: str) -> None:
@@ -259,6 +307,12 @@ def note_named(hass, address: str) -> None:
     since = hass.data.get(DOMAIN, {}).get(_NAMELESS_SINCE)
     if since:
         since.pop(address.upper(), None)
+    try:
+        from homeassistant.helpers import issue_registry as ir
+
+        ir.async_delete_issue(hass, DOMAIN, ISSUE_PANEL_UNNAMED)
+    except Exception as exc:  # noqa: BLE001 - best effort, and no HA offline
+        LOGGER.debug("Truma: could not clear the nameless-panel issue: %s", exc)
 
 
 async def async_known_name(address: str) -> str | None:

@@ -82,6 +82,14 @@ ISSUE_PANEL_REFUSING = "panel_refusing"
 # never clears by itself: the panel will refuse forever until its list is fixed.
 REFUSED_SESSIONS_BEFORE_ISSUE = 3
 
+# A Truma panel is advertising but never supplies a name, which is what a
+# passively scanning adapter looks like: the name rides in a scan response and
+# only an active scan asks for one. Nothing is wrong with the panel and nothing
+# in this integration can fix it, so the state is surfaced -- as a Repairs entry
+# that persists, and as one discovery card per run -- instead of being logged at
+# a level nobody reads. Deleted by note_named() as soon as a name arrives.
+ISSUE_PANEL_UNNAMED = "panel_unnamed"
+
 # The link comes up and the panel's bus answers nothing: every address asked,
 # none acknowledged. Measured on the van (2026-10-25): a panel in this state
 # stays deaf however often it is dialled, and reconnecting into it every 45 s
