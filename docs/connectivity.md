@@ -63,6 +63,23 @@ last session that came up actually ran over. Nothing dials on that; it is there
 because a host can bond over one adapter and then run every session over the
 other, and a download naming only the address cannot say so.
 
+## When the host never asks for the panel's name
+
+A panel's name only travels in a **scan response**, which exists only if the
+scanner asks for one. A host configured to scan **passively** therefore hears
+the panel and can never learn its name — and reloading Home Assistant's
+Bluetooth integration cannot fix that, because the request is never made.
+
+This integration names that case in its own repair card rather than reusing the
+"nothing can connect" one: the card says which scanner is passive, and points at
+the scanning mode (Settings → Devices & Services → Bluetooth → ⋮ → Configure →
+**Active**, or `bluetooth_proxy: active: true` for an ESPHome proxy). It fires
+only when the panel is heard **without** a name *and* a scanner's *requested*
+mode is passive — `current: passive` is normal on the default AUTO and is not
+evidence of anything. The measured chain behind it is a controller that refuses
+`LE Set Scan Parameters` (HCI `0x2013`, EPROTO), after which the Bluetooth stack
+falls back to passive silently.
+
 ## Running a proxy
 
 Stock firmware is enough; nothing custom is needed.

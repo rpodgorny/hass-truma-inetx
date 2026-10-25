@@ -26,6 +26,7 @@ Run: ``python3 tests/test_no_route_issue.py``
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -102,6 +103,27 @@ class _ScannerDevice:
         self.ble_device = f"{'proxy' if remote else 'local'}:{address}"
 
 
+class _Mode:
+    """Stand-in for habluetooth's BluetoothScanningMode enum."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _Scanner:
+    """A HaScanner, reduced to the two mode attributes that decide the advice."""
+
+    def __init__(self, name: str, requested: str, current: str = "passive") -> None:
+        self.name = name
+        self.source = name
+        self.requested_mode = _Mode(requested) if requested else None
+        self.current_mode = _Mode(current) if current else None
+        self.connectable = True
+
+
+# The scanners this fake host has. Empty unless a test says otherwise, which
+# keeps the pre-existing checks (no scan-mode data) unchanged.
+MODES: list[_Scanner] = []
 ADVERTS: list[_Info] = []
 SCANNERS: dict[str, list[_ScannerDevice]] = {}
 IR = _IssueRegistry()
@@ -149,6 +171,7 @@ def _load():
         async_scanner_devices_by_address=lambda _hass, address, connectable=True: list(
             SCANNERS.get(address, ())
         ),
+        async_current_scanners=lambda _hass: list(MODES),
     )
     # Without this, is_remote_scanner() hits ImportError and calls every scanner
     # local, which would silently pass the proxy-preference checks below.
@@ -743,6 +766,58 @@ def test_card_names_the_reload_first() -> None:
     assert shipped == desc, "translations/en.json drifted from strings.json"
 
 
+def test_a_passively_configured_host_names_the_scan_mode() -> None:
+    """Heard but nameless on a passive-only host is not a resolver fault.
+
+    Measured chain (KB, ble-passive-scan-bug-upstream-brief): the controller
+    refused `LE Set Scan Parameters` (0x2013, EPROTO), the stack silently fell
+    back to passive, and no scan response -- hence no name -- ever arrived.
+    Telling that user to reload Bluetooth is advice that cannot work, because
+    the request is never made.
+    """
+    IR.__init__()
+    MODES[:] = [_Scanner("hci0", "passive")]
+    _set_adverts(_Info(uuids=(SERVICE_UUID,)))  # heard, no name
+    coord = _Coord()
+    for _ in range(CONST.NO_ROUTE_MISSES_BEFORE_WARNING):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_SCANNER_PASSIVE}" in IR.active, IR.active
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_NO_ROUTE}" not in IR.active, IR.active
+    assert "hci0" in str(IR.active[f"{CONST.DOMAIN}.{CONST.ISSUE_SCANNER_PASSIVE}"])
+
+
+def test_an_active_capable_host_still_gets_the_no_route_card() -> None:
+    """AUTO hosts are passive most of the time and must not raise the scanner card."""
+    IR.__init__()
+    MODES[:] = [_Scanner("hci0", "active", current="passive")]
+    _set_adverts(_Info(uuids=(SERVICE_UUID,)))
+    coord = _Coord()
+    for _ in range(CONST.NO_ROUTE_MISSES_BEFORE_WARNING):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_NO_ROUTE}" in IR.active, IR.active
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_SCANNER_PASSIVE}" not in IR.active, IR.active
+
+
+def test_a_named_panel_never_gets_the_scanner_card() -> None:
+    """If the name is arriving, the scanning mode is not the problem."""
+    IR.__init__()
+    MODES[:] = [_Scanner("hci0", "passive")]
+    _set_adverts(_Info(name=PANEL))
+    coord = _Coord()
+    for _ in range(CONST.NO_ROUTE_MISSES_BEFORE_WARNING):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_SCANNER_PASSIVE}" not in IR.active, IR.active
+
+
+def test_the_scanner_card_ships_in_both_languages() -> None:
+    """A card with no text behind it is worse than no card at all."""
+    for lang in ("en", "de"):
+        issues = json.loads((SRC / "translations" / f"{lang}.json").read_text())["issues"]
+        entry = issues[CONST.ISSUE_SCANNER_PASSIVE]
+        assert entry["title"] and entry["description"], lang
+        assert "{scanners}" in entry["description"], f"{lang} lost the placeholder"
+
+
 if __name__ == "__main__":
     test_panel_detection()
     test_debounced_warning()
@@ -772,4 +847,8 @@ if __name__ == "__main__":
     test_poll_interval_defaults_to_staying_connected()
     test_poll_interval_is_read_from_options()
     test_card_names_the_reload_first()
+    test_a_passively_configured_host_names_the_scan_mode()
+    test_an_active_capable_host_still_gets_the_no_route_card()
+    test_a_named_panel_never_gets_the_scanner_card()
+    test_the_scanner_card_ships_in_both_languages()
     print("no-route repair issue: all checks OK")

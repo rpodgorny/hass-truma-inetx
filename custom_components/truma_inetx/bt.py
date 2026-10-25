@@ -404,6 +404,17 @@ def _panel_infos(hass: HomeAssistant, name: str) -> list:
     ]
 
 
+def async_panel_heard_unnamed(hass: HomeAssistant, name: str) -> bool:
+    """True when the panel is heard but nothing on air carries its name.
+
+    The state that makes "reload the Bluetooth integration" the wrong advice:
+    with a passively configured scanner the name cannot arrive at all, however
+    often the resolver is reset, and the cure is the scanning mode (or a proxy).
+    """
+    infos = _panel_infos(hass, name)
+    return bool(infos) and not any(i.name == name for i in infos)
+
+
 def async_panel_advertising(hass: HomeAssistant, name: str) -> bool:
     """Return True when the panel is being heard at all, by any scanner.
 

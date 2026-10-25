@@ -65,6 +65,10 @@ MODEL = "iNet X Panel"
 # which kind of adapter is missing -- Home Assistant picks among whatever can
 # reach the panel, and the reason none can is the user's to find.
 ISSUE_NO_ROUTE = "no_route"
+# The host will never ask for a scan response, so no panel name can arrive.
+# A different fault from "heard but unreachable", with different advice: this one
+# is a scanning-mode/controller fact, not a resolver hiccup.
+ISSUE_SCANNER_PASSIVE = "scanner_passive"
 # The id this issue had before it stopped being about proxies. Deleted once at
 # startup so an issue raised by an older version does not linger with no
 # translation behind it.
@@ -148,6 +152,22 @@ def scan_mode_report(hass) -> list[dict[str, object]]:
             }
         )
     return report
+
+
+def scanners_that_never_scan_active(hass) -> list[str]:
+    """Scanners whose *requested* mode is passive: no active window will ever open.
+
+    ``requested_mode`` is the configuration, ``current_mode`` is the moment -- on
+    the default AUTO the radio is passive almost all the time and turns active
+    only for scheduled windows, so ``current=passive`` proves nothing. Only a
+    requested mode of passive means a *scan response* can never arrive, and a
+    scan response is the only place the panel's name travels (issue #31).
+    """
+    names: list[str] = []
+    for entry in scan_mode_report(hass):
+        if str(entry.get("requested") or "").upper() == "PASSIVE":
+            names.append(str(entry.get("scanner") or "a scanner"))
+    return names
 
 
 def describe_scan_modes(hass) -> str:

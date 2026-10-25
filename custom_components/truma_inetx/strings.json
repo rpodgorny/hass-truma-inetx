@@ -32,7 +32,7 @@
     },
     "error": {
       "pairing_failed": "Could not pair with the panel. Put it back into add-device mode and try again. If that fails, clear its saved Bluetooth device list (it holds only about four devices); if clearing the list does not help either, power-cycle the panel, put it into add-device mode again and start over.",
-      "pairing_failed_no_bond": "Could not pair, and this Home Assistant held **no bond** to the panel before the attempt \u2014 so the panel is either still storing an entry for a host that no longer has its key, or it is not accepting new bonds. On the panel: remove this Home Assistant from its Bluetooth device list, clear that list (it holds only about four devices), then put the panel into add-device mode and try again. If that fails too, power-cycle the panel and repeat.",
+      "pairing_failed_no_bond": "Could not pair, and this Home Assistant held **no bond** to the panel before the attempt — so the panel is either still storing an entry for a host that no longer has its key, or it is not accepting new bonds. On the panel: remove this Home Assistant from its Bluetooth device list, clear that list (it holds only about four devices), then put the panel into add-device mode and try again. If that fails too, power-cycle the panel and repeat.",
       "bond_still_working": "This Home Assistant already has a working bond to the panel — it is talking to it right now, so nothing was attempted and nothing was changed.\n\nA re-pair is only needed when the panel has forgotten this host. On the panel: remove this Home Assistant, clear its saved device list, then put the panel into add-device mode. Then tick **forget the stale bond** below and continue."
     },
     "abort": {
@@ -63,6 +63,10 @@
     "panel_unnamed": {
       "title": "Truma panel heard, but it cannot be named",
       "description": "A Truma panel is advertising at **{address}** and Home Assistant is hearing it, but its name is not arriving — and the name is what a Truma entry is keyed on, so no discovery card can offer it for setup.\n\nThe name travels in a *scan response*, and only an **active** scan asks for one. A scanner that is passively listening therefore never receives it. Nothing is wrong with the panel.\n\nScanners here:\n\n> {scanners}\n\n**To fix it:** enable active scanning on that adapter, or — if it is an ESP32 proxy — set `bluetooth_proxy: active: true` (the official Bluetooth Proxy firmware already does). This entry disappears by itself once the panel's name is heard."
+    },
+    "scanner_passive": {
+      "title": "The Bluetooth adapter never asks the Truma panel for its name",
+      "description": "Home Assistant can hear the Truma panel, but nothing it sends carries a name — and the name is what this entry is keyed on. A name only travels in a *scan response*, and this host is configured to scan **passively**, so it will never ask for one: {scanners}.\n\nNothing is wrong with the panel, and reloading or restarting anything will not change this — the request is never made in the first place.\n\n**1. Turn active scanning on.** Settings → Devices & Services → Bluetooth → **⋮** → *Configure* → scanning mode **Active**. For an ESPHome Bluetooth Proxy, set `bluetooth_proxy: active: true` in its YAML instead (the official proxy firmware already scans actively).\n\n**2. Or connect through a proxy that scans actively**, which asks for the scan response on the panel's behalf.\n\nThis message clears itself once a scan response arrives. Background: a controller that refuses `LE Set Scan Parameters` (HCI opcode 0x2013) makes the Bluetooth stack silently fall back to passive scanning — the panel is then audible but nameless, and the fault is in the host's radio, not in the panel."
     }
   },
   "entity": {

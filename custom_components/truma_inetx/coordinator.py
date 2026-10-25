@@ -28,6 +28,7 @@ from .bt import (
     ADDR_IDENTITY,
     address_kind,
     async_panel_advertising,
+    async_panel_heard_unnamed,
     async_resolve_device,
     async_wait_until_heard,
 )
@@ -39,6 +40,8 @@ from .const import (
     ISSUE_PANEL_REFUSING,
     REFUSED_SESSIONS_BEFORE_ISSUE,
     ISSUE_PANEL_SILENT,
+    ISSUE_SCANNER_PASSIVE,
+    scanners_that_never_scan_active,
     SILENT_BACKOFF,
     SILENT_SESSIONS_BEFORE_ISSUE,
     LOGGER,
@@ -268,6 +271,29 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             # Fires exactly once on the way up, so repeated failures do not
             # re-create the issue and re-notify every reconnect attempt.
             return
+        # Heard but nameless, on a host that will never ask for a scan response:
+        # "reload Bluetooth" cannot help there, and the honest answer names the
+        # scanning mode instead. Measured chain (2026-10-18/19, KB brief): the
+        # controller refused `LE Set Scan Parameters` (0x2013, EPROTO), habluetooth
+        # fell back to passive, and no name ever arrived.
+        passive = scanners_that_never_scan_active(self.hass)
+        if passive and async_panel_heard_unnamed(self.hass, self.unique_id):
+            LOGGER.warning(
+                "Truma %s is heard but carries no name, and %s only ever scans "
+                "passively -- a scan response is the only place the name travels",
+                self.unique_id,
+                ", ".join(passive),
+            )
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                ISSUE_SCANNER_PASSIVE,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_SCANNER_PASSIVE,
+                translation_placeholders={"scanners": ", ".join(passive)},
+            )
+            return
         LOGGER.warning(
             "Truma %s is advertising but nothing Home Assistant can reach it "
             "with is able to connect",
@@ -365,6 +391,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         """Reset the miss counter and drop the issue if it was raised."""
         self._no_route_misses = 0
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_ROUTE)
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_SCANNER_PASSIVE)
         # An issue this integration raised under the old id would otherwise
         # outlive the rename, showing the user a card with no text behind it.
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_PROXY_ROUTE_LEGACY)

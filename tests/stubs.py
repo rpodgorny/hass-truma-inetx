@@ -330,6 +330,7 @@ def stub_transport() -> None:
     mod("truma_pkg.ble", TrumaBleClient=object, device_from_bluez=None,
         close_link=_no_link_to_close)
     mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
+        async_panel_heard_unnamed=lambda *a: False,
         async_resolve_device=None, async_wait_until_heard=None,
         ADDR_IDENTITY="identity", ADDR_RPA="rpa",
         address_kind=lambda _name, _address: "rpa")
