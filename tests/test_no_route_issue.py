@@ -707,6 +707,42 @@ def test_poll_interval_is_read_from_options() -> None:
     assert _poll_interval_of({"poll_interval_seconds": "90"}) == 90
 
 
+def test_card_names_the_reload_first() -> None:
+    """The measured cure must come before kernel archaeology.
+
+    Measured on the van 2026-10-25: the panel was fresh on air (rssi -53, seconds
+    old) and Home Assistant's own advert store held it under the *identity*
+    address with ``connectable: true``, while
+    ``bluetooth.async_scanner_devices_by_address(<identity>, connectable=True)``
+    returned nothing -- the two views had stopped agreeing. Reloading the
+    Bluetooth integration made the session come up immediately, with nothing
+    changed on the host or the panel.
+
+    So a card that opens with kernel versions and LL Privacy sends the user to
+    buy a proxy over a one-click fix. The *order* is the assertion here, not
+    just the presence of the words.
+    """
+    import json
+
+    desc = json.loads((SRC / "strings.json").read_text())["issues"]["no_route"][
+        "description"
+    ]
+    low = desc.lower()
+    assert "reload" in low, "the card never mentions the one-click cure"
+    assert "bluetooth" in low
+    assert low.index("reload") < low.index("kernel"), (
+        "host-capability detail is offered before the one-click cure"
+    )
+    # Charter C7: no user-facing text may send anyone to a privileged command.
+    for forbidden in ("bluetoothd", "hciconfig", "systemctl restart"):
+        assert forbidden not in low, f"{forbidden} must not appear in a repair card"
+
+    shipped = json.loads((SRC / "translations" / "en.json").read_text())["issues"][
+        "no_route"
+    ]["description"]
+    assert shipped == desc, "translations/en.json drifted from strings.json"
+
+
 if __name__ == "__main__":
     test_panel_detection()
     test_debounced_warning()
@@ -735,4 +771,5 @@ if __name__ == "__main__":
     test_waits_for_a_fresh_advert()
     test_poll_interval_defaults_to_staying_connected()
     test_poll_interval_is_read_from_options()
+    test_card_names_the_reload_first()
     print("no-route repair issue: all checks OK")
