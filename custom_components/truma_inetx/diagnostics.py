@@ -242,6 +242,13 @@ async def async_get_config_entry_diagnostics(
             "evidence": {
                 "last_session_ok": coordinator.last_update_success,
                 "session_live": getattr(coordinator, "session_live", None),
+                # Seconds since anything at all was heard on this host: the only
+                # evidence that separates "panel off" from "radio stopped".
+                "advert_quiet_for": (
+                    round(coordinator.advert_quiet_for, 1)
+                    if getattr(coordinator, "advert_quiet_for", None) is not None
+                    else None
+                ),
                 "last_session_ok_at": getattr(coordinator, "last_session_ok_at", None),
                 "session_transport": coordinator.session_transport,
                 "address_kind": coordinator.address_kind,

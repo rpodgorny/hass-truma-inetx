@@ -28,6 +28,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import time
 import types
 from pathlib import Path
 from typing import TypedDict
@@ -125,6 +126,17 @@ class _Scanner:
 # keeps the pre-existing checks (no scan-mode data) unchanged.
 MODES: list[_Scanner] = []
 ADVERTS: list[_Info] = []
+# The callback the integration registers to watch every advertisement.
+WATCHERS: list = []
+
+
+def _register_callback(_hass, callback, _matcher, _mode):
+    WATCHERS.append(callback)
+
+    def _unsub() -> None:
+        WATCHERS.remove(callback)
+
+    return _unsub
 SCANNERS: dict[str, list[_ScannerDevice]] = {}
 IR = _IssueRegistry()
 
@@ -172,6 +184,9 @@ def _load():
             SCANNERS.get(address, ())
         ),
         async_current_scanners=lambda _hass: list(MODES),
+        async_register_callback=_register_callback,
+        BluetoothCallbackMatcher=lambda **kw: dict(kw),
+        BluetoothScanningMode=type("M", (), {"PASSIVE": "passive", "ACTIVE": "active"}),
     )
     # Without this, is_remote_scanner() hits ImportError and calls every scanner
     # local, which would silently pass the proxy-preference checks below.
@@ -224,9 +239,14 @@ class _Coord:
 
     def __init__(self) -> None:
         self._no_route_misses = 0
+        self._last_any_advert: float | None = None
+        self._host_deaf_misses = 0
 
     _async_note_no_route = COORD.TrumaCoordinator._async_note_no_route
     _async_clear_no_route = COORD.TrumaCoordinator._async_clear_no_route
+    _async_note_host_deaf = COORD.TrumaCoordinator._async_note_host_deaf
+    _async_any_advert = COORD.TrumaCoordinator._async_any_advert
+    advert_quiet_for = COORD.TrumaCoordinator.advert_quiet_for
 
 
 def _set_adverts(*infos: _Info) -> None:
@@ -818,6 +838,63 @@ def test_the_scanner_card_ships_in_both_languages() -> None:
         assert "{scanners}" in entry["description"], f"{lang} lost the placeholder"
 
 
+def test_a_deaf_host_is_named_once_nothing_is_heard() -> None:
+    """Panel unheard AND nothing else heard: the radio, not the panel."""
+    IR.__init__()
+    MODES[:] = []
+    _set_adverts()  # panel not heard; nothing else either
+    coord = _Coord()
+    coord._last_any_advert = time.monotonic() - (CONST.HOST_DEAF_QUIET_SECONDS + 60)
+    for _ in range(CONST.HOST_DEAF_MISSES_BEFORE_ISSUE):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_HOST_DEAF}" in IR.active, IR.active
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_NO_ROUTE}" not in IR.active, IR.active
+
+
+def test_a_panel_that_is_merely_off_is_not_a_deaf_host() -> None:
+    """Other devices still arriving means the radio works and the panel is off."""
+    IR.__init__()
+    _set_adverts()
+    coord = _Coord()
+    coord._last_any_advert = time.monotonic() - 2.0
+    for _ in range(CONST.HOST_DEAF_MISSES_BEFORE_ISSUE * 3):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_HOST_DEAF}" not in IR.active, IR.active
+    assert coord._host_deaf_misses == 0, "a live radio must reset the deaf streak"
+
+
+def test_without_a_baseline_the_host_stays_quiet() -> None:
+    """Never having heard anything is unknowable, not deafness."""
+    IR.__init__()
+    _set_adverts()
+    coord = _Coord()
+    for _ in range(CONST.HOST_DEAF_MISSES_BEFORE_ISSUE * 3):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_HOST_DEAF}" not in IR.active, IR.active
+    assert coord.advert_quiet_for is None
+
+
+def test_the_watcher_stamps_the_clock_and_the_card_clears() -> None:
+    """The registered callback is what makes 'anything heard' knowable."""
+    IR.__init__()
+    _set_adverts()
+    coord = _Coord()
+    WATCHERS.clear()
+    unsub = BT.async_watch_adverts(object(), coord._async_any_advert)
+    assert WATCHERS, "no advertisement watcher was registered"
+    assert coord.advert_quiet_for is None
+    WATCHERS[0](None, None)          # an advert arrives
+    assert coord.advert_quiet_for is not None and coord.advert_quiet_for < 1.0
+    # ...and a healthy resolve drops the card and the streak.
+    IR.active[f"{CONST.DOMAIN}.{CONST.ISSUE_HOST_DEAF}"] = {}
+    coord._host_deaf_misses = CONST.HOST_DEAF_MISSES_BEFORE_ISSUE
+    coord._async_clear_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_HOST_DEAF}" not in IR.active
+    assert coord._host_deaf_misses == 0
+    unsub()
+    assert not WATCHERS
+
+
 if __name__ == "__main__":
     test_panel_detection()
     test_debounced_warning()
@@ -851,4 +928,8 @@ if __name__ == "__main__":
     test_an_active_capable_host_still_gets_the_no_route_card()
     test_a_named_panel_never_gets_the_scanner_card()
     test_the_scanner_card_ships_in_both_languages()
+    test_a_deaf_host_is_named_once_nothing_is_heard()
+    test_a_panel_that_is_merely_off_is_not_a_deaf_host()
+    test_without_a_baseline_the_host_stays_quiet()
+    test_the_watcher_stamps_the_clock_and_the_card_clears()
     print("no-route repair issue: all checks OK")

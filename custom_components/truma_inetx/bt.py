@@ -404,6 +404,46 @@ def _panel_infos(hass: HomeAssistant, name: str) -> list:
     ]
 
 
+def async_watch_adverts(hass: HomeAssistant, on_advert) -> Callable[[], None] | None:
+    """Call ``on_advert`` for every advertisement this host hears, whatever it is.
+
+    The only way to tell "the panel is switched off" from "this host stopped
+    hearing Bluetooth at all": both make the panel unheard, and only the second
+    is a fault the user can do nothing about by walking to the van. Home
+    Assistant's per-device cache cannot answer it, because a host that hears
+    nothing still holds yesterday's entries.
+
+    Registered with ``BluetoothScanningMode.PASSIVE`` so watching for a *symptom*
+    never changes what the radio is asked to do -- a watcher that demanded active
+    scanning would be the fault it is trying to detect.
+
+    Returns an unsubscribe callable, or ``None`` when this Home Assistant cannot
+    offer the callback (an older release, or the integration is not loaded):
+    the caller then simply never raises the card. Degrading quietly is the right
+    answer here -- an unanswerable question must not become a false alarm.
+    """
+    try:
+        from homeassistant.components.bluetooth import (
+            BluetoothCallbackMatcher,
+            BluetoothScanningMode,
+            async_register_callback,
+        )
+    except Exception as exc:  # noqa: BLE001 - optional capability, never fatal
+        LOGGER.debug("Truma: cannot watch advertisements: %s", exc)
+        return None
+    try:
+        return async_register_callback(
+            hass,
+            # No matcher keys: every advertisement, from every scanner.
+            lambda service_info, change: on_advert(),
+            BluetoothCallbackMatcher(),
+            BluetoothScanningMode.PASSIVE,
+        )
+    except Exception as exc:  # noqa: BLE001 - as above
+        LOGGER.debug("Truma: could not register the advertisement watcher: %s", exc)
+        return None
+
+
 def async_panel_heard_unnamed(hass: HomeAssistant, name: str) -> bool:
     """True when the panel is heard but nothing on air carries its name.
 

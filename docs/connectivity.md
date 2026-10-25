@@ -80,6 +80,23 @@ evidence of anything. The measured chain behind it is a controller that refuses
 `LE Set Scan Parameters` (HCI `0x2013`, EPROTO), after which the Bluetooth stack
 falls back to passive silently.
 
+## When the host hears nothing at all
+
+A panel that is switched off looks, from Home Assistant, exactly like a host
+whose radio has stopped: nothing arrives either way. They need opposite answers
+— one is a walk to the panel, the other is the machine running Home Assistant —
+so the integration watches **every advertisement, from every device**, and can
+therefore say which silence it is in. The watcher registers in passive mode:
+watching for a symptom must never change what the radio is asked to do.
+
+With nothing heard for ten minutes and three failed connect rounds agreeing, a
+repair card names the machine: reload the Bluetooth integration, replug a USB
+adapter, and, if neither helps, look at the host — the card states plainly that
+this integration only listens and asks Home Assistant to connect, never starts
+or stops scanning, never resets an adapter and never restarts Bluetooth. Until
+the first advertisement after startup arrives there is no baseline, so the card
+stays silent rather than guessing.
+
 ## Running a proxy
 
 Stock firmware is enough; nothing custom is needed.

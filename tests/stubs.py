@@ -331,6 +331,9 @@ def stub_transport() -> None:
         close_link=_no_link_to_close)
     mod("truma_pkg.bt", async_panel_advertising=lambda *a: False,
         async_panel_heard_unnamed=lambda *a: False,
+        # No advertisement watcher for these tests: the coordinator degrades to
+        # "cannot tell", which is the behaviour that must never raise a card.
+        async_watch_adverts=lambda *a: None,
         async_resolve_device=None, async_wait_until_heard=None,
         ADDR_IDENTITY="identity", ADDR_RPA="rpa",
         address_kind=lambda _name, _address: "rpa")

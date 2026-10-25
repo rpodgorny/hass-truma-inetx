@@ -29,6 +29,7 @@ from .bt import (
     address_kind,
     async_panel_advertising,
     async_panel_heard_unnamed,
+    async_watch_adverts,
     async_resolve_device,
     async_wait_until_heard,
 )
@@ -41,6 +42,9 @@ from .const import (
     REFUSED_SESSIONS_BEFORE_ISSUE,
     ISSUE_PANEL_SILENT,
     ISSUE_SCANNER_PASSIVE,
+    HOST_DEAF_MISSES_BEFORE_ISSUE,
+    HOST_DEAF_QUIET_SECONDS,
+    ISSUE_HOST_DEAF,
     scanners_that_never_scan_active,
     SILENT_BACKOFF,
     SILENT_SESSIONS_BEFORE_ISSUE,
@@ -224,6 +228,13 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # able to connect to it. Debounces the repair issue (see
         # _async_note_no_route).
         self._no_route_misses = 0
+        # When *anything* was last heard on this host, and how many connect
+        # rounds have agreed that nothing is. Together they separate a panel
+        # that is switched off from a radio that has stopped (see
+        # _async_note_host_deaf).
+        self._last_any_advert: float | None = None
+        self._host_deaf_misses = 0
+        self._unsub_adverts = None
         self._refused_sessions = 0
         self._silent_sessions = 0
         self._store: Store = Store(hass, _STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}")
@@ -264,7 +275,9 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         if not async_panel_advertising(self.hass, self.unique_id):
             # We cannot hear the panel at all -- off, asleep or out of range.
             # That is a different fault with different advice, so stay quiet
-            # and do not let it count towards the warning either.
+            # and do not let it count towards this warning either. The one thing
+            # worth asking here is whether *anything* is being heard.
+            self._async_note_host_deaf()
             return
         self._no_route_misses += 1
         if self._no_route_misses != NO_ROUTE_MISSES_BEFORE_WARNING:
@@ -392,13 +405,71 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         self._no_route_misses = 0
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_ROUTE)
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_SCANNER_PASSIVE)
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_HOST_DEAF)
+        self._host_deaf_misses = 0
         # An issue this integration raised under the old id would otherwise
         # outlive the rename, showing the user a card with no text behind it.
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_PROXY_ROUTE_LEGACY)
 
+    def _async_any_advert(self) -> None:
+        """Any advertisement, from any device: the host's radio still works."""
+        self._last_any_advert = time.monotonic()
+
+    @property
+    def advert_quiet_for(self) -> float | None:
+        """Seconds since anything at all was heard, or None if that is unknown.
+
+        ``None`` until the first advertisement arrives, and it stays None when
+        the watcher could not be registered. Unknown is answered with silence,
+        never with a card: an unanswerable question must not become an alarm.
+        """
+        if self._last_any_advert is None:
+            return None
+        return time.monotonic() - self._last_any_advert
+
+    def _async_note_host_deaf(self) -> None:
+        """Complain when this host has stopped hearing Bluetooth altogether.
+
+        Called when the panel is not being heard, which is the state where
+        nothing else can tell the two causes apart.
+        """
+        quiet = self.advert_quiet_for
+        if quiet is not None and quiet < HOST_DEAF_QUIET_SECONDS:
+            # Other devices are still arriving, so the radio works and the panel
+            # is off, asleep or out of range -- the user's own business, and the
+            # advice would be theirs too. Say nothing.
+            self._host_deaf_misses = 0
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_HOST_DEAF)
+            return
+        if quiet is None:
+            # Never heard anything since this entry started, so there is no
+            # baseline to call silence against. Stay quiet.
+            return
+        self._host_deaf_misses += 1
+        if self._host_deaf_misses != HOST_DEAF_MISSES_BEFORE_ISSUE:
+            return
+        LOGGER.warning(
+            "Truma %s: nothing at all has been heard from any Bluetooth device "
+            "for %s minutes -- this host's radio, not the panel",
+            self.unique_id,
+            int(quiet // 60),
+        )
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_HOST_DEAF,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_HOST_DEAF,
+            translation_placeholders={"minutes": str(int(quiet // 60))},
+        )
+
     async def async_start(self) -> None:
         """Load identity and launch the background BLE session."""
         await self._load_stored_state()
+        # Watch for advertisements of *any* device: the only signal that can tell
+        # a host that stopped hearing Bluetooth from a panel that is switched off.
+        self._unsub_adverts = async_watch_adverts(self.hass, self._async_any_advert)
         # Kept so async_stop can end the session itself. Home Assistant
         # cancels an entry's background tasks on unload, but only *after*
         # async_unload_entry has returned -- which is too late to be the thing
@@ -426,6 +497,11 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         """
         self._stop = True
         self._stop_event.set()
+        if self._unsub_adverts is not None:
+            # Drop the advertisement watcher with the entry: it is a callback
+            # into a coordinator that is going away.
+            self._unsub_adverts()
+            self._unsub_adverts = None
         await self._stop_session_task()
         await self._disconnect_client()
         await self._release_initial_client()

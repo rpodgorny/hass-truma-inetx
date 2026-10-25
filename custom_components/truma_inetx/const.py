@@ -69,6 +69,15 @@ ISSUE_NO_ROUTE = "no_route"
 # A different fault from "heard but unreachable", with different advice: this one
 # is a scanning-mode/controller fact, not a resolver hiccup.
 ISSUE_SCANNER_PASSIVE = "scanner_passive"
+# Nothing is being heard from *any* device: the host's radio has stopped, which is
+# a different fault from a panel that is switched off -- and the only one of the
+# two that is not the user's to fix by walking to the van.
+ISSUE_HOST_DEAF = "host_deaf"
+# How long the whole host may hear nothing before it is worth a card, and how
+# many failed connect rounds must agree. Both generous on purpose: a quiet
+# workshop with no other BLE devices nearby must not read as a dead radio.
+HOST_DEAF_QUIET_SECONDS = 600.0
+HOST_DEAF_MISSES_BEFORE_ISSUE = 3
 # The id this issue had before it stopped being about proxies. Deleted once at
 # startup so an issue raised by an older version does not linger with no
 # translation behind it.

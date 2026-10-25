@@ -99,6 +99,9 @@ class _Coord:
         self._client: _Link | None = None
         self._initial_client = initial
         self._session_task: asyncio.Task | None = None
+        # The advertisement watcher's unsubscriber: None means it was never
+        # registered, which is what "cannot tell if this host is deaf" looks like.
+        self._unsub_adverts = None
         self.log: list[str] = []
 
     async_stop = COORD.TrumaCoordinator.async_stop
