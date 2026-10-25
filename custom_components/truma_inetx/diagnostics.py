@@ -241,6 +241,8 @@ async def async_get_config_entry_diagnostics(
             ),
             "evidence": {
                 "last_session_ok": coordinator.last_update_success,
+                "session_live": getattr(coordinator, "session_live", None),
+                "last_session_ok_at": getattr(coordinator, "last_session_ok_at", None),
                 "session_transport": coordinator.session_transport,
                 "address_kind": coordinator.address_kind,
             },

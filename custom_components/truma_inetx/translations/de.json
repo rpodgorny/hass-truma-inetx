@@ -31,7 +31,8 @@
       }
     },
     "error": {
-      "pairing_failed": "Die Kopplung mit dem Bedienteil ist fehlgeschlagen. Versetze es wieder in den Modus zum Hinzufügen eines Geräts und versuche es erneut. Schlägt das fehl, leere seine gespeicherte Bluetooth-Geräteliste (sie fasst nur etwa vier Geräte); hilft auch das nicht, schalte das Bedienteil aus und wieder ein, versetze es erneut in den Modus zum Hinzufügen eines Geräts und beginne von vorn."
+      "pairing_failed": "Die Kopplung mit dem Bedienteil ist fehlgeschlagen. Versetze es wieder in den Modus zum Hinzufügen eines Geräts und versuche es erneut. Schlägt das fehl, leere seine gespeicherte Bluetooth-Geräteliste (sie fasst nur etwa vier Geräte); hilft auch das nicht, schalte das Bedienteil aus und wieder ein, versetze es erneut in den Modus zum Hinzufügen eines Geräts und beginne von vorn.",
+      "bond_still_working": "Diese Home-Assistant-Instanz ist bereits funktionierend mit dem Bedienteil gekoppelt — sie spricht gerade jetzt mit ihm, deshalb wurde nichts unternommen und nichts verändert.\n\nEine neue Kopplung ist nur nötig, wenn das Bedienteil diese Instanz vergessen hat. Am Bedienteil: diese Home-Assistant-Instanz entfernen, die gespeicherte Geräteliste leeren und das Bedienteil in den Modus zum Hinzufügen eines Geräts versetzen. Setze dann unten **die veraltete Kopplung verwerfen** und fahre fort."
     },
     "abort": {
       "no_devices_found": "Kein Truma iNet X Bedienteil gefunden. Stelle sicher, dass das Bedienteil eingeschaltet und in Bluetooth-Reichweite ist.",

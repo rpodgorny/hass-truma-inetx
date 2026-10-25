@@ -8,6 +8,7 @@ advertised name and the address is treated as a mutable connection detail.
 
 from __future__ import annotations
 
+import time
 from functools import partial
 from typing import Any
 
@@ -87,6 +88,35 @@ class TrumaOptionsFlow(OptionsFlow):
                 }
             ),
         )
+
+
+# How long a session that came up counts as proof that the bond works. The
+# coordinator also says whether one is live right now; this window covers the
+# minutes either side of a drop, because a panel that answered 30 s ago has not
+# forgotten us. Kept short on purpose: past it the honest answer is "we do not
+# know", and not knowing means the attempt is allowed to run.
+BOND_PROVEN_WINDOW = 300.0
+
+
+def bond_is_proven(entry: ConfigEntry | None, now: float | None = None) -> bool:
+    """Whether this entry's bond is demonstrably carrying traffic.
+
+    The only solid thing this host knows about the pair
+    (``research/truma-reconfigure-damage.md`` §2): a bond that is carrying a
+    session right now -- or was a few minutes ago -- is not half-held, whatever
+    ``Device1.Paired`` says. That property cannot tell a complete record from the
+    signature-only one BlueZ still calls "Paired", so it is deliberately not
+    consulted here.
+    """
+    coordinator = getattr(entry, "runtime_data", None)
+    if coordinator is None:
+        return False
+    if getattr(coordinator, "session_live", False):
+        return True
+    last = getattr(coordinator, "last_session_ok_at", None)
+    if not last:
+        return False
+    return (now or time.time()) - last <= BOND_PROVEN_WINDOW
 
 
 class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -327,6 +357,31 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         assert self._name is not None and self._address is not None
         errors: dict[str, str] = {}
         forget_bond = bool((user_input or {}).get(CONF_FORGET_BOND))
+        if (
+            user_input is not None
+            and not forget_bond
+            and self.source == SOURCE_RECONFIGURE
+            and bond_is_proven(self._get_reconfigure_entry())
+        ):
+            # Measured on the van 2026-10-25 (0.9.0b37): this exact press unloaded
+            # the entry, called Pair() -- which BlueZ answered without putting a
+            # single SMP frame on air -- and reloaded it, for ~30 s of outage and
+            # nothing learnt. A bond carrying a session cannot be half-held, so
+            # decline here, tell the truth, and leave "forget the stale bond" as
+            # the way to insist.
+            LOGGER.info(
+                "Truma %s: reconfigure declined — this bond is carrying a session",
+                self._name,
+            )
+            return self.async_show_form(
+                step_id="pair",
+                errors={"base": "bond_still_working"},
+                description_placeholders={"name": self._name},
+                data_schema=vol.Schema(
+                    {vol.Optional(CONF_FORGET_BOND, default=False): bool}
+                ),
+            )
+
         if user_input is not None:
             # One dialler at a time (#33). The coordinator's reconnect loop
             # competes with this pairing for the panel's single connection slot,

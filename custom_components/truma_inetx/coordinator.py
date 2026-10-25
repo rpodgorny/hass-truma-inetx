@@ -9,6 +9,7 @@ sent it. Reconnects with backoff on drop.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 
 from bleak_retry_connector import BleakClientWithServiceCache
@@ -210,6 +211,12 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # which address kind is right, so only failures before that flip the
         # memory.
         self._session_ok = False
+        # Wall-clock stamp of the last session that reached "connected and
+        # subscribed". The reconfigure flow reads this (and `session_live`) to
+        # refuse re-pairing a bond that is demonstrably working -- measured on
+        # the van 2026-10-25: one Reconfigure over a healthy bond cost ~30 s of
+        # outage and asked the panel for nothing at all.
+        self.last_session_ok_at: float | None = None
         # Consecutive resolves that found the panel advertising with nothing
         # able to connect to it. Debounces the repair issue (see
         # _async_note_no_route).
@@ -761,6 +768,16 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         return self._address_kind
 
     @property
+    def session_live(self) -> bool:
+        """Whether the panel is answering this host right now.
+
+        Not "a link is open this instant": in poll mode the link is closed
+        between reads, so the same flag the connectivity sensor uses is the
+        honest one.
+        """
+        return bool(getattr(self._bus, "connected", False))
+
+    @property
     def session_transport(self) -> str | None:
         """Which transport carried the last session that came up, if any.
 
@@ -979,6 +996,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         self._bus.assigned_addr = client.assigned_addr
         self.async_set_updated_data(self._bus)
         self.async_sync_device_names()
+        self.last_session_ok_at = time.time()
         LOGGER.info("Truma %s connected and subscribed", self.unique_id)
         self._connected_event.set()
 

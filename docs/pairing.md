@@ -94,3 +94,14 @@ connection can be made at all, the bond goes on the local adapter that can see
 the panel, because that is the only place a bond can be made without one.
 
 To re-pair later, use **Reconfigure** on the device.
+
+**Reconfigure declines while the bond is working.** If this Home Assistant is
+talking to the panel — a session live now, or one that came up in the last five
+minutes — the flow attempts nothing and tells you so, because unloading a
+working session to re-bond over a bond that already works costs about half a
+minute of data and changes nothing (measured on a real panel: one press, zero
+SMP frames on air, zero refusals, bond untouched). A re-pair is for a panel that
+has forgotten this host: remove this Home Assistant on the panel, clear its
+saved device list, put the panel into add-device mode, then tick *forget the
+stale bond* — that consent always runs the attempt, whatever the flow believes
+about the bond.

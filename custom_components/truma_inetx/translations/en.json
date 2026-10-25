@@ -31,7 +31,8 @@
       }
     },
     "error": {
-      "pairing_failed": "Could not pair with the panel. Put it back into add-device mode and try again. If that fails, clear its saved Bluetooth device list (it holds only about four devices); if clearing the list does not help either, power-cycle the panel, put it into add-device mode again and start over."
+      "pairing_failed": "Could not pair with the panel. Put it back into add-device mode and try again. If that fails, clear its saved Bluetooth device list (it holds only about four devices); if clearing the list does not help either, power-cycle the panel, put it into add-device mode again and start over.",
+      "bond_still_working": "This Home Assistant already has a working bond to the panel — it is talking to it right now, so nothing was attempted and nothing was changed.\n\nA re-pair is only needed when the panel has forgotten this host. On the panel: remove this Home Assistant, clear its saved device list, then put the panel into add-device mode. Then tick **forget the stale bond** below and continue."
     },
     "abort": {
       "no_devices_found": "No Truma iNet X panels found. Make sure the panel is powered on and in Bluetooth range.",
