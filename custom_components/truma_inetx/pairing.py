@@ -540,6 +540,11 @@ async def _ensure_bonded_bluez(
     agent = _JustWorksAgent()
     registered = False
     adapter_iface = None
+    # The BlueZ object this attempt worked on, and whether the link over it has
+    # already been let go. Kept outside the ``try`` so the ``finally`` can clean
+    # up after a failure as well as a success -- see the release there.
+    path: str | None = None
+    link_released = False
     try:
         object_manager = await _get_interface(
             bus, "/", "org.freedesktop.DBus.ObjectManager"
@@ -563,6 +568,7 @@ async def _ensure_bonded_bluez(
             LOGGER.debug("Truma %s already bonded on %s", name, adapter_path)
             assert path is not None  # _already_bonded is False without one
             await _release_link(bus, path, name)
+            link_released = True
             return True
         if path and not adapter_path:
             LOGGER.debug(
@@ -666,6 +672,7 @@ async def _ensure_bonded_bluez(
             if path and _is_paired(objects, path) and not suspect:
                 LOGGER.info("Truma %s bonded", name)
                 await _release_link(bus, path, name)
+                link_released = True
                 return True
             if path and time.monotonic() < pair_pending_until:
                 # BlueZ is still working on the call we already made. Watch the
@@ -763,11 +770,23 @@ async def _ensure_bonded_bluez(
                         timeout,
                     )
                     await _release_link(bus, path, name)
+                    link_released = True
                     return True
             except Exception as exc:  # noqa: BLE001 - never fail on the re-check
                 LOGGER.debug("Truma %s: post-timeout bond check: %s", name, exc)
         return False
     finally:
+        # A pairing that **failed** can leave the ACL Pair() opened half up, and
+        # nothing else owns it: BlueZ keeps it, Device1 still reports
+        # ``Connected: no``, and the kernel then refuses every dial to a peer it
+        # believes it is connected to. Measured on the van 2026-10-25 after a
+        # Reconfigure against an idle panel (an ACL in BT_CONFIG at handle 3840,
+        # every later connect timing out). The paths that report a bond already
+        # release it themselves; this is the one that does not, and it must run
+        # before discovery stops, because stopping it makes BlueZ drop the
+        # device object this needs.
+        if not link_released and path is not None:
+            await _release_link(bus, path, name)
         if adapter_iface is not None:
             try:
                 await adapter_iface.call_stop_discovery()
