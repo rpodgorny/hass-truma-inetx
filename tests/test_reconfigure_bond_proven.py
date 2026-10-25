@@ -26,6 +26,54 @@ import sys
 import time
 from pathlib import Path
 
+def _stub_voluptuous() -> None:
+    """Enough of voluptuous for ``config_flow`` to build its schema bare.
+
+    CI runs every test file that is not on its library list on an interpreter
+    with nothing installed, and this one drives the real flow rather than a stub
+    of it. So the *library* is stubbed here, only when it is genuinely absent --
+    with the real one installed the test exercises the real schemas. What the
+    assertions read is the field names the guard offers, which both shapes carry.
+    """
+    import types
+
+    vol = types.ModuleType("voluptuous")
+
+    class Schema:
+        def __init__(self, schema, **_kw) -> None:
+            self.schema = schema
+
+        def __call__(self, value):
+            return value
+
+    class Marker:
+        def __init__(self, schema, default=None, **_kw) -> None:
+            self.schema = schema
+            self.default = default
+
+    class Invalid(Exception):
+        pass
+
+    # One update rather than nine assignments: a ModuleType has no declared
+    # attributes, and the repo's other test fakes are built the same way.
+    vol.__dict__.update(
+        Schema=Schema,
+        Optional=Marker,
+        Required=Marker,
+        Invalid=Invalid,
+        In=lambda *a, **k: None,
+        All=lambda *a, **k: None,
+        Coerce=lambda *a, **k: None,
+    )
+    sys.modules["voluptuous"] = vol
+
+
+try:  # the real thing when it is installed, a stand-in when it is not
+    import voluptuous  # noqa: F401
+except ModuleNotFoundError:
+    _stub_voluptuous()
+
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_passive_scan_discovery as H  # noqa: E402  (installs the HA stubs)
 
