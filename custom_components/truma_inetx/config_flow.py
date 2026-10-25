@@ -278,6 +278,7 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
                 else None
             )
             unloaded = False
+            bonded, client = False, None
             if entry is not None and entry.state is ConfigEntryState.LOADED:
                 unloaded = await self.hass.config_entries.async_unload(
                     entry.entry_id
@@ -304,10 +305,18 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
                 LOGGER.exception("Truma pairing error")
                 bonded, client = False, None
             finally:
+                # Put the entry back on failure -- but NOT when the pairing left
+                # a live link to hand over. The reload below sets the entry up
+                # *with* that link; setting it up here first dials the panel a
+                # second time and leaves the handed-off link to die in the gap.
+                # Measured on the van 2026-10-25: the coordinator logged
+                # "handed-off connection was already closed; connecting fresh"
+                # and the panel carried two links for a moment.
                 if (
                     unloaded
                     and entry is not None
                     and entry.state is ConfigEntryState.NOT_LOADED
+                    and not (bonded and client is not None)
                 ):
                     await self.hass.config_entries.async_setup(entry.entry_id)
             if bonded:
