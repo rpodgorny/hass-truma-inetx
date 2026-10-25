@@ -226,6 +226,7 @@ class _Bluez:
         pairs_after: int | None = None,
         hangs_on: str | None = None,
         stale_after: int | None = None,
+        leftover_link: bool = False,
     ):
         self.paired = paired
         self.accepts = accepts
@@ -251,6 +252,10 @@ class _Bluez:
         # Whether BlueZ currently holds a link to the panel. Pair() opens one
         # and keeps it, which is what _release_link exists to undo.
         self.connected = False
+        # ...and a failed Pair() can leave one behind just as well: measured on
+        # the van 2026-10-25, a Reconfigure with the panel idle left an ACL in
+        # BT_CONFIG that Device1 still reported as Connected: no.
+        self.connected = leftover_link
         # A leftover object for the identity address with no RSSI behind it,
         # beside the RPA the panel is really on -- the van's state after a
         # bond was dropped.
@@ -1019,6 +1024,31 @@ def test_nothing_is_disconnected_when_no_link_is_up(pairing) -> None:
     assert "disconnect" not in bluez.calls, (
         f"disconnected a link nobody had: {bluez.calls}"
     )
+
+
+def test_a_failed_attempt_releases_the_link_it_opened(pairing) -> None:
+    """A re-pair the panel refuses must not leave its own half-open link behind.
+
+    Measured on the van 2026-10-25: `Reconfigure` against an idle panel left an
+    ACL at handle 3840 in BT_CONFIG with ``Device1`` still reporting
+    ``Connected: no``, and nothing afterwards could connect. ``_release_link``
+    exists for exactly this link, but it was only reached on the paths that
+    report a bond -- so the failure path stopped discovery, unregistered the
+    agent, dropped the bus and walked away from a link nobody owned.
+
+    The caller still gets ``False``: nothing is claimed about the panel, and the
+    bond is untouched. Only the link goes.
+    """
+    bluez = _Bluez(paired=True, accepts=True, leftover_link=True)
+    assert _run_bluez_bond(pairing, bluez, trust=False) is False
+    assert "disconnect" in bluez.calls, (
+        f"left the failed attempt's link up: {len(bluez.calls)} calls, "
+        f"none of them 'disconnect'"
+    )
+    assert bluez.connected is False
+    # And the bond that was already there is still there.
+    assert bluez.paired is True
+    assert "remove" not in bluez.calls, f"removed without consent: {bluez.calls}"
 
 
 def main() -> None:
