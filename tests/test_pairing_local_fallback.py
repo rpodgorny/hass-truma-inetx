@@ -516,6 +516,7 @@ def _run_ensure_bonded(
     own_the_link: bool = False,
     link_bonds: bool = False,
     local_link: bool = False,
+    may_forget: bool = False,
     stop_after: int = 200,
 ):
     """Drive ``ensure_bonded`` and report what it tried and where it went."""
@@ -604,6 +605,7 @@ def _run_ensure_bonded(
                 adapter_path=HCI0,
                 timeout=0.25,
                 own_the_link=own_the_link,
+                may_forget_bond=may_forget,
             )
         except _StopTest:
             return None, None
@@ -616,11 +618,12 @@ def _run_ensure_bonded(
 
 
 def test_a_re_pair_that_cannot_dial_still_bonds_through_bluez(pairing) -> None:
-    """A cleared panel drops every link, so there the second dialler is the way in.
+    """With consent, a panel that will not answer links is still bonded through BlueZ.
 
-    That is #26's shape and exactly what today's S3 cure used (panel list
-    cleared, then armed): no link to bond over, so bonding through BlueZ must
-    still be tried. Only a panel that *answers* and refuses is left alone.
+    The case this exists for: the panel's device list was cleared, so it holds no
+    bond and drops every link -- #26's shape, and the state a S3 repair leaves.
+    The user ticking "forget the stale bond" is what says so; without it the
+    fallback must not run (below).
     """
     (bonded, client), log = _run_ensure_bonded(
         pairing,
@@ -629,6 +632,7 @@ def test_a_re_pair_that_cannot_dial_still_bonds_through_bluez(pairing) -> None:
         connects=False,
         own_the_link=True,
         local_link=True,
+        may_forget=True,
     )
     assert bonded is True
     assert client is None, "the BlueZ path holds no link to hand off"
@@ -636,6 +640,31 @@ def test_a_re_pair_that_cannot_dial_still_bonds_through_bluez(pairing) -> None:
         f"gave up without bonding at all: {log['handover']}"
     )
     assert log["local_bond"] == 0, "claimed a link it never had"
+
+
+def test_a_refusing_panel_is_not_asked_again_without_consent(pairing) -> None:
+    """A panel that refuses links must not be escalated to the Pair() loop.
+
+    "No link could be dialled" has two readings and opposite cures: a cleared
+    device list (no bond at all) or a panel that has dropped *our key* and
+    answers 0x0E. The second is what the van did on 2026-10-25, and asking it
+    again for 38 s left it refusing everything with an ACL in BT_CONFIG behind.
+    Only consent separates them, and consent is the checkbox.
+    """
+    (bonded, client), log = _run_ensure_bonded(
+        pairing,
+        addresses=[IDENTITY],
+        bluez_sees=True,
+        connects=False,
+        own_the_link=True,
+        local_link=True,
+        may_forget=False,
+    )
+    assert bonded is False
+    assert client is None
+    assert log["handover"] == [], (
+        f"bonded through BlueZ with no consent to forget: {log['handover']}"
+    )
 
 
 def test_a_re_pair_bonds_over_the_link_home_assistant_dialled(pairing) -> None:

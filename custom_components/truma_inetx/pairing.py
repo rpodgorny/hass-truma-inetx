@@ -91,6 +91,11 @@ _PAIR_PENDING_LIMIT = 20.0
 # How long the link Pair() opened is given to go away. Best effort: a
 # disconnect that hangs must not hold up a bond that already succeeded.
 _DISCONNECT_TIMEOUT = 5.0
+# How long the consent-gated fallback may spend bonding through BlueZ when a
+# re-pair could not dial at all. Deliberately short: the fallback is the
+# ambiguous path, and a panel that is refusing us is made worse by asking it
+# again (measured on the van 2026-10-25).
+_FALLBACK_BOND = 20.0
 
 
 # --- bonding -----------------------------------------------------------------
@@ -232,7 +237,14 @@ async def ensure_bonded(
         # error-97 path), and handing that to a local bond is the c91f711
         # mistake; the reserve is for a panel that answers nothing.
         starved = bool(connect_failed) and time.monotonic() >= deadline - reserve
-        if (wrapped or starved) and _live_device_path(hass, name, adapter_path):
+        if (
+            (wrapped or starved)
+            # Not for a re-pair: there the second dialler is the thing being
+            # avoided, and the decision is taken once, at the end, under the
+            # user's consent (see the timeout branch below).
+            and not own_the_link
+            and _live_device_path(hass, name, adapter_path)
+        ):
             # Either the resolver has handed back an address we already
             # failed to connect on -- every candidate has had its turn and the
             # rotation has wrapped with nothing to show -- or the connect phase
@@ -318,13 +330,28 @@ async def ensure_bonded(
         avoid.add(device.address.upper())
         await asyncio.sleep(2.0)
     LOGGER.warning("Truma %s: pairing timed out (%s)", name, last_exc)
-    # A re-pair that never got a link is #26's shape, not a refusal: the panel
-    # drops every link it is offered when it has no bond for us, which is the
-    # state a cleared device list leaves. There the second dialler is the only
-    # way in, so take it -- once, and with whatever budget is left.
-    if own_the_link and not dialled and _live_device_path(hass, name, adapter_path):
+    # A re-pair that never got a link is ambiguous, and the two readings have
+    # opposite cures: a panel whose device list was just cleared drops every
+    # link because it holds no bond (bonding through BlueZ is then the way in),
+    # while a panel that has kept its list and dropped *our key* refuses every
+    # link with HCI 0x0E -- and there the second dialler is what makes it worse.
+    # Measured the hard way on the van 2026-10-25: this fallback ran unasked on
+    # the second case, spent 38 s in Pair(), and left the panel refusing our
+    # key with an ACL in BT_CONFIG behind it.
+    #
+    # Nothing on this host can tell the two apart, so the user does: forgetting
+    # a bond is the destructive act, and ticking that box is consent to the path
+    # that needs it. Bounded, because a consent given for one attempt must not
+    # turn into an unbounded storm.
+    if (
+        own_the_link
+        and not dialled
+        and may_forget_bond
+        and _live_device_path(hass, name, adapter_path)
+    ):
         LOGGER.debug(
-            "Truma %s: no link could be dialled, so bonding through BlueZ after all",
+            "Truma %s: no link could be dialled and the bond may be forgotten, "
+            "so bonding through BlueZ after all",
             name,
         )
         return (
@@ -332,7 +359,7 @@ async def ensure_bonded(
                 name,
                 address,
                 adapter_path=adapter_path,
-                timeout=max(deadline - time.monotonic(), 0.0),
+                timeout=min(max(deadline - time.monotonic(), 0.0), _FALLBACK_BOND),
                 hass=hass,
                 trust_existing_bond=False,
                 may_forget_bond=may_forget_bond,
