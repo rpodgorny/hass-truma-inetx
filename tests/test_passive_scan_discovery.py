@@ -281,7 +281,8 @@ def _load():
     # never reached by the steps under test.
     _mod("truma_pkg.coordinator", CONF_POLL_INTERVAL="poll", DEFAULT_POLL_INTERVAL=0)
     _mod("truma_pkg.ble", device_from_bluez=_remembered)
-    _mod("truma_pkg.pairing", ensure_bonded=None)
+    # Both names config_flow imports; the steps under test never reach either.
+    _mod("truma_pkg.pairing", ensure_bonded=None, async_host_bond_state=None)
 
     def _real(name: str):
         spec = importlib.util.spec_from_file_location(

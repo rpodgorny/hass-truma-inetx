@@ -607,6 +607,46 @@ def _is_paired(objects: dict, path: str) -> bool:
     return bool(paired and paired.value)
 
 
+async def async_host_bond_state(
+    name: str, address: str, adapter_path: str | None = None
+) -> bool | None:
+    """Whether BlueZ holds a bond record for this panel: True / False / None.
+
+    **Only the absence is load-bearing.** ``Paired == False`` on the device
+    object reliably means this host holds no bond for the panel — measured on
+    the van 2026-10-26: with the record deleted and the panel keeping its own
+    half, one Reconfigure burned 11 connects and ~60 s to report
+    ``pairing_failed``, and the recovery that worked was *clear the panel's
+    device list, then arm it* (status file §4q). ``Paired == True`` proves
+    nothing — a signature-only record reports it — so a caller may use this to
+    warn about a missing bond and never to claim a working one.
+
+    ``None`` means the question could not be answered: no system bus, or the
+    panel is not in BlueZ's object list at all (a bond file can outlive the
+    object, e.g. before the panel is first heard after a reboot). Say nothing
+    rather than guess.
+    """
+    try:
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    except Exception:  # noqa: BLE001 - a hint is optional; never fail the flow
+        return None
+    try:
+        object_manager = await _get_interface(
+            bus, "/", "org.freedesktop.DBus.ObjectManager"
+        )
+        objects = await object_manager.call_get_managed_objects()
+        path = _find_device(
+            objects, name=name, address=address, adapter_path=adapter_path
+        )
+        if path is None:
+            return None
+        return _is_paired(objects, path)
+    except Exception:  # noqa: BLE001 - reported as "unknown", not as a failure
+        return None
+    finally:
+        bus.disconnect()
+
+
 def _live_device_path(
     hass: HomeAssistant | None, name: str, adapter_path: str | None
 ) -> str | None:

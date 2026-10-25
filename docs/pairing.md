@@ -105,3 +105,12 @@ has forgotten this host: remove this Home Assistant on the panel, clear its
 saved device list, put the panel into add-device mode, then tick *forget the
 stale bond* — that consent always runs the attempt, whatever the flow believes
 about the bond.
+
+**A failure says which case you are in.** If this host held no bond at all when
+the attempt started, the error asks you to clear the panel's device list *first*
+and then arm it, because that is the state a panel keeps an entry for a host
+that no longer has its key — measured: a host with no record needed 11 connects
+and about a minute to fail, and cleared only after the list was emptied and the
+panel armed. A bond state that cannot be read is never reported as a missing
+one: the flow only ever uses BlueZ's "not paired" as evidence, never "paired"
+as proof.

@@ -88,14 +88,26 @@ async def _ensure_bonded(_hass, _name, _address, **kw):
     return False, None
 
 
+# What the host is told it holds, per test. None = "cannot tell".
+HOST_BOND: list[bool | None] = [None]
+
+
+async def _host_bond_state(_name, _address, _adapter_path=None):
+    return HOST_BOND[0]
+
+
 H._ConfigFlow.async_show_form = _show
 CF.ensure_bonded = _ensure_bonded
+CF.async_host_bond_state = _host_bond_state
 
 
-def _submit(entry: _Entry, user_input: dict | None) -> tuple[object, _Hass]:
+def _submit(
+    entry: _Entry, user_input: dict | None, host_bond: bool | None = None
+) -> tuple[object, _Hass]:
     """Drive one submit of the reconfigure pair step."""
     CALLS.clear()
     SHOWN.clear()
+    HOST_BOND[0] = host_bond
     flow = CF.TrumaConfigFlow()
     flow.source = "reconfigure"
     flow._name = PANEL
@@ -150,6 +162,28 @@ def test_consent_outranks_our_evidence() -> None:
                           {"forget_bond": True})
     assert len(CALLS) == 1, f"consent was ignored: {CALLS}"
     assert CALLS[0].get("may_forget_bond") is True, CALLS
+
+
+def test_a_failed_attempt_on_a_bondless_host_names_the_clear_step() -> None:
+    """No bond before the attempt is its own case, and its own instruction.
+
+    Measured on the van 2026-10-26 (status file §4q): the state clears only
+    after the panel's device list is emptied and the panel armed, so the generic
+    "put it back into add-device mode" list is the wrong first step there.
+    """
+    shown, _hass = _submit(
+        _Entry(_Coordinator(live=False, last_ok=None)), {}, host_bond=False
+    )
+    assert len(CALLS) == 1, f"the attempt should still have run: {CALLS}"
+    assert SHOWN.get("errors", {}).get("base") == "pairing_failed_no_bond", SHOWN
+
+
+def test_the_generic_message_survives_when_the_bond_state_is_unknown() -> None:
+    """An unreadable bond state must not be reported as a missing bond."""
+    shown, _hass = _submit(
+        _Entry(_Coordinator(live=False, last_ok=None)), {}, host_bond=None
+    )
+    assert SHOWN.get("errors", {}).get("base") == "pairing_failed", SHOWN
 
 
 def main() -> None:

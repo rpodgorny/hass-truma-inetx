@@ -32,6 +32,7 @@
     },
     "error": {
       "pairing_failed": "Could not pair with the panel. Put it back into add-device mode and try again. If that fails, clear its saved Bluetooth device list (it holds only about four devices); if clearing the list does not help either, power-cycle the panel, put it into add-device mode again and start over.",
+      "pairing_failed_no_bond": "Could not pair, and this Home Assistant held **no bond** to the panel before the attempt \u2014 so the panel is either still storing an entry for a host that no longer has its key, or it is not accepting new bonds. On the panel: remove this Home Assistant from its Bluetooth device list, clear that list (it holds only about four devices), then put the panel into add-device mode and try again. If that fails too, power-cycle the panel and repeat.",
       "bond_still_working": "This Home Assistant already has a working bond to the panel — it is talking to it right now, so nothing was attempted and nothing was changed.\n\nA re-pair is only needed when the panel has forgotten this host. On the panel: remove this Home Assistant, clear its saved device list, then put the panel into add-device mode. Then tick **forget the stale bond** below and continue."
     },
     "abort": {

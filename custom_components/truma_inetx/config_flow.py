@@ -44,7 +44,7 @@ from .bt import (
 )
 from .const import DOMAIN, LOGGER, describe_scan_modes
 from .coordinator import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
-from .pairing import ensure_bonded
+from .pairing import async_host_bond_state, ensure_bonded
 
 # One card per Home Assistant run explaining a panel that is heard but cannot be
 # named, and the flag that keeps it to one. The address rotates every quarter of
@@ -357,6 +357,22 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         assert self._name is not None and self._address is not None
         errors: dict[str, str] = {}
         forget_bond = bool((user_input or {}).get(CONF_FORGET_BOND))
+        # Read *before* the entry is unloaded: unloading drops the session, and
+        # with it BlueZ's device object, which would turn "this host has no
+        # bond" into "cannot tell".
+        host_had_no_bond = False
+        if (
+            user_input is not None
+            and self.source == SOURCE_RECONFIGURE
+            and self._name
+            and self._address
+        ):
+            host_had_no_bond = (
+                await async_host_bond_state(
+                    self._name, self._address, self._connectable_adapter_path()
+                )
+                is False
+            )
         if (
             user_input is not None
             and not forget_bond
@@ -452,7 +468,13 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
                         self._get_reconfigure_entry(), data_updates=data
                     )
                 return self.async_create_entry(title=self._name, data=data)
-            errors["base"] = "pairing_failed"
+            # A host that held no bond before the attempt is a different case
+            # from a bond that went stale: measured on the van 2026-10-26, that
+            # state needs the panel's device list cleared *first*, then arming
+            # (status file §4q). Say so instead of burying it in the generic list.
+            errors["base"] = (
+                "pairing_failed_no_bond" if host_had_no_bond else "pairing_failed"
+            )
 
         # The destructive option appears only alongside a failure: before the
         # first attempt there is nothing to forget, and a success ends the flow.

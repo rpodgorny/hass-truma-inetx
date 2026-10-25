@@ -240,7 +240,8 @@ def _load():
     # A BlueZ that remembers no device: this file is about what the air
     # carries, so the fallback behind advert_name must contribute nothing.
     _mod("truma_pkg.ble", device_from_bluez=_nothing_remembered)
-    _mod("truma_pkg.pairing", ensure_bonded=None)
+    # Both names config_flow imports; the steps under test never reach either.
+    _mod("truma_pkg.pairing", ensure_bonded=None, async_host_bond_state=None)
 
     def _real(name: str):
         spec = importlib.util.spec_from_file_location(
