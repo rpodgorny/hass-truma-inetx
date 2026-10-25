@@ -41,9 +41,16 @@ from .bt import (
     scan_mode_report,
     warn_about_names,
 )
-from .const import DOMAIN, LOGGER
+from .const import DOMAIN, LOGGER, describe_scan_modes
 from .coordinator import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
 from .pairing import ensure_bonded
+
+# One card per Home Assistant run explaining a panel that is heard but cannot be
+# named, and the flag that keeps it to one. The address rotates every quarter of
+# an hour, so a card keyed on the advertisement would reappear seconds after
+# being dismissed; the notice is therefore keyed on nothing and shown once.
+_UNNAMED_NOTICE = "unnamed_notice_shown"
+_UNNAMED_UNIQUE_ID = f"{DOMAIN}-unnamed"
 
 # How long the pairing step busy-loops Pair() while the panel is in add-device
 # mode before reporting failure.
@@ -100,6 +107,9 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         # The panel being added, resolved before the pairing step.
         self._name: str | None = None
         self._address: str | None = None
+        # The address of a panel that was heard but could not be named, kept for
+        # the notice step's description.
+        self._unnamed_address: str | None = None
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
@@ -144,7 +154,13 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             async_sweep_for_names_soon(self.hass)
             # Say why, in words that name the layer: a user cannot guess that
             # the reason is a scan mode, and the log is where they look.
-            warn_about_names(self.hass, discovery_info.address)
+            warned = warn_about_names(self.hass, discovery_info.address)
+            # The log is not where a user looks. If the reason is one waiting
+            # cannot fix -- a scanner pinned passive -- offer a card that says
+            # the panel was heard and why it cannot be added.
+            if warned and await self._async_offer_unnamed_notice():
+                self._unnamed_address = discovery_info.address.upper()
+                return await self.async_step_unnamed()
             return self.async_abort(reason="awaiting_name")
         await self.async_set_unique_id(name)
         # The RPA rotates roughly every 15 minutes and every rotation lands
@@ -170,6 +186,54 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         self._name = name
         self.context["title_placeholders"] = {"name": name}
         return await self.async_step_confirm()
+
+    async def async_step_unnamed(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """A panel is heard and cannot be named: say so, and say why.
+
+        The alternative -- aborting -- is indistinguishable from the integration
+        never hearing the panel at all, which is exactly how issue #6 spent weeks
+        being diagnosed as "not supported" when the panel was in range the whole
+        time. Nothing is offered to add here, because there is nothing to key an
+        entry on; this card exists to turn silence into a diagnosis, and it
+        closes with **OK**.
+        """
+        if user_input is not None:
+            return self.async_abort(reason="awaiting_name")
+        self._set_confirm_only()
+        return self.async_show_form(
+            step_id="unnamed",
+            description_placeholders={
+                "address": self._unnamed_address or "",
+                "scanners": describe_scan_modes(self.hass),
+            },
+        )
+
+    async def _async_offer_unnamed_notice(self) -> bool:
+        """Whether to show that card now: once per run, and never when configured.
+
+        Two reasons for the two conditions. *Once per run*: the panel's address
+        rotates every ~15 minutes and its advertisement arrives a few times a
+        second, so a card keyed on it would come back seconds after a dismissal;
+        the notice is a statement about the host's scanner, and one per boot is
+        the whole of its value. *Never when configured*: with a Truma entry in
+        place, a nameless advert is most likely that panel (a bonded panel stops
+        answering scan requests), and telling its owner it cannot be named would
+        be alarming and wrong.
+        """
+        if self._async_current_ids():
+            return False
+        gate = self.hass.data.setdefault(DOMAIN, {})
+        if gate.get(_UNNAMED_NOTICE):
+            return False
+        # Set before the card is shown, not after: the flow can be dismissed,
+        # reloaded or replaced, and the flag must survive all of that for the
+        # "once" in "once per run" to mean anything.
+        gate[_UNNAMED_NOTICE] = True
+        await self.async_set_unique_id(_UNNAMED_UNIQUE_ID, raise_on_progress=True)
+        self._abort_if_unique_id_configured()
+        return True
 
     async def async_step_confirm(
         self, user_input: dict[str, Any] | None = None

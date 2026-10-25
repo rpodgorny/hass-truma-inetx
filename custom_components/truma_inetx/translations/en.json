@@ -24,6 +24,10 @@
         "data_description": {
           "forget_bond": "Tick this only if arming the panel did not help. A panel that is not in add-device mode refuses a pairing attempt in exactly the same way as a panel that has forgotten this Home Assistant, so removing an existing bond on that evidence can destroy a working one. Ticking this discards the bond on this host and pairs from scratch."
         }
+      },
+      "unnamed": {
+        "title": "Truma panel seen, but it has no name",
+        "description": "A Truma panel is advertising at **{address}**, so it is in range and being heard — but its name is not arriving, and the name is what a Truma entry is keyed on.\n\nThe name travels in a *scan response*, and only an **active** scan asks for one. A scanner that is passively listening therefore never receives it. Nothing is wrong with the panel.\n\nScanners here:\n\n> {scanners}\n\n**To fix it:** enable active scanning on that adapter, or — if it is an ESP32 proxy — set `bluetooth_proxy: active: true` (the official Bluetooth Proxy firmware already does). The panel then appears again, with its name, ready to add."
       }
     },
     "error": {

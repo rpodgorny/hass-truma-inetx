@@ -24,6 +24,10 @@
         "data_description": {
           "forget_bond": "Nur ankreuzen, wenn das Aktivieren des Bedienteils nicht geholfen hat. Ein Bedienteil, das sich nicht im Modus zum Hinzufügen eines Geräts befindet, lehnt einen Kopplungsversuch genauso ab wie eines, das diesen Home Assistant vergessen hat – eine bestehende Kopplung allein aufgrund dieser Beobachtung zu löschen kann eine funktionierende zerstören. Mit diesem Haken wird die Kopplung auf diesem Host verworfen und von Grund auf neu gekoppelt."
         }
+      },
+      "unnamed": {
+        "title": "Truma-Panel gesehen, aber ohne Namen",
+        "description": "Ein Truma-Panel sendet unter **{address}** — es ist also in Reichweite und wird gehört —, aber sein Name kommt nicht an, und der Name ist das, worauf ein Truma-Eintrag geschlüsselt wird.\n\nDer Name steht in einer *Scan Response*, und nur ein **aktiver** Scan fordert diese an. Ein Scanner, der rein passiv lauscht, bekommt sie daher nie zu sehen. Mit dem Panel ist alles in Ordnung.\n\nScanner hier:\n\n> {scanners}\n\n**Lösung:** aktives Scannen am betreffenden Adapter einschalten oder — bei einem ESP32-Proxy — `bluetooth_proxy: active: true` setzen (die offizielle Bluetooth-Proxy-Firmware macht das bereits). Danach erscheint das Panel wieder mit seinem Namen und lässt sich hinzufügen."
       }
     },
     "error": {

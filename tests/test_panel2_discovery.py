@@ -366,6 +366,96 @@ def test_the_manual_step_skips_nameless_and_unrelated_adverts() -> None:
     assert _manual_choices(_Info(name="Some Sensor", uuids=("180f",))) == []
 
 
+def _discover_step(info: _Info):
+    """Run the discovery step and report (kind, detail, flow) without hiding why.
+
+    ``_discover`` returns the flow and swallows the step's outcome; these tests
+    are about *which* outcome a user sees, so it is kept.
+    """
+    flow = CF.TrumaConfigFlow()
+    try:
+        asyncio.run(flow.async_step_bluetooth(info))
+    except _Shown as shown:
+        return "shown", shown.step_id, flow
+    except _Aborted as abort:
+        return "aborted", abort.reason, flow
+    return "returned", "", flow
+
+
+def _fresh_host():
+    """A hass with no memory, and the old one to put back."""
+    old = CF.TrumaConfigFlow.hass
+    CF.TrumaConfigFlow.hass = _Hass()
+    return old
+
+
+def test_a_heard_panel_without_a_name_says_so() -> None:
+    """The gap issue #6 fell into: heard, unusable, and nothing on screen.
+
+    A passive scanner receives the advertisement (the UUID rides in it) and never
+    the scan response, so the panel is identified and cannot be keyed. Aborting
+    silently is indistinguishable, from the outside, from the integration not
+    hearing the panel at all -- which is why the report read as "Panel 2 not
+    supported" for weeks. The card exists to say the difference out loud.
+    """
+    old_hass = _fresh_host()
+    warned = getattr(CF, "warn_about_names")
+    setattr(CF, "warn_about_names", lambda *a, **k: True)
+    try:
+        kind, detail, flow = _discover_step(
+            _Info(name=RPA, uuids=(PANEL2_ADVERT_SERVICE_UUID,))
+        )
+    finally:
+        setattr(CF, "warn_about_names", warned)
+        CF.TrumaConfigFlow.hass = old_hass
+    assert (kind, detail) == ("shown", "unnamed"), (kind, detail)
+    assert flow.unique_id == CF._UNNAMED_UNIQUE_ID
+    assert flow._unnamed_address == RPA
+
+
+def test_the_card_is_offered_once_per_run() -> None:
+    """One per boot, because the address it describes rotates every quarter hour.
+
+    A card keyed on the advertisement would come back seconds after being
+    dismissed; the statement it makes is about the host's scanner, and it does
+    not become truer by repeating.
+    """
+    old_hass = _fresh_host()
+    warned = getattr(CF, "warn_about_names")
+    setattr(CF, "warn_about_names", lambda *a, **k: True)
+    nameless = _Info(name=RPA, uuids=(PANEL2_ADVERT_SERVICE_UUID,))
+    try:
+        first = _discover_step(nameless)[:2]
+        second = _discover_step(nameless)[:2]
+    finally:
+        setattr(CF, "warn_about_names", warned)
+        CF.TrumaConfigFlow.hass = old_hass
+    assert first == ("shown", "unnamed"), first
+    assert second == ("aborted", "awaiting_name"), second
+
+
+def test_no_card_when_a_truma_entry_already_exists() -> None:
+    """A bonded panel stops answering scan requests, so it goes nameless too.
+
+    Telling its own owner that their working panel cannot be named would be
+    alarming and wrong; a configured entry means this is not a first pairing.
+    """
+    old_hass = _fresh_host()
+    warned = CF.warn_about_names
+    current = CF.TrumaConfigFlow._async_current_ids
+    CF.warn_about_names = lambda *a, **k: True
+    setattr(CF.TrumaConfigFlow, "_async_current_ids", lambda self: {"Truma iNetX-FFB4D1"})
+    try:
+        kind, detail, _flow = _discover_step(
+            _Info(name=RPA, uuids=(PANEL2_ADVERT_SERVICE_UUID,))
+        )
+    finally:
+        setattr(CF, "warn_about_names", warned)
+        CF.TrumaConfigFlow._async_current_ids = current
+        CF.TrumaConfigFlow.hass = old_hass
+    assert (kind, detail) == ("aborted", "awaiting_name"), (kind, detail)
+
+
 def main() -> None:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
