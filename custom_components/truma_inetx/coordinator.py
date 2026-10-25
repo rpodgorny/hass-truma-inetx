@@ -37,6 +37,9 @@ from .const import (
     ISSUE_NO_ROUTE,
     ISSUE_PANEL_REFUSING,
     REFUSED_SESSIONS_BEFORE_ISSUE,
+    ISSUE_PANEL_SILENT,
+    SILENT_BACKOFF,
+    SILENT_SESSIONS_BEFORE_ISSUE,
     LOGGER,
     MANUFACTURER,
     MODEL,
@@ -212,6 +215,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # _async_note_no_route).
         self._no_route_misses = 0
         self._refused_sessions = 0
+        self._silent_sessions = 0
         self._store: Store = Store(hass, _STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}")
         # Everything the store holds: the app identity plus our own
         # bookkeeping. Kept whole so a save never drops a key it did not know.
@@ -316,6 +320,39 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         """A session carried data: the panel is not refusing us."""
         self._refused_sessions = 0
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_PANEL_REFUSING)
+
+    def _note_session_silent(self) -> None:
+        """Count a session whose link carried nothing, and complain once.
+
+        Same shape as :meth:`_async_note_no_route`: raise at the threshold and
+        never again, so a panel left deaf overnight produces one card, not one
+        per retry.
+        """
+        self._silent_sessions += 1
+        if self._silent_sessions != SILENT_SESSIONS_BEFORE_ISSUE:
+            return
+        LOGGER.warning(
+            "Truma %s answered nothing on the bus across %s sessions; leaving it "
+            "alone for %s minutes. The panel's radio is fine, its bus is not -- "
+            "power-cycle the panel",
+            self.unique_id,
+            self._silent_sessions,
+            int(SILENT_BACKOFF // 60),
+        )
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_PANEL_SILENT,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_PANEL_SILENT,
+        )
+
+    def _async_clear_silent(self) -> None:
+        """The panel answered again: forget the deaf streak and drop the issue."""
+        self._silent_sessions = 0
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_PANEL_SILENT)
+
 
     def _async_clear_no_route(self) -> None:
         """Reset the miss counter and drop the issue if it was raised."""
@@ -499,8 +536,18 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         delay = _RECONNECT_DELAY_BASE
         while not self._stop:
             connected = False
+            silent = False
             try:
                 connected = await self._connect_and_run()
+            except session.BusSilent as exc:
+                # The link came up and every device stayed silent. Retrying is
+                # not free here: on this hardware each reconnect makes the deaf
+                # state worse (measured 2026-10-25), so count it, say so once,
+                # and leave the panel alone for a while.
+                LOGGER.debug("Truma session ended: %s", exc)
+                self._note_attempt_failed()
+                self._note_session_silent()
+                silent = True
             except Exception as exc:  # noqa: BLE001
                 LOGGER.debug("Truma session ended: %s", exc)
                 self._note_attempt_failed()
@@ -537,6 +584,10 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
                 # A real connection means our address set is healthy; forget any
                 # past failures so a later reconnect starts from a clean slate.
                 self._avoid.clear()
+            elif silent:
+                # Deliberately long: a deaf bus is a panel-side condition, and
+                # dialling it every 45 s neither clears nor diagnoses it.
+                delay = SILENT_BACKOFF
             LOGGER.debug("Truma %s reconnecting in %ss", self.unique_id, delay)
             await self._wait_before_retry(delay)
             if not connected:
@@ -911,6 +962,8 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # A session that got this far was not refused, whatever came before --
         # and if the card was raised, the panel is answering again, so drop it.
         self._async_clear_refused()
+        # Devices answered: the bus is not deaf, whatever it did last time.
+        self._async_clear_silent()
         self._session_transport = client.transport
         if self._last_kind is not None:
             # The panel answered, encrypted and subscribed on this address, so

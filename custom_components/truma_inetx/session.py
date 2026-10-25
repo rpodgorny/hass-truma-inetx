@@ -72,6 +72,16 @@ class StartupFailed(Exception):
     """The link came up but the session could not be established on it."""
 
 
+class BusSilent(StartupFailed):
+    """The link came up and every address on the bus stayed silent.
+
+    Distinct from a plain startup failure because it is the one failure where
+    retrying is actively counterproductive: the panel's radio is fine (it
+    advertises and accepts the link) while its internal bus is deaf, and on this
+    hardware more connections make it worse, not better (measured 2026-10-25).
+    """
+
+
 async def run_startup(client, bus: Bus, identity: dict, name: str, now) -> None:
     """Register, subscribe to all topics, send identity, discover params.
 
@@ -131,7 +141,7 @@ async def run_startup(client, bus: Bus, identity: dict, name: str, now) -> None:
             "nothing, so the session is being dropped and retried"
         )
         LOGGER.warning(message)
-        raise StartupFailed(message)
+        raise BusSilent(message)
 
     # 2. Subscribe to all topic batches.
     for batch in TOPIC_BATCHES:

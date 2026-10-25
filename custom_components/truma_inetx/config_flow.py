@@ -35,7 +35,11 @@ from .bt import (
     async_resolve_device,
     async_sweep_for_names,
     async_sweep_for_names_soon,
+    describe_scan_modes,
     is_panel_advert,
+    note_named,
+    scan_mode_report,
+    warn_about_names,
 )
 from .const import DOMAIN, LOGGER
 from .coordinator import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
@@ -131,7 +135,16 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             discovery_info.address
         )
         if name is None:
+            # Nothing on air carries a name, and none is remembered. Ask the
+            # panel itself -- but only when there is no Truma entry at all:
+            # with one configured, a nameless advertisement is most likely our
+            # own panel (bonded, hence unnameable on a passive scan), and a
+            # second card plus a second dialler would both be worse than the
+            # wait. A first pairing is the case this exists for.
             async_sweep_for_names_soon(self.hass)
+            # Say why, in words that name the layer: a user cannot guess that
+            # the reason is a scan mode, and the log is where they look.
+            warn_about_names(self.hass, discovery_info.address)
             return self.async_abort(reason="awaiting_name")
         await self.async_set_unique_id(name)
         # The RPA rotates roughly every 15 minutes and every rotation lands
@@ -147,6 +160,7 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             updates={CONF_ADDRESS: discovery_info.address},
             reload_on_update=False,
         )
+        note_named(self.hass, discovery_info.address)
         self._discovery_info = discovery_info
         # The name the flow was keyed on, not the one the advertisement
         # carried: those differ whenever the advert had none and BlueZ
@@ -224,6 +238,7 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             name = advert_name(info) or await async_known_name(info.address)
             if name is None or name in configured_names:
                 continue
+            note_named(self.hass, info.address)
             # dedupe by stable name; keep the most recent advertisement
             self._discovered[name] = info
 

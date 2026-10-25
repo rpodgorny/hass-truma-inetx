@@ -10,6 +10,7 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 from homeassistant.core import HomeAssistant
 
+from .const import describe_scan_modes, scan_mode_report
 from .coordinator import TrumaConfigEntry
 
 # The BLE address is a resolvable private address that still pins the panel to
@@ -147,5 +148,11 @@ async def async_get_config_entry_diagnostics(
         # "local"). The pair is what tells a bond on one transport from a
         # session on the other, which is the open question in issue #13.
         "session_transport": coordinator.session_transport,
+        # Whether the radio can ever hear a name: the panel's name rides a scan
+        # response, an active scan is the only thing that solicits one, and an
+        # adapter pinned passive never opens one. Without this, "the panel is
+        # not discovered" is indistinguishable from "the panel is not there".
+        "bluetooth_scanners": scan_mode_report(hass),
+        "bluetooth_scanners_summary": describe_scan_modes(hass),
         "bus": bus_dict,
     })

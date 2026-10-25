@@ -81,7 +81,83 @@ ISSUE_PANEL_REFUSING = "panel_refusing"
 # Consecutive refused sessions before the card appears. Low, because this state
 # never clears by itself: the panel will refuse forever until its list is fixed.
 REFUSED_SESSIONS_BEFORE_ISSUE = 3
+
+# The link comes up and the panel's bus answers nothing: every address asked,
+# none acknowledged. Measured on the van (2026-10-25): a panel in this state
+# stays deaf however often it is dialled, and reconnecting into it every 45 s
+# for ten minutes only made it worse; a power cycle cleared it. So stop, say
+# so, and let it be.
+ISSUE_PANEL_SILENT = "panel_silent"
+# Consecutive deaf sessions before the issue is raised and the loop backs off.
+SILENT_SESSIONS_BEFORE_ISSUE = 3
+# How long to leave a deaf panel alone. Long enough to be a real pause, short
+# enough that the next poll notices if it comes back by itself.
+SILENT_BACKOFF = 1800.0
 # Consecutive failed resolves before raising that issue. A single miss is
 # normal -- an adapter can be busy mid-connect, or the panel between
 # advertising intervals -- so warning on the first one would cry wolf.
 NO_ROUTE_MISSES_BEFORE_WARNING = 3
+
+
+def _mode_name(mode: object) -> str | None:
+    """``BluetoothScanningMode`` as the word a person would say."""
+    if mode is None:
+        return None
+    return (getattr(mode, "name", None) or str(mode)).lower()
+
+
+def scan_mode_report(hass) -> list[dict[str, object]]:
+    """What each scanner is asked to do, and what it is doing right now.
+
+    Two different questions, and answering the wrong one is how a warning cries
+    wolf: ``requested_mode`` is the configured mode, ``current_mode`` is the live
+    one. On the default AUTO the radio is *passive* almost all the time and turns
+    active only for scheduled windows, so ``current=PASSIVE`` is normal. Only
+    ``requested=PASSIVE`` means no window will ever open.
+
+    Tolerant by construction: an older Home Assistant without the accessor, or a
+    scanner without the attributes, yields an empty report rather than an error.
+    """
+    try:
+        from homeassistant.components.bluetooth import async_current_scanners
+
+        scanners = async_current_scanners(hass)
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must not raise
+        LOGGER.debug("Truma: cannot read the scanner modes: %s", exc)
+        return []
+    report: list[dict[str, object]] = []
+    for scanner in scanners or ():
+        requested = _mode_name(getattr(scanner, "requested_mode", None))
+        current = _mode_name(getattr(scanner, "current_mode", None))
+        report.append(
+            {
+                "scanner": getattr(scanner, "name", None)
+                or getattr(scanner, "source", "?"),
+                "source": getattr(scanner, "source", None),
+                "requested": requested,
+                "current": current,
+                "connectable": bool(getattr(scanner, "connectable", False)),
+            }
+        )
+    return report
+
+
+def describe_scan_modes(hass) -> str:
+    """One line naming which scanners can ever produce a name, and why not."""
+    report = scan_mode_report(hass)
+    if not report:
+        return "no Bluetooth scanners are registered"
+    parts: list[str] = []
+    for entry in report:
+        requested = str(entry.get("requested") or "unknown")
+        current = str(entry.get("current") or "starting")
+        line = f"{entry.get('scanner')} requested={requested} current={current}"
+        if requested == "passive":
+            line += (
+                ": pinned passive, so it never opens an active window and no"
+                " name can arrive from it"
+            )
+        elif requested == "auto":
+            line += ": auto, passive except for short scheduled windows"
+        parts.append(line)
+    return "; ".join(parts)
