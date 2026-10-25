@@ -33,6 +33,14 @@ A kernel fix is
 [posted to linux-bluetooth](https://lore.kernel.org/linux-bluetooth/20260908012048.3681904-2-radek@podgorny.cz/)
 and working its way upstream. Until it lands, a proxy is what works on 6.19+.
 
+**Measured counter-example (2026-10-25), because "usually" is doing real work in that sentence.** The
+development vehicle runs kernel **7.2.10** on a Pi 4B with the onboard BCM4345C0 (`E4:5F:01:0B:37:DD`), and
+a **local adapter** connects to the panel over its **identity address** with `AUTH ENCRYPT`, **18/18**
+devices acknowledged, session after session — across panel power cycles, config-entry reloads and Home
+Assistant restarts. So the paragraph above describes hosts where this bites, not a rule that a 6.19+ host
+cannot work. Before buying a proxy for one, check what *your* host does: `logger: logs: habluetooth: debug`
+shows the chosen path, and the integration's diagnostics carry `session_transport` and `address_kind`.
+
 Older reports in this repo claim BlueZ can never do this. Wrong: the adapters
 tested happened to run kernels carrying the regression.
 

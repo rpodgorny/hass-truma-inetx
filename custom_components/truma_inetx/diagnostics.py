@@ -197,6 +197,7 @@ async def async_get_config_entry_diagnostics(
             # does not simply look empty.
             "unattributed": bus.unattributed,
         }
+    host_bond = await _host_bond(getattr(coordinator, "address", ""))
     return redact_addresses({
         "entry": async_redact_data(entry.as_dict(), TO_REDACT),
         "last_update_success": coordinator.last_update_success,
@@ -220,7 +221,16 @@ async def async_get_config_entry_diagnostics(
         # so it is reported as the evidence that stands in for it. Two holders
         # disagreeing is the most common "it worked yesterday" cause, and telling
         # them apart used to need a shell (charter C6).
-        "host_bond": await _host_bond(getattr(coordinator, "address", "")),
+        "host_bond": host_bond,
+        # Which adapter actually holds a bond record. The charter names this
+        # because "bonded on the dongle, connecting through the onboard" is a
+        # complete bond that cannot encrypt, and it looks identical to no bond.
+        "bond_adapter": [
+            adapter
+            for adapter, record in host_bond.items()
+            if isinstance(record, dict) and record.get("paired")
+        ]
+        or None,
         "panel_bond": {
             "readable": False,
             "note": (

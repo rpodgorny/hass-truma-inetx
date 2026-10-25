@@ -240,6 +240,9 @@ def test_the_bond_is_reported_split_the_way_it_exists() -> None:
     # must say that rather than reporting "no bond", which is a different fact.
     assert download["host_bond"]["present"] is False
     assert "address" in download["host_bond"]["reason"]
+    # Nothing is bonded here, so the field says None rather than an empty list:
+    # "no adapter holds a bond" is a fact, and an empty list reads as missing data.
+    assert download["bond_adapter"] is None
     assert not LEAK.findall(json.dumps(download["host_bond"]))
 
 
