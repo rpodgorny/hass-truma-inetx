@@ -35,6 +35,8 @@ from .const import (
     DOMAIN,
     ISSUE_NO_PROXY_ROUTE_LEGACY,
     ISSUE_NO_ROUTE,
+    ISSUE_PANEL_REFUSING,
+    REFUSED_SESSIONS_BEFORE_ISSUE,
     LOGGER,
     MANUFACTURER,
     MODEL,
@@ -209,6 +211,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # able to connect to it. Debounces the repair issue (see
         # _async_note_no_route).
         self._no_route_misses = 0
+        self._refused_sessions = 0
         self._store: Store = Store(hass, _STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}")
         # Everything the store holds: the app identity plus our own
         # bookkeeping. Kept whole so a save never drops a key it did not know.
@@ -271,6 +274,48 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
                 "#reaching-the-panel"
             ),
         )
+
+    def _note_session_refused(self) -> None:
+        """Count a session the panel refused while it was plainly on air.
+
+        Measured on the van 2026-10-25, and reproduced on demand by clearing the
+        panel's own device list: the panel advertises normally, the resolver
+        finds it, a link comes up unencrypted, and every connect dies. bluetoothd
+        says why -- ``Connection Rejected Due to Security Reasons`` (HCI 0x0E) --
+        but that never reaches Home Assistant: what arrives is
+        ``Failed to connect after 3 attempt(s): TimeoutError``, which is
+        indistinguishable from a flaky radio unless it is combined with what we
+        know locally: the panel is advertising, and we hold a bond for it.
+
+        Careful about the panel being *heard*: a panel that is off, asleep or out
+        of range produces the same timeout, and telling that user to fix a bond
+        would be wrong. So silence resets the count instead of adding to it.
+        """
+        if not async_panel_advertising(self.hass, self.unique_id):
+            self._refused_sessions = 0
+            return
+        self._refused_sessions += 1
+        if self._refused_sessions != REFUSED_SESSIONS_BEFORE_ISSUE:
+            return
+        LOGGER.warning(
+            "Truma %s: the panel is advertising and this host holds a bond for it, "
+            "but every connection is refused. The panel has most likely forgotten "
+            "this Home Assistant; remove it on the panel and re-pair",
+            self.unique_id,
+        )
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            ISSUE_PANEL_REFUSING,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_PANEL_REFUSING,
+        )
+
+    def _async_clear_refused(self) -> None:
+        """A session carried data: the panel is not refusing us."""
+        self._refused_sessions = 0
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_PANEL_REFUSING)
 
     def _async_clear_no_route(self) -> None:
         """Reset the miss counter and drop the issue if it was raised."""
@@ -459,6 +504,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             except Exception as exc:  # noqa: BLE001
                 LOGGER.debug("Truma session ended: %s", exc)
                 self._note_attempt_failed()
+                self._note_session_refused()
             finally:
                 # Always tear the client down before the next attempt so a
                 # half-open link never lingers holding a connection slot (the
@@ -862,6 +908,9 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # device_is_named).
         self._bus.discovered = True
         self._session_ok = True
+        # A session that got this far was not refused, whatever came before --
+        # and if the card was raised, the panel is answering again, so drop it.
+        self._async_clear_refused()
         self._session_transport = client.transport
         if self._last_kind is not None:
             # The panel answered, encrypted and subscribed on this address, so

@@ -69,6 +69,18 @@ ISSUE_NO_ROUTE = "no_route"
 # startup so an issue raised by an older version does not linger with no
 # translation behind it.
 ISSUE_NO_PROXY_ROUTE_LEGACY = "no_proxy_route"
+
+# The panel is on air, we hold a bond for it, and every connect is refused.
+# Measured on the van (2026-10-25, reproduced on demand by clearing the panel's
+# own device list): bluetoothd logs "Connection Rejected Due to Security Reasons"
+# (HCI 0x0E) because the panel no longer holds this host's key, while both
+# adapters still hold a complete bond. Home Assistant only surfaces
+# "Failed to connect after 3 attempt(s): TimeoutError", so the reason is inferred
+# from those three facts -- and the user was told nothing at all before this.
+ISSUE_PANEL_REFUSING = "panel_refusing"
+# Consecutive refused sessions before the card appears. Low, because this state
+# never clears by itself: the panel will refuse forever until its list is fixed.
+REFUSED_SESSIONS_BEFORE_ISSUE = 3
 # Consecutive failed resolves before raising that issue. A single miss is
 # normal -- an adapter can be busy mid-connect, or the panel between
 # advertising intervals -- so warning on the first one would cry wolf.

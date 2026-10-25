@@ -199,6 +199,7 @@ class _Coord:
         # these fixtures dial nothing, so there is nothing to record.
         self._last_kind = None
         self._session_ok = False
+        self._refused_sessions = 0
         self._writes_pending = 0
         self._connected_event = asyncio.Event()
         self._identity = {
@@ -207,6 +208,12 @@ class _Coord:
 
     def async_set_updated_data(self, _data) -> None:
         pass
+
+    # _finish_startup also clears the "panel refuses us" streak. These fixtures
+    # never raise that issue; the real method (and the registry call behind it)
+    # is exercised in test_panel_refusing_issue.py.
+    def _async_clear_refused(self) -> None:
+        self._refused_sessions = 0
 
     async def _run_startup(self, _client) -> None:
         """Stand in for registration + discovery, which have their own file."""
