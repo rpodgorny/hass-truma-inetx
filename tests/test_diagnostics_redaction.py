@@ -100,7 +100,7 @@ def _bus() -> object:
     return bus
 
 
-def _download(bus, entry_dict: dict | None = None) -> dict:
+def _download(bus, entry_dict: dict | None = None, address: str | None = None) -> dict:
     """What the real diagnostics writer returns for that bus."""
     coordinator = types.SimpleNamespace(
         data=bus,
@@ -109,6 +109,8 @@ def _download(bus, entry_dict: dict | None = None) -> dict:
         address_kind="identity",
         session_transport="local",
     )
+    if address is not None:
+        coordinator.address = address
     entry = types.SimpleNamespace(
         runtime_data=coordinator,
         as_dict=lambda: entry_dict if entry_dict is not None else {"title": "Truma"},
@@ -216,3 +218,40 @@ def _main() -> None:
 
 if __name__ == "__main__":
     _main()
+
+
+def test_the_bond_is_reported_split_the_way_it_exists() -> None:
+    """Charter C6: no failure may need a shell on the box to diagnose.
+
+    A bond has two independent holders -- this host (BlueZ's device record) and
+    the panel (its own list of about four devices) -- and when they disagree the
+    symptom is "it worked yesterday and now nothing connects". The host's half is
+    readable; the panel's half is not readable at all, only observable through
+    what it does. Reporting one and silently omitting the other invites exactly
+    the wrong conclusion, so the second is stated as unreadable with the evidence
+    that stands in for it.
+    """
+    download = _download(_bus())
+    assert "host_bond" in download, sorted(download)
+    assert "panel_bond" in download, sorted(download)
+    assert download["panel_bond"]["readable"] is False
+    assert download["panel_bond"]["evidence"]["session_transport"] in ("local", "proxy")
+    # No address on this entry, so there is nothing to look up -- and the reason
+    # must say that rather than reporting "no bond", which is a different fact.
+    assert download["host_bond"]["present"] is False
+    assert "address" in download["host_bond"]["reason"]
+    assert not LEAK.findall(json.dumps(download["host_bond"]))
+
+
+def test_a_download_survives_an_unreachable_bluez() -> None:
+    """The common case off the van: no system bus, no BlueZ, no crash.
+
+    A diagnostics download is what people attach to an issue, and it is often
+    produced on a machine that has nothing to do with the vehicle. Failing the
+    download because D-Bus is absent would lose the rest of the evidence with it.
+    """
+    download = _download(_bus(), address="50:98:93:FF:B4:D1")
+    assert download["host_bond"]["present"] is False
+    assert "reason" in download["host_bond"]
+    # Whatever the reason is, it is not an exception and not an address leak.
+    assert not LEAK.findall(json.dumps(download["host_bond"]))

@@ -80,6 +80,67 @@ def redact_addresses(value: Any) -> Any:
     return value
 
 
+async def _host_bond(address: str) -> dict[str, Any]:
+    """BlueZ's own view of the bond, per adapter — the host's half, and only that.
+
+    Two independent parties hold a bond: this host (in BlueZ's device record) and
+    the panel (in its own list of about four devices). When they disagree the
+    symptom is "it worked yesterday and now nothing connects", and until now
+    telling them apart needed a shell on the box — which is exactly what charter
+    C6 says a download must not require.
+
+    The panel's half is *not* readable from here: BlueZ only knows what it holds.
+    What the panel thinks shows only in behaviour, so that is reported as
+    evidence beside this rather than guessed at.
+    """
+    want = (address or "").upper()
+    if not want:
+        return {"present": False, "reason": "no address on this entry"}
+    try:
+        from dbus_fast import BusType
+        from dbus_fast.aio import MessageBus
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must not raise
+        return {"present": False, "reason": f"dbus_fast unavailable: {exc}"}
+    try:
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+        try:
+            introspection = await bus.introspect("org.bluez", "/")
+            proxy = bus.get_proxy_object("org.bluez", "/", introspection)
+            manager = proxy.get_interface("org.freedesktop.DBus.ObjectManager")
+            objects = await manager.call_get_managed_objects()
+        finally:
+            bus.disconnect()
+    except Exception as exc:  # noqa: BLE001 - best effort
+        return {"present": False, "reason": str(exc)[:120]}
+
+    def flag(device: dict, name: str) -> bool | None:
+        value = device.get(name)
+        if value is None:
+            return None
+        return bool(getattr(value, "value", value))
+
+    found: dict[str, Any] = {}
+    for path, interfaces in objects.items():
+        device = interfaces.get("org.bluez.Device1")
+        if not device:
+            continue
+        advertised = device.get("Address")
+        if advertised is None:
+            continue
+        if str(getattr(advertised, "value", advertised)).upper() != want:
+            continue
+        adapter = path.rsplit("/dev_", 1)[0].rsplit("/", 1)[-1]
+        found[adapter] = {
+            "paired": flag(device, "Paired"),
+            "bonded": flag(device, "Bonded"),
+            "trusted": flag(device, "Trusted"),
+            "connected": flag(device, "Connected"),
+        }
+    if not found:
+        return {"present": False, "reason": "BlueZ holds no object for this address"}
+    return found
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: TrumaConfigEntry
 ) -> dict[str, Any]:
@@ -154,5 +215,25 @@ async def async_get_config_entry_diagnostics(
         # not discovered" is indistinguishable from "the panel is not there".
         "bluetooth_scanners": scan_mode_report(hass),
         "bluetooth_scanners_summary": describe_scan_modes(hass),
+        # The bond, split the way it actually is. The host's half is readable
+        # (BlueZ's record, per adapter); the panel's half is not readable at all,
+        # so it is reported as the evidence that stands in for it. Two holders
+        # disagreeing is the most common "it worked yesterday" cause, and telling
+        # them apart used to need a shell (charter C6).
+        "host_bond": await _host_bond(getattr(coordinator, "address", "")),
+        "panel_bond": {
+            "readable": False,
+            "note": (
+                "The panel's own half of the bond cannot be read from this host."
+                " It shows only in behaviour: a session that encrypts means it"
+                " still holds us, and a connect refused with HCI 0x0E means it"
+                " does not. Read it against host_bond above."
+            ),
+            "evidence": {
+                "last_session_ok": coordinator.last_update_success,
+                "session_transport": coordinator.session_transport,
+                "address_kind": coordinator.address_kind,
+            },
+        },
         "bus": bus_dict,
     })
