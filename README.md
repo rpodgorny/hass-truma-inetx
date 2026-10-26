@@ -55,7 +55,9 @@ screen is up — so the order matters more than the arming:
 
 A virgin pairing is usually done in seconds; a re-pair over a panel that still
 knows this Home Assistant can take over a minute. If the panel is already
-configured, use **Configure → Reconfigure** instead of adding it again. If the
+configured, open the entry's **⋮** menu and choose **Reconfigure** instead of
+adding it again. (The **Configure** button on that entry opens the poll-interval
+options — it is *not* the re-pair.) If the
 panel stores only ~4 bonds and rejects new ones when full: [pairing](docs/pairing.md).
 
 ## What you get

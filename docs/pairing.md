@@ -21,8 +21,9 @@ the first one is the counter-intuitive part:
 A virgin pairing usually completes in a few seconds. A *re-pair* over a panel
 that still holds a bond for this Home Assistant can take longer than a minute —
 that is the panel finishing a security exchange with a peer it already knows, not
-a fault. If the panel is already configured, use **Configure → Reconfigure** on
-its entry rather than adding it again.
+a fault. If the panel is already configured, open the entry's **⋮** menu and
+choose **Reconfigure** rather than adding it again; the **Configure** button on
+that entry opens the poll-interval options, not the re-pair.
 
 ## If the panel never appears at all
 
