@@ -65,6 +65,25 @@ that fails after its session launched — are pinned by
 `tests/test_entry_teardown.py` but have not been triggered on hardware, since
 reaching them means re-pairing or forcing a setup failure.
 
+## A host reboot leaves the panel answering nothing for about a minute
+
+Measured on 2026-10-26 with an iNet X panel and a Combi D 4, on a host that had
+just rebooted: Home Assistant restarted, the link to the panel came up about
+30 seconds later, and the **first two discovery rounds were answered by nobody**
+— 18 devices asked, 0 acknowledged, "the link is up but carries nothing". The
+third attempt, about 90 seconds after the link first came up, got all 18. No
+intervention was needed, and the panel had not been touched.
+
+So after a reboot expect up to ~90 seconds in which the entities are unavailable
+or stale. The integration ends each dead session itself and retries after 15 s
+and then 30 s, so **nothing has to be done** — do not power-cycle the panel, do
+not restart Bluetooth, and do not delete the entry. A repair issue needs three
+consecutive failed sessions, so an ordinary reboot does not raise one.
+
+This is a panel-side behaviour, not a pairing or bond problem: the bond is
+intact throughout, and the same panel survived a power cycle earlier with no
+re-pairing at all.
+
 ## Smaller ones
 
 - **Duplicate entries in the panel's device list.** Each pairing can leave an
