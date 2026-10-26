@@ -1015,6 +1015,26 @@ def test_the_proxy_card_ships_in_both_languages() -> None:
         assert "{proxies}" in block["description"], f"{locale}: no placeholder"
 
 
+def test_the_proxy_card_names_the_cause_before_the_cure() -> None:
+    """The other tool comes first, because closing it alone does not help.
+
+    Measured 2026-10-26: a second API client subscribed to the proxy's raw
+    advertisement stream starved Home Assistant's own (its scanner went from
+    0.1 s quiet to 182 s and climbing), and the stream did **not** come back
+    when that client detached -- 302 s of silence until the ESPHome entry was
+    reloaded. So the advice has to be "close it, then reload": a card that says
+    only "reload" would be undone the moment the other tool reconnects.
+    """
+    data = json.loads((SRC / "translations" / "en.json").read_text(encoding="utf-8"))
+    desc = data["issues"]["proxy_quiet"]["description"].lower()
+    assert "another tool" in desc, "the cause is not named"
+    assert desc.index("another tool") < desc.index("reload"), (
+        "the card must name the other tool before it says to reload"
+    )
+    for privileged in ("bluetoothd", "hciconfig", "systemctl restart"):
+        assert privileged not in desc, f"user-facing text names {privileged}"
+
+
 if __name__ == "__main__":
     test_panel_detection()
     test_debounced_warning()
@@ -1052,6 +1072,7 @@ if __name__ == "__main__":
     test_a_silent_host_adapter_is_not_a_stalled_proxy()
     test_the_proxy_card_clears_when_the_panel_answers()
     test_the_proxy_card_ships_in_both_languages()
+    test_the_proxy_card_names_the_cause_before_the_cure()
     test_a_named_panel_never_gets_the_scanner_card()
     test_the_scanner_card_ships_in_both_languages()
     test_a_deaf_host_is_named_once_nothing_is_heard()

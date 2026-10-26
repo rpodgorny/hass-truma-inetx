@@ -74,7 +74,7 @@
     },
     "proxy_quiet": {
       "title": "Ein Bluetooth-Proxy scannt nicht mehr",
-      "description": "Der Bluetooth-Proxy {proxies} liefert seit mehreren Minuten keine Werbepakete mehr. Dem Proxy selbst geht es gut — er antwortet Home Assistant weiterhin und kann sich noch mit anderen Geräten verbinden —, aber nichts, was er hört, erreicht Home Assistant noch. Deshalb aktualisiert sich das Bedienteil nicht mehr und eine Kopplung kann gar nicht erst beginnen. Lade den ESPHome-Eintrag dieses Proxys neu: Einstellungen → Geräte & Dienste → ESPHome → der Eintrag {proxies} → ⋮ → Neu laden. Das ist ein anderer Fehler, als wenn dieser Host Bluetooth insgesamt nicht mehr hört — dort hilft ein Neuladen der Bluetooth-Integration."
+      "description": "Der Bluetooth-Proxy {proxies} liefert seit mehreren Minuten keine Werbepakete mehr. Dem Proxy selbst geht es gut — er antwortet Home Assistant weiterhin und kann sich noch mit anderen Geräten verbinden —, aber nichts, was er hört, erreicht Home Assistant noch. Deshalb aktualisiert sich das Bedienteil nicht mehr und eine Kopplung kann gar nicht erst beginnen. Die übliche Ursache ist ein anderes Werkzeug, das an der ESPHome-API dieses Proxys hängt — das ESPHome-Dashboard, ein zweites Home Assistant oder ein Diagnoseskript: solange es den Werbepaket-Strom hält, bekommt Home Assistant keinen mehr, und an diesem Fahrzeug gemessen kommt er auch nicht zurück, wenn das Werkzeug verschwindet. Schließe so etwas und lade dann den ESPHome-Eintrag des Proxys neu: Einstellungen → Geräte & Dienste → ESPHome → der Eintrag {proxies} → ⋮ → Neu laden. Das ist ein anderer Fehler, als wenn dieser Host Bluetooth insgesamt nicht mehr hört — dort hilft ein Neuladen der Bluetooth-Integration."
     }
   },
   "entity": {
