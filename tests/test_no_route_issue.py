@@ -29,6 +29,7 @@ import importlib.util
 import json
 import sys
 import time
+import time as _clock
 import types
 from pathlib import Path
 from typing import TypedDict
@@ -49,19 +50,24 @@ def _mod(name: str, **attrs):
 
 
 class _Info:
-    """Stand-in for a BluetoothServiceInfoBleak advert."""
+    """Stand-in for a BluetoothServiceInfoBleak advert.
+
+    ``time`` defaults to *now*: in this harness an advert in the store means
+    "the panel is on air", which is only true while it is fresh. A test that
+    wants the stale-cache case passes an old timestamp explicitly.
+    """
 
     def __init__(
         self,
         name: str = "",
         uuids: tuple[str, ...] = (),
         address: str = "62:4A:BD:AD:73:5D",
-        time: float = 0.0,
+        time: float | None = None,
     ) -> None:
         self.name = name
         self.service_uuids = list(uuids)
         self.address = address
-        self.time = time
+        self.time = _clock.monotonic() if time is None else time
         self.rssi = -70
         self.connectable = False
 
@@ -291,13 +297,13 @@ def test_panel_detection() -> None:
     _set_adverts()
     assert BT.async_panel_advertising(None, PANEL) is False
 
-    _set_adverts(_Info(name=PANEL))
+    _set_adverts(_Info(name=PANEL, time=time.monotonic()))
     assert BT.async_panel_advertising(None, PANEL) is True
 
     # Pairing/add-device adverts carry no local name -- the service UUID alone
     # must still identify the panel, or we would tell a pairing user their
     # panel is switched off.
-    _set_adverts(_Info(uuids=(SERVICE_UUID,)))
+    _set_adverts(_Info(uuids=(SERVICE_UUID,), time=time.monotonic()))
     assert BT.async_panel_advertising(None, PANEL) is True
 
     # Somebody else's device must not look like our panel.
@@ -311,7 +317,7 @@ def test_debounced_warning() -> None:
     key = f"{CONST.DOMAIN}.{CONST.ISSUE_NO_ROUTE}"
 
     IR.__init__()
-    _set_adverts(_Info(name=PANEL))
+    _set_adverts(_Info(name=PANEL, time=time.monotonic()))  # heard *now*, not cached
     c = _Coord()
 
     for _ in range(threshold - 1):
@@ -347,7 +353,7 @@ def test_silent_when_panel_unheard() -> None:
 
 def test_success_clears() -> None:
     IR.__init__()
-    _set_adverts(_Info(name=PANEL))
+    _set_adverts(_Info(name=PANEL, time=time.monotonic()))
     c = _Coord()
     for _ in range(CONST.NO_ROUTE_MISSES_BEFORE_WARNING):
         c._async_note_no_route()
@@ -856,7 +862,7 @@ def test_a_named_panel_never_gets_the_scanner_card() -> None:
     """If the name is arriving, the scanning mode is not the problem."""
     IR.__init__()
     MODES[:] = [_Scanner("hci0", "passive")]
-    _set_adverts(_Info(name=PANEL))
+    _set_adverts(_Info(name=PANEL, time=time.monotonic()))
     coord = _Coord()
     for _ in range(CONST.NO_ROUTE_MISSES_BEFORE_WARNING):
         coord._async_note_no_route()

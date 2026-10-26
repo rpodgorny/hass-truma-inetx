@@ -477,15 +477,20 @@ def async_panel_heard_unnamed(hass: HomeAssistant, name: str) -> bool:
 
 
 def async_panel_advertising(hass: HomeAssistant, name: str) -> bool:
-    """Return True when the panel is being heard at all, by any scanner.
+    """Return True when the panel is being heard **now**, by any scanner.
 
     Separates the two reasons :func:`async_resolve_device` returns ``None``:
     we hear the panel but nothing connectable can reach it, versus we hear
     nothing at all (panel off, out of range, or asleep). They are
     indistinguishable to the resolver and need opposite advice, so only the
     first should ever tell a user to go buy hardware.
+
+    "Heard at all" means heard **recently** — see :func:`async_panel_heard_recently`.
+    Home Assistant keeps an advert in its store for hours, so a host that has
+    stopped hearing the panel still holds the last one; on 2026-10-26 that made
+    this answer "yes" through a stalled proxy and mis-routed two cards.
     """
-    return bool(_panel_infos(hass, name))
+    return async_panel_heard_recently(hass, name)
 
 
 # The panel puts two kinds of address on air. The identity address never
