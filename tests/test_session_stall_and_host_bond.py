@@ -216,6 +216,11 @@ def test_the_new_card_has_text_in_both_locales() -> None:
         card = data["issues"].get("host_bond_missing")
         assert card, f"{rel} is missing the host_bond_missing card"
         assert card["title"] and len(card["description"]) > 200, rel
+        # Measured 2026-10-27 (S5): a bond on a *disabled* adapter is invisible
+        # over D-Bus, so the card must not claim there is none at all.
+        assert "adapter" in card["description"].lower(), (
+            f"{rel} must mention multiple adapters — see the matrix 2d"
+        )
 
 
 def main() -> int:
