@@ -87,6 +87,7 @@ class _Coord:
 
     def __init__(self) -> None:
         self._refused_sessions = 0
+        self._host_bond_raised = False
 
     _note_session_refused = COORD.TrumaCoordinator._note_session_refused
     _async_clear_refused = COORD.TrumaCoordinator._async_clear_refused
@@ -148,35 +149,51 @@ def test_s2_panel_forgot_us_raises_panel_refusing() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_s3_host_forgot_panel_still_accuses_the_panel() -> None:
-    """G1: the host has no bond, yet the card says the *panel* forgot us.
+def test_s3_host_forgot_panel_now_names_the_host() -> None:
+    """G1 — **CLOSED in 0.9.0b48** for the absence case.
 
-    The physical steps on the card (clear the panel's list, then re-pair) do
-    reach a working pair from here — measured in §4q — so this is a wrong
-    sentence, not a wrong cure. It is still a wrong sentence: a user whose Home
-    Assistant was reinstalled is told their panel forgot them.
+    Stage 1 of this test asserted the gap: the host has no bond and the card
+    said the *panel* had forgotten us. b48 added `host_bond_missing`, driven by
+    `async_host_bond_state`'s absence-only answer, and the session loop now goes
+    through the async note so that question is actually asked.
+
+    What is still open is the *other* side of the same seam: a record BlueZ calls
+    paired while it cannot encrypt (S8's IRK-less shape reports `Paired: yes`)
+    still lands on `panel_refusing`. See the matrix §2c.
+    """
+    IR.__init__()
+    _advertising(True)
+    c = _Coord()
+    # The host-side answer, when it is available, chooses the card…
+    c._note_session_refused(host_bond=False)
+    assert _only_card() == CONST.ISSUE_HOST_BOND_MISSING
+    # …and the session loop is wired to ask for it rather than to guess.
+    src = (SRC / "coordinator.py").read_text()
+    assert "await self._async_note_session_refused()" in src
+    assert "async_host_bond_state(self.unique_id, self.address)" in src
+
+
+def test_s4_signature_only_is_indistinguishable_inside_home_assistant() -> None:
+    """G3: a record BlueZ calls paired while it cannot encrypt.
+
+    ⚠️ **Corrected 2026-10-26 by staging it on the van.** The state this test
+    was written for — "Paired, but no LTK" — does not exist: dropping both LTK
+    sections leaves BlueZ reporting **`Paired: no`**, because `Paired` is derived
+    from the key material. So the absence *is* visible to the host, which is why
+    the 0.9.0b48 `host_bond_missing` card caught exactly that state on the
+    hardware (status file §4ag).
+
+    What survives is the narrower reading asserted here: `_is_paired` consults
+    `Device1.Paired` and nothing else, so any record BlueZ *does* call paired is
+    taken at its word. No such state has been produced, and completeness cannot
+    be checked over D-Bus (only by reading `/var/lib/bluetooth` as root).
     """
     IR.__init__()
     _advertising(True)
     c = _Coord()
     _refuse(c, CONST.REFUSED_SESSIONS_BEFORE_ISSUE)
-    assert _only_card() == CONST.ISSUE_PANEL_REFUSING
-    # The evidence that would separate S3 from S2 already exists in the tree…
-    pairing_src = (SRC / "pairing.py").read_text()
-    assert "async def async_host_bond_state" in pairing_src
-    # …and the session path never asks it. When this assertion starts failing,
-    # G1 has been closed and this test and the matrix must be updated together.
-    assert not HOST_SIDE_BOND_ISSUES & set(IR.active), (
-        "a host-side bond card exists now — close G1 in the matrix and here"
-    )
-
-
-def test_s4_signature_only_is_indistinguishable_inside_home_assistant() -> None:
-    """G3: Paired is true for a signature-only record, so S4 looks like S2."""
-    IR.__init__()
-    _advertising(True)
-    c = _Coord()
-    _refuse(c, CONST.REFUSED_SESSIONS_BEFORE_ISSUE)
+    # With no host-side knowledge the refusal card is still what fires; b48 only
+    # overrides it on a positive absence.
     assert _only_card() == CONST.ISSUE_PANEL_REFUSING
     # The blind spot is in the reading, not in the card: _is_paired consults
     # Device1.Paired and nothing else, which is exactly why the completeness
@@ -210,7 +227,18 @@ def test_s5_bond_on_another_adapter_gets_s2s_cure() -> None:
 
 
 def test_s8_untrusted_or_irklss_record_also_gets_s2s_cure() -> None:
-    """G1/G2 again, one record-shape further out (Trusted=false / no IRK)."""
+    """**Still open after b48** — and deliberately pinned as the remaining gap.
+
+    Measured on the van 2026-10-26 by dropping the record's IRK: BlueZ reports
+    `Paired: yes` (the LTK is still there), so `host_bond_missing` cannot fire and
+    this state reaches `panel_refusing` — whose sentence blames the panel. The
+    cure it prescribes does repair it, because a re-pair writes a fresh IRK, so
+    this is a wrong sentence and not a wrong cure.
+
+    Closing it needs the record's *contents*, which D-Bus does not expose: the
+    only reader is the root-side file read the soak instrument already does. If
+    that ever changes, this test fails and the matrix must change with it.
+    """
     IR.__init__()
     _advertising(True)
     c = _Coord()
