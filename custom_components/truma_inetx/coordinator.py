@@ -28,6 +28,7 @@ from .bt import (
     ADDR_IDENTITY,
     address_kind,
     async_panel_advertising,
+    async_panel_heard_recently,
     async_panel_heard_unnamed,
     async_watch_adverts,
     async_resolve_device,
@@ -347,8 +348,21 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         Careful about the panel being *heard*: a panel that is off, asleep or out
         of range produces the same timeout, and telling that user to fix a bond
         would be wrong. So silence resets the count instead of adding to it.
+
+        And "heard" means **heard now**, not "in the cache" — measured on the van
+        2026-10-26: with the ESP proxy's advertisement stream stalled and no
+        other scanner listening, three connect timeouts raised this card saying
+        "every connection is refused" while bluetoothd logged *zero* refusals.
+        The panel was merely unreachable through a broken transport, and the
+        remedy on the card — clear the panel's list, then re-pair — would have
+        destroyed a working bond over a proxy fault. Two host-side conditions
+        therefore disqualify a timeout from being a refusal: nothing recent was
+        heard (a stale cache entry is not an advert), or a proxy scanner is
+        quiet, which is ``proxy_quiet``'s fault to report, not the panel's.
         """
-        if not async_panel_advertising(self.hass, self.unique_id):
+        if quiet_proxy_scanners(self.hass) or not async_panel_heard_recently(
+            self.hass, self.unique_id
+        ):
             self._refused_sessions = 0
             return
         self._refused_sessions += 1

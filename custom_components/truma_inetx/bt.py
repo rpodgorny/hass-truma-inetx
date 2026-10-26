@@ -404,6 +404,27 @@ def _panel_infos(hass: HomeAssistant, name: str) -> list:
     ]
 
 
+def async_panel_heard_recently(
+    hass: HomeAssistant, name: str, max_age: float | None = None
+) -> bool:
+    """Return True only when the panel's freshest advert is *recent*.
+
+    ``async_panel_advertising`` answers "is there an advert in the store", which
+    is not the same question: Home Assistant keeps an entry for hours, and a host
+    that has stopped hearing the panel altogether still holds the last one. That
+    distinction was measured on the van on 2026-10-26 — with the ESP proxy's
+    advertisement stream stalled and no other scanner listening, three connect
+    timeouts were counted as refusals and told the user to clear the panel's
+    device list, while bluetoothd logged **zero** refusals. A stale entry must
+    therefore not be able to accuse the panel.
+    """
+    infos = _panel_infos(hass, name)
+    newest = max((info.time for info in infos), default=None)
+    if newest is None:
+        return False
+    return (time.monotonic() - newest) <= (STALE_ADVERT_SECONDS if max_age is None else max_age)
+
+
 def async_watch_adverts(hass: HomeAssistant, on_advert) -> Callable[[], None] | None:
     """Call ``on_advert`` for every advertisement this host hears, whatever it is.
 

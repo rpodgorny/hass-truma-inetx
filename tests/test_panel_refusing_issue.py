@@ -38,6 +38,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -68,8 +69,47 @@ class _Coord:
     _async_clear_refused = COORD.TrumaCoordinator._async_clear_refused
 
 
-def _advertising(panel_is_there: bool) -> None:
-    ADVERTS[:] = [Info(name=PANEL)] if panel_is_there else []
+def _advertising(panel_is_there: bool, age: float = 0.0) -> None:
+    """Seed the advert store. ``age`` is how old the entry is, in seconds.
+
+    Age matters: Home Assistant keeps an advert for hours, so "there is an
+    entry" and "the panel is on air" are different claims.
+    """
+    ADVERTS[:] = [Info(name=PANEL, time=time.monotonic() - age)] if panel_is_there else []
+
+
+def test_a_stale_cache_entry_is_not_a_refusal() -> None:
+    """Measured on the van 2026-10-26, and it sent the user to destroy a bond.
+
+    With the ESP proxy's advertisement stream stalled and no other scanner
+    listening, every connect timed out. ``async_panel_advertising`` answered
+    "yes" because the store still held the panel's last advert, three timeouts
+    were counted as refusals, and the card told the user to clear the panel's
+    device list. bluetoothd logged **zero** refusals in that window.
+    """
+    IR.__init__()
+    _advertising(True, age=3600.0)  # in the cache, an hour old, nothing listening
+    c = _Coord()
+    for _ in range(CONST.REFUSED_SESSIONS_BEFORE_ISSUE * 3):
+        c._note_session_refused()
+    assert IR.creates == 0, "a stale advert must not accuse the panel"
+    assert c._refused_sessions == 0, "and it must not count toward a later card"
+
+
+def test_a_quiet_proxy_outranks_a_refusal() -> None:
+    """A stalled proxy is ``proxy_quiet``'s business, not the panel's."""
+    IR.__init__()
+    _advertising(True)  # fresh advert, so freshness alone would allow the card
+    original = COORD.quiet_proxy_scanners
+    COORD.quiet_proxy_scanners = lambda hass, *a, **k: ["esp32-bluetooth-proxy-622700"]
+    try:
+        c = _Coord()
+        for _ in range(CONST.REFUSED_SESSIONS_BEFORE_ISSUE * 2):
+            c._note_session_refused()
+        assert IR.creates == 0, "the panel was not refusing; its transport was"
+        assert c._refused_sessions == 0
+    finally:
+        COORD.quiet_proxy_scanners = original
 
 
 def test_a_quiet_panel_is_not_a_refusal() -> None:
