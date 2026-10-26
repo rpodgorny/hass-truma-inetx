@@ -39,6 +39,7 @@ from .const import (
     DOMAIN,
     ISSUE_NO_PROXY_ROUTE_LEGACY,
     ISSUE_NO_ROUTE,
+    ISSUE_HOST_BOND_MISSING,
     ISSUE_PANEL_REFUSING,
     REFUSED_SESSIONS_BEFORE_ISSUE,
     ISSUE_PANEL_SILENT,
@@ -245,6 +246,10 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         self._unsub_adverts = None
         self._refused_sessions = 0
         self._silent_sessions = 0
+        # The host-side bond card fires once and stays until a session carries
+        # data again: re-raising it on every failing session would rewrite the
+        # issue every ~90 s for as long as the user takes to read it.
+        self._host_bond_raised = False
         self._store: Store = Store(hass, _STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}")
         # Everything the store holds: the app identity plus our own
         # bookkeeping. Kept whole so a save never drops a key it did not know.
@@ -333,7 +338,29 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             ),
         )
 
-    def _note_session_refused(self) -> None:
+    async def _async_note_session_refused(self) -> None:
+        """Ask which side holds the bond, then let the note decide.
+
+        The D-Bus question is bounded: a repair card must never be the reason a
+        session loop stalls, and an unanswered question is ``None``, which keeps
+        the refusal card (unknown is not absent).
+
+        ``pairing`` is imported here rather than at module scope because it pulls
+        in ``dbus_fast``, and this module is loaded by the test stage that
+        deliberately runs with *no* third-party library installed (see the
+        ``needs_library`` list in ``.github/workflows/validate.yml``). Asked only
+        on the failure path, so the deferred import costs nothing.
+        """
+        from .pairing import async_host_bond_state
+
+        try:
+            async with asyncio.timeout(10):
+                host_bond = await async_host_bond_state(self.unique_id, self.address)
+        except Exception:  # noqa: BLE001 - a hint is optional; never fail here
+            host_bond = None
+        self._note_session_refused(host_bond=host_bond)
+
+    def _note_session_refused(self, host_bond: bool | None = None) -> None:
         """Count a session the panel refused while it was plainly on air.
 
         Measured on the van 2026-10-25, and reproduced on demand by clearing the
@@ -359,7 +386,39 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         therefore disqualify a timeout from being a refusal: nothing recent was
         heard (a stale cache entry is not an advert), or a proxy scanner is
         quiet, which is ``proxy_quiet``'s fault to report, not the panel's.
+
+        ``host_bond`` is the *other* disqualifier, and the decisive one when it
+        is available: ``Device1.Paired == False`` means this host holds no bond
+        for the panel, so the missing key material is on **this** side and the
+        refusal card's "the panel has forgotten us" is simply untrue. Measured on
+        the van 2026-10-26 by forging both host-side record states: a
+        signature-only record and a record with its IRK removed each produced
+        HCI 0x0E refusals at the panel while the host was the damaged party.
+        ``True`` is deliberately not enough to change the message (a
+        signature-only record reports it), and ``None`` — bus unavailable, panel
+        not in BlueZ's object list — keeps the refusal card: unknown is not
+        absent.
         """
+        if host_bond is False:
+            self._refused_sessions = 0
+            if self._host_bond_raised:
+                return
+            self._host_bond_raised = True
+            LOGGER.warning(
+                "Truma %s: this Home Assistant holds no bond for the panel, so "
+                "nothing can be encrypted. The panel is not at fault; pair this "
+                "host again (panel: clear its device list, then add-device mode)",
+                self.unique_id,
+            )
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                ISSUE_HOST_BOND_MISSING,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_HOST_BOND_MISSING,
+            )
+            return
         if quiet_proxy_scanners(self.hass) or not async_panel_heard_recently(
             self.hass, self.unique_id
         ):
@@ -386,7 +445,11 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
     def _async_clear_refused(self) -> None:
         """A session carried data: the panel is not refusing us."""
         self._refused_sessions = 0
+        self._host_bond_raised = False
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_PANEL_REFUSING)
+        # ...and the host-side card is cleared the same way: a session that
+        # carries data proves a usable bond exists, whoever was wrong before.
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_HOST_BOND_MISSING)
 
     def _note_session_silent(self) -> None:
         """Count a session whose link carried nothing, and complain once.
@@ -713,7 +776,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             except Exception as exc:  # noqa: BLE001
                 LOGGER.debug("Truma session ended: %s", exc)
                 self._note_attempt_failed()
-                self._note_session_refused()
+                await self._async_note_session_refused()
             finally:
                 # Always tear the client down before the next attempt so a
                 # half-open link never lingers holding a connection slot (the

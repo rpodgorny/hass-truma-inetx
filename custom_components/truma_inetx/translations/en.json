@@ -75,6 +75,10 @@
     "proxy_quiet": {
       "title": "A Bluetooth proxy has stopped scanning",
       "description": "The Bluetooth proxy {proxies} has delivered no advertisements for several minutes. The proxy itself is fine — it still answers Home Assistant and it can still connect to other devices — but nothing it hears is reaching Home Assistant any more, so the panel stops updating and a pairing cannot even start. The usual cause is another tool attached to that proxy's ESPHome API — the ESPHome dashboard, a second Home Assistant, or a debugging script: while it holds the advertisement stream, Home Assistant's own is starved, and measured on this van it does not resume when that tool goes away. Close anything like that, then reload the proxy's ESPHome entry: Settings → Devices & Services → ESPHome → the {proxies} entry → ⋮ → Reload. This is a different fault from this host losing Bluetooth altogether, where reloading the Bluetooth integration is what helps."
+    },
+    "host_bond_missing": {
+      "title": "Home Assistant has lost its bond to the Truma panel",
+      "description": "Home Assistant holds **no Bluetooth bond** for the panel, so it cannot encrypt anything it sends: the link comes up and every message is refused. The panel itself is almost certainly fine — this Home Assistant is the side that lost its half of the pairing.\n\nThat happens after Home Assistant is reinstalled or restored from a backup, after its Bluetooth data is wiped, or when the adapter that held the bond is replaced.\n\nTo fix it:\n\n1. On the panel, remove this Home Assistant from its Bluetooth device list — or clear the list (it holds only about four devices).\n2. Put the panel into add-device mode.\n3. Open the entry's **⋮** menu and choose **Reconfigure**. Tick **Forget this host's existing bond and retry**, then submit once. A fresh pairing on this panel takes a few seconds once it is in add-device mode.\n\nThis card clears itself as soon as a session carries data again."
     }
   },
   "entity": {

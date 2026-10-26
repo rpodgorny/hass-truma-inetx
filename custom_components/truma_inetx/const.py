@@ -86,6 +86,16 @@ HOST_DEAF_MISSES_BEFORE_ISSUE = 3
 # proxy's **ESPHome** config entry, which is not the advice the host-wide card
 # gives, so the two faults need two cards.
 ISSUE_PROXY_QUIET = "proxy_quiet"
+# This Home Assistant holds no usable bond for the panel -- the *host* is the
+# side that is missing key material, not the panel. Measured on the van
+# 2026-10-26 by forging the two host-side states (`--signature-only`, `--drop-irk`):
+# both produce HCI 0x0E refusals at the panel and, until this card, the only one
+# that spoke said "the panel has most likely forgotten this Home Assistant" and
+# sent the user to clear the panel's device list for a defect on this side.
+# Raised only on positive absence (`Device1.Paired == False`); True is never
+# treated as proof of a complete record, and None (no bus, panel not in BlueZ's
+# object list) keeps the refusal card, because an unknown is not an absence.
+ISSUE_HOST_BOND_MISSING = "host_bond_missing"
 # Shorter than the host-wide figure because this one is a per-scanner signal:
 # a registered proxy that has delivered nothing for this long has stalled,
 # while other scanners can still be hearing the world perfectly well.

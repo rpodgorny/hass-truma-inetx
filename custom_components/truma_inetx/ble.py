@@ -46,6 +46,18 @@ from .truma.protocol import parse_v3_frame
 _LOGGER = logging.getLogger(__name__)
 
 
+class SessionStalled(Exception):
+    """A link came up but the session never became usable.
+
+    Raised instead of waiting forever: the connection succeeded, so nothing
+    looked wrong, and ``_start_notifications`` then never returned. Measured on
+    the van 2026-10-26 (see ``connect``), it sat that way for 5 min 52 s with no
+    log line and no counted failure. The coordinator treats any exception from
+    the session as one failed attempt, which is what makes the repair cards
+    reachable again from this state.
+    """
+
+
 # BlueZ refuses a connect while one is already in flight for the same device --
 # its own background reconnect of a bonded device, or a leftover of ours. That
 # attempt usually finishes within seconds and leaves a link we can simply attach
@@ -83,6 +95,12 @@ def client_is_proxy(client: object) -> bool:
 # establish_connection does the retrying now. Three attempts is plenty when a
 # connect takes ~4 s; it used to take 40+ s and needed a hand-rolled loop.
 _CONNECT_ATTEMPTS = 3
+
+# How long the whole connect+subscribe may take before the attempt is declared
+# stalled. A healthy one on this van is 4-11 s and the slowest failing one about
+# 60 s (three dials against a refusing panel), so this only ever catches a link
+# that came up and then stopped making progress.
+_ESTABLISH_BUDGET = 90.0
 
 _READY_TIMEOUT = 3.0
 _ACK_TIMEOUT = 3.0
@@ -248,15 +266,39 @@ class TrumaBleClient:
         nothing left to work around. See DUCATO_STATE.md, 2026-08-20.
         """
         self._loop = asyncio.get_running_loop()
-        self._client = await establish_connection(
-            BleakClientWithServiceCache,
-            ble_device,
-            ble_device.name or ble_device.address,
-            disconnected_callback=disconnected_callback,
-            max_attempts=_CONNECT_ATTEMPTS,
-            use_services_cache=True,
-        )
-        await self._subscribe()
+        # Bound the whole establishment, because the *silence* is the failure
+        # mode this project keeps meeting in a new shape. Measured 2026-10-26
+        # with the panel holding keys this host could not use (a forged
+        # signature-only record, then a record with no IRK): `establish_connection`
+        # came back, `_start_notifications` never did, and the session sat for
+        # **5 min 52 s** with no log line, no ACL to the panel and -- because
+        # nothing raised -- no counted failure, so no repair card either. The
+        # user saw 14 unavailable entities and an empty Repairs page.
+        #
+        # Budget: a healthy connect+subscribe on this van is 4-11 s, and the
+        # slowest *failing* round (three dials against a refusing panel) is
+        # ~60 s. 90 s therefore lets every honest case finish and turns only a
+        # genuine stall into an exception the coordinator can count.
+        try:
+            async with asyncio.timeout(_ESTABLISH_BUDGET):
+                self._client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    ble_device,
+                    ble_device.name or ble_device.address,
+                    disconnected_callback=disconnected_callback,
+                    max_attempts=_CONNECT_ATTEMPTS,
+                    use_services_cache=True,
+                )
+                await self._subscribe()
+        except TimeoutError as exc:
+            _LOGGER.warning(
+                "Truma session: no usable link after %ss (link up but not "
+                "carrying anything) -- treating it as a failed attempt",
+                int(_ESTABLISH_BUDGET),
+            )
+            raise SessionStalled(
+                f"session did not establish within {int(_ESTABLISH_BUDGET)}s"
+            ) from exc
         self._transport_invalidated = False
 
     async def adopt(self, client: BleakClientWithServiceCache) -> None:
