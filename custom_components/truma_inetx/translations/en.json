@@ -71,6 +71,10 @@
     "host_deaf": {
       "title": "Home Assistant has stopped hearing Bluetooth",
       "description": "No Bluetooth device has been heard on this host for about {minutes} minutes — not the Truma panel, not anything else. That is what makes this a fault in the machine running Home Assistant rather than in the panel: a panel that is switched off, asleep or out of range goes quiet on its own, but everything else keeps arriving.\n\n**1. Reload the Bluetooth integration.** Settings → Devices & Services → Bluetooth → **⋮** → *Reload*. It costs a few seconds and touches no pairing.\n\n**2. If the adapter is a USB dongle, unplug it and plug it back in** — a controller that has stopped answering is usually reset by its own power cycle.\n\n**If neither helps, this is outside this integration.** It registers a listener for advertisements and asks Home Assistant to connect; it never starts or stops scanning, never resets an adapter and never restarts Bluetooth. A radio that has stopped answering after a controller refusal (the kernel records `Opcode 0x2013 failed`, which the host log keeps) needs the host itself — that is where to look, and this card will clear by itself once anything is heard again."
+    },
+    "proxy_quiet": {
+      "title": "A Bluetooth proxy has stopped scanning",
+      "description": "The Bluetooth proxy {proxies} has delivered no advertisements for several minutes. The proxy itself is fine — it still answers Home Assistant and it can still connect to other devices — but nothing it hears is reaching Home Assistant any more, so the panel stops updating and a pairing cannot even start. Reload that proxy's ESPHome entry: Settings → Devices & Services → ESPHome → the {proxies} entry → ⋮ → Reload. This is a different fault from this host losing Bluetooth altogether, where reloading the Bluetooth integration is what helps."
     }
   },
   "entity": {

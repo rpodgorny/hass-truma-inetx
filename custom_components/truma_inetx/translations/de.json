@@ -71,6 +71,10 @@
     "host_deaf": {
       "title": "Home Assistant hört kein Bluetooth mehr",
       "description": "Seit etwa {minutes} Minuten wurde auf diesem Host kein Bluetooth-Gerät mehr gehört — weder das Truma-Bedienteil noch irgendetwas anderes. Genau das macht daraus einen Fehler in der Maschine, auf der Home Assistant läuft, und nicht im Bedienteil: ein ausgeschaltetes, schlafendes oder außer Reichweite befindliches Bedienteil wird von selbst still, aber alles andere kommt weiterhin an.\n\n**1. Bluetooth-Integration neu laden.** Einstellungen → Geräte & Dienste → Bluetooth → **⋮** → *Neu laden*. Das dauert wenige Sekunden und berührt keine Kopplung.\n\n**2. Falls der Adapter ein USB-Dongle ist, ziehe ihn ab und stecke ihn wieder an** — ein Controller, der nicht mehr antwortet, wird meist durch seinen eigenen Neustart zurückgesetzt.\n\n**Hilft beides nicht, liegt es außerhalb dieser Integration.** Sie registriert einen Zuhörer für Werbepakete und bittet Home Assistant um die Verbindung; sie startet oder stoppt nie das Scannen, setzt keinen Adapter zurück und startet Bluetooth nicht neu. Ein Funkteil, das nach einer Ablehnung des Controllers nicht mehr antwortet (der Kernel protokolliert `Opcode 0x2013 failed`, das Host-Protokoll behält es), braucht den Host selbst — dort ist nachzusehen, und diese Meldung verschwindet von selbst, sobald wieder etwas gehört wird."
+    },
+    "proxy_quiet": {
+      "title": "Ein Bluetooth-Proxy scannt nicht mehr",
+      "description": "Der Bluetooth-Proxy {proxies} liefert seit mehreren Minuten keine Werbepakete mehr. Dem Proxy selbst geht es gut — er antwortet Home Assistant weiterhin und kann sich noch mit anderen Geräten verbinden —, aber nichts, was er hört, erreicht Home Assistant noch. Deshalb aktualisiert sich das Bedienteil nicht mehr und eine Kopplung kann gar nicht erst beginnen. Lade den ESPHome-Eintrag dieses Proxys neu: Einstellungen → Geräte & Dienste → ESPHome → der Eintrag {proxies} → ⋮ → Neu laden. Das ist ein anderer Fehler, als wenn dieser Host Bluetooth insgesamt nicht mehr hört — dort hilft ein Neuladen der Bluetooth-Integration."
     }
   },
   "entity": {

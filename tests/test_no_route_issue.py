@@ -111,6 +111,39 @@ class _Mode:
         self.name = name
 
 
+class _StalledProxy(_RemoteScanner):
+    """A proxy scanner whose own silence clock is what gives it away.
+
+    The measured fault (2026-10-26): the ESP32 proxy kept answering its API and
+    carrying other integrations' links while Home Assistant received nothing
+    from it. ``time_since_last_detection`` is the only signal that names it,
+    because the device cache still holds yesterday's entries.
+    """
+
+    def __init__(self, name: str = "esp32-bluetooth-proxy-622700", quiet: float = 900.0) -> None:
+        self.name = name
+        self.source = name
+        self.connectable = True
+        self.requested_mode = _Mode("auto")
+        self.current_mode = _Mode("passive")
+        self._quiet = quiet
+
+    def time_since_last_detection(self) -> float:
+        return self._quiet
+
+
+class _LocalScannerWithClock(_LocalScanner):
+    """A host adapter, equally silent -- but not a proxy, so not this card."""
+
+    def __init__(self, name: str = "hci0", quiet: float = 900.0) -> None:
+        self.name = name
+        self.source = name
+        self._quiet = quiet
+
+    def time_since_last_detection(self) -> float:
+        return self._quiet
+
+
 class _Scanner:
     """A HaScanner, reduced to the two mode attributes that decide the advice."""
 
@@ -241,6 +274,7 @@ class _Coord:
         self._no_route_misses = 0
         self._last_any_advert: float | None = None
         self._host_deaf_misses = 0
+        self._proxy_quiet_misses = 0
 
     _async_note_no_route = COORD.TrumaCoordinator._async_note_no_route
     _async_clear_no_route = COORD.TrumaCoordinator._async_clear_no_route
@@ -895,6 +929,92 @@ def test_the_watcher_stamps_the_clock_and_the_card_clears() -> None:
     assert not WATCHERS
 
 
+def test_a_stalled_proxy_gets_its_own_card() -> None:
+    """A proxy that delivers nothing is not a host that hears nothing.
+
+    Measured on the van 2026-10-26, twice in one afternoon: the ESP32 proxy kept
+    answering its own API and kept carrying the Renogy links, while Home
+    Assistant received no advertisements from it at all -- "Bluetooth scanner
+    has gone quiet for 1331.8s". Reloading the *Bluetooth* integration did not
+    bring it back; reloading the proxy's **ESPHome** entry did, in seconds. Two
+    faults, two cures, so two cards.
+    """
+    IR.__init__()
+    MODES[:] = [_StalledProxy()]
+    _set_adverts()  # the panel is not heard either
+    coord = _Coord()
+    # Other devices are still arriving: this is NOT a deaf host.
+    coord._last_any_advert = time.monotonic() - 2.0
+    for _ in range(CONST.PROXY_QUIET_MISSES_BEFORE_ISSUE):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_PROXY_QUIET}" in IR.active, IR.active
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_HOST_DEAF}" not in IR.active, IR.active
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_NO_ROUTE}" not in IR.active, IR.active
+    card = IR.active[f"{CONST.DOMAIN}.{CONST.ISSUE_PROXY_QUIET}"]
+    assert "esp32-bluetooth-proxy-622700" in card["translation_placeholders"]["proxies"]
+
+
+def test_a_proxy_that_is_still_delivering_is_not_blamed() -> None:
+    """A working proxy stays quiet: the clock, not the mere existence, decides."""
+    IR.__init__()
+    MODES[:] = [_StalledProxy(quiet=5.0)]
+    _set_adverts()
+    coord = _Coord()
+    coord._last_any_advert = time.monotonic() - 2.0
+    for _ in range(CONST.PROXY_QUIET_MISSES_BEFORE_ISSUE * 3):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_PROXY_QUIET}" not in IR.active, IR.active
+    assert coord._proxy_quiet_misses == 0
+
+
+def test_one_silent_sample_does_not_raise_the_proxy_card() -> None:
+    """It has to agree over more than one connect round."""
+    IR.__init__()
+    MODES[:] = [_StalledProxy()]
+    _set_adverts()
+    coord = _Coord()
+    coord._last_any_advert = time.monotonic() - 2.0
+    coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_PROXY_QUIET}" not in IR.active, IR.active
+
+
+def test_a_silent_host_adapter_is_not_a_stalled_proxy() -> None:
+    """``BaseHaRemoteScanner`` is the discriminator, not a name or a clock."""
+    IR.__init__()
+    MODES[:] = [_LocalScannerWithClock()]
+    _set_adverts()
+    coord = _Coord()
+    coord._last_any_advert = time.monotonic() - 2.0
+    for _ in range(CONST.PROXY_QUIET_MISSES_BEFORE_ISSUE * 3):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_PROXY_QUIET}" not in IR.active, IR.active
+
+
+def test_the_proxy_card_clears_when_the_panel_answers() -> None:
+    """A successful resolve drops every card this path raised."""
+    IR.__init__()
+    MODES[:] = [_StalledProxy()]
+    _set_adverts()
+    coord = _Coord()
+    coord._last_any_advert = time.monotonic() - 2.0
+    for _ in range(CONST.PROXY_QUIET_MISSES_BEFORE_ISSUE):
+        coord._async_note_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_PROXY_QUIET}" in IR.active, IR.active
+    coord._async_clear_no_route()
+    assert f"{CONST.DOMAIN}.{CONST.ISSUE_PROXY_QUIET}" not in IR.active, IR.active
+    assert coord._proxy_quiet_misses == 0
+
+
+def test_the_proxy_card_ships_in_both_languages() -> None:
+    """Repair cards are product text: every locale needs the block."""
+    for locale in ("en", "de"):
+        path = SRC / "translations" / f"{locale}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        block = data["issues"]["proxy_quiet"]
+        assert block["title"], f"{locale}: empty title"
+        assert "{proxies}" in block["description"], f"{locale}: no placeholder"
+
+
 if __name__ == "__main__":
     test_panel_detection()
     test_debounced_warning()
@@ -926,6 +1046,12 @@ if __name__ == "__main__":
     test_card_names_the_reload_first()
     test_a_passively_configured_host_names_the_scan_mode()
     test_an_active_capable_host_still_gets_the_no_route_card()
+    test_a_stalled_proxy_gets_its_own_card()
+    test_a_proxy_that_is_still_delivering_is_not_blamed()
+    test_one_silent_sample_does_not_raise_the_proxy_card()
+    test_a_silent_host_adapter_is_not_a_stalled_proxy()
+    test_the_proxy_card_clears_when_the_panel_answers()
+    test_the_proxy_card_ships_in_both_languages()
     test_a_named_panel_never_gets_the_scanner_card()
     test_the_scanner_card_ships_in_both_languages()
     test_a_deaf_host_is_named_once_nothing_is_heard()

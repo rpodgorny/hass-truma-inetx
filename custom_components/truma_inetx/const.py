@@ -78,6 +78,21 @@ ISSUE_HOST_DEAF = "host_deaf"
 # workshop with no other BLE devices nearby must not read as a dead radio.
 HOST_DEAF_QUIET_SECONDS = 600.0
 HOST_DEAF_MISSES_BEFORE_ISSUE = 3
+# A *proxy* scanner that has stopped delivering advertisements. Measured on the
+# van (2026-10-26, twice in one afternoon): the ESP32 proxy stays reachable on
+# its API and keeps carrying the Renogy links, yet Home Assistant receives no
+# advertisements from it at all -- "Bluetooth scanner has gone quiet for
+# 1331.8s" -- and nothing recovers on its own. The cure is a reload of that
+# proxy's **ESPHome** config entry, which is not the advice the host-wide card
+# gives, so the two faults need two cards.
+ISSUE_PROXY_QUIET = "proxy_quiet"
+# Shorter than the host-wide figure because this one is a per-scanner signal:
+# a registered proxy that has delivered nothing for this long has stalled,
+# while other scanners can still be hearing the world perfectly well.
+PROXY_QUIET_SECONDS = 180.0
+# Two connect rounds, not three: the per-scanner clock above is already the
+# evidence, so this only has to outlast a single unlucky sample.
+PROXY_QUIET_MISSES_BEFORE_ISSUE = 2
 # The id this issue had before it stopped being about proxies. Deleted once at
 # startup so an issue raised by an older version does not linger with no
 # translation behind it.
@@ -176,6 +191,48 @@ def scanners_that_never_scan_active(hass) -> list[str]:
     for entry in scan_mode_report(hass):
         if str(entry.get("requested") or "").upper() == "PASSIVE":
             names.append(str(entry.get("scanner") or "a scanner"))
+    return names
+
+
+def quiet_proxy_scanners(hass, quieter_than: float = PROXY_QUIET_SECONDS) -> list[str]:
+    """Proxies that have delivered nothing for a while, by name.
+
+    A remote scanner (an ESPHome Bluetooth proxy) is the one transport this
+    integration cannot see into: its radio, its bond and its advertisement
+    stream all live on the far side of an API. Measured on the van 2026-10-26:
+    the proxy kept answering its own API and kept carrying other integrations'
+    links while Home Assistant received no advertisements from it at all, and
+    reloading its **ESPHome** config entry was the only thing that brought the
+    stream back. That is a different cure from the host-wide advice, so it
+    needs its own question -- answered from each scanner's own silence, which
+    is why this cannot be read off the device cache (a host that hears nothing
+    still holds yesterday's entries there).
+
+    ``isinstance(scanner, BaseHaRemoteScanner)`` is the discriminator rather
+    than a name or module test: it is the class habluetooth itself uses for
+    every proxy, so a renamed proxy cannot slip past it. Tolerant by
+    construction -- an older Home Assistant, or a scanner without the method,
+    yields an empty list rather than an error.
+    """
+    try:
+        from habluetooth import BaseHaRemoteScanner
+        from homeassistant.components.bluetooth import async_current_scanners
+
+        scanners = async_current_scanners(hass)
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must not raise
+        LOGGER.debug("Truma: cannot read the proxy scanners: %s", exc)
+        return []
+    names: list[str] = []
+    for scanner in scanners or ():
+        if not isinstance(scanner, BaseHaRemoteScanner):
+            continue
+        try:
+            quiet = scanner.time_since_last_detection()
+        except Exception:  # noqa: BLE001 - no detection yet is not an answer
+            continue
+        if quiet is None or quiet < quieter_than:
+            continue
+        names.append(str(getattr(scanner, "name", None) or getattr(scanner, "source", "a proxy")))
     return names
 
 

@@ -45,6 +45,10 @@ from .const import (
     HOST_DEAF_MISSES_BEFORE_ISSUE,
     HOST_DEAF_QUIET_SECONDS,
     ISSUE_HOST_DEAF,
+    ISSUE_PROXY_QUIET,
+    PROXY_QUIET_MISSES_BEFORE_ISSUE,
+    PROXY_QUIET_SECONDS,
+    quiet_proxy_scanners,
     scanners_that_never_scan_active,
     SILENT_BACKOFF,
     SILENT_SESSIONS_BEFORE_ISSUE,
@@ -234,6 +238,9 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         # _async_note_host_deaf).
         self._last_any_advert: float | None = None
         self._host_deaf_misses = 0
+        # Same shape for the narrower fault: a proxy that has stopped
+        # delivering advertisements while the rest of the host is fine.
+        self._proxy_quiet_misses = 0
         self._unsub_adverts = None
         self._refused_sessions = 0
         self._silent_sessions = 0
@@ -407,6 +414,8 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_SCANNER_PASSIVE)
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_HOST_DEAF)
         self._host_deaf_misses = 0
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_PROXY_QUIET)
+        self._proxy_quiet_misses = 0
         # An issue this integration raised under the old id would otherwise
         # outlive the rename, showing the user a card with no text behind it.
         ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_PROXY_ROUTE_LEGACY)
@@ -433,6 +442,35 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         Called when the panel is not being heard, which is the state where
         nothing else can tell the two causes apart.
         """
+        # A stalled proxy first: it is the narrower fault, and the only one of
+        # the two whose cure is not "reload Bluetooth". Measured 2026-10-26 --
+        # the proxy answered its API and carried other links while delivering
+        # no advertisements at all, and only reloading its ESPHome entry
+        # brought the stream back (KB: truma-transport-reliability.md 5b).
+        stalled = quiet_proxy_scanners(self.hass, PROXY_QUIET_SECONDS)
+        if stalled:
+            self._proxy_quiet_misses += 1
+            if self._proxy_quiet_misses == PROXY_QUIET_MISSES_BEFORE_ISSUE:
+                LOGGER.warning(
+                    "Truma %s: the Bluetooth proxy %s has delivered no "
+                    "advertisements for over %s minutes -- reload that proxy's "
+                    "ESPHome entry",
+                    self.unique_id,
+                    ", ".join(stalled),
+                    int(PROXY_QUIET_SECONDS // 60),
+                )
+                ir.async_create_issue(
+                    self.hass,
+                    DOMAIN,
+                    ISSUE_PROXY_QUIET,
+                    is_fixable=False,
+                    severity=ir.IssueSeverity.WARNING,
+                    translation_key=ISSUE_PROXY_QUIET,
+                    translation_placeholders={"proxies": ", ".join(stalled)},
+                )
+            return
+        self._proxy_quiet_misses = 0
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_PROXY_QUIET)
         quiet = self.advert_quiet_for
         if quiet is not None and quiet < HOST_DEAF_QUIET_SECONDS:
             # Other devices are still arriving, so the radio works and the panel
