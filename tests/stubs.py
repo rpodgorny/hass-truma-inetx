@@ -125,6 +125,9 @@ class _DeviceEntry:
         self.identifiers = identifiers
         self.name = name
         self.model = model
+        # Which config entry registered it; the modern registry lookup is
+        # scoped by this, the deprecated one was not.
+        self.config_entry_id = None
         # Home Assistant shows the owner's name in preference to ours, and
         # nothing here may overwrite it -- that is what a rename is for.
         self.name_by_user = None
@@ -142,13 +145,26 @@ class _DeviceRegistry:
     def __init__(self) -> None:
         self.devices: list = []
         self.updates: list[tuple[str, dict]] = []
+        # Every entry-scoped lookup, so a test can see which registry API the
+        # integration reached for (the deprecated one logs a warning on every
+        # real startup, and stops working in Home Assistant 2027.8.0).
+        self.by_identifier: list[tuple[tuple[str, str], str]] = []
+        self.deprecated_calls = 0
 
     def clear(self) -> None:
         self.devices.clear()
         self.updates.clear()
+        self.by_identifier.clear()
+        self.deprecated_calls = 0
+
+    def _find(self, identifiers):
+        for entry in self.devices:
+            if entry.identifiers & set(identifiers):
+                return entry
+        return None
 
     def async_get_or_create(self, *, config_entry_id=None, **info):
-        entry = self.async_get_device(identifiers=info.get("identifiers", set()))
+        entry = self._find(info.get("identifiers", set()))
         if entry is None:
             entry = _DeviceEntry(
                 f"device-{len(self.devices)}",
@@ -156,6 +172,7 @@ class _DeviceRegistry:
                 info.get("name"),
                 info.get("model"),
             )
+            entry.config_entry_id = config_entry_id
             self.devices.append(entry)
             return entry
         # The real registry takes the newest device info, which is exactly how
@@ -166,9 +183,24 @@ class _DeviceRegistry:
         return entry
 
     def async_get_device(self, identifiers=frozenset(), connections=None):
-        for entry in self.devices:
-            if entry.identifiers & set(identifiers):
-                return entry
+        # Deprecated in Home Assistant 2026.10 and gone in 2027.8.0; counted so
+        # a test can fail when the integration still reaches for it.
+        self.deprecated_calls += 1
+        return self._find(identifiers)
+
+    def async_get_device_by_identifier(self, identifier, config_entry_id):
+        """The replacement: an identifier plus the entry that owns it.
+
+        Identifiers stopped being unique across config entries, which is the
+        reason the old call was deprecated -- so a device registered by another
+        entry must not match, exactly as the real registry behaves.
+        """
+        self.by_identifier.append((identifier, config_entry_id))
+        entry = self._find({identifier})
+        if entry is None:
+            return None
+        if getattr(entry, "config_entry_id", None) in (None, config_entry_id):
+            return entry
         return None
 
     def async_update_device(self, device_id: str, **changes):

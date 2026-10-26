@@ -185,6 +185,8 @@ class _Coord:
     """Carries only what the methods under test touch."""
 
     unique_id = "Truma iNetX-FFB4D1"
+    # The device lookup is scoped to the entry that owns it.
+    config_entry = types.SimpleNamespace(entry_id="entry-1")
     poll_interval = 0
     _client = None
 

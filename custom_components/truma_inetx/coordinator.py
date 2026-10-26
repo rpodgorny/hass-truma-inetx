@@ -1045,9 +1045,19 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         for addr in list(self._bus.devices):
             if not self.device_is_named(addr):
                 continue
-            entry = registry.async_get_device(
-                identifiers={(DOMAIN, f"{self.unique_id}_{addr:04X}")}
-            )
+            identifier = (DOMAIN, f"{self.unique_id}_{addr:04X}")
+            # ``async_get_device`` is deprecated as of 2026.10 and stops
+            # working in 2027.8; ``async_get_device_by_identifier`` replaced it
+            # and takes the config entry as well, which is the scope this
+            # lookup always wanted -- an identifier is no longer unique across
+            # entries. Asked of the registry rather than of a version, because
+            # hacs.json still declares 2024.12.
+            if hasattr(registry, "async_get_device_by_identifier"):
+                entry = registry.async_get_device_by_identifier(
+                    identifier, self.config_entry.entry_id
+                )
+            else:
+                entry = registry.async_get_device(identifiers={identifier})
             if entry is None:
                 continue
             info = self.device_info(addr)

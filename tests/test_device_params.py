@@ -83,6 +83,9 @@ class _Coord:
 
     hass = types.SimpleNamespace(loop=types.SimpleNamespace(time=lambda: 0.0))
     unique_id = "Truma iNetX-FFB4D1"
+    # The lookup of a registered device is scoped to the entry that owns it,
+    # so the double needs one to name.
+    config_entry = types.SimpleNamespace(entry_id="entry-1")
     last_update_success = True
     # Which kind of address this host connects on; the download reports it, so
     # a coordinator that never ran a session has to answer "not known yet".
@@ -663,6 +666,84 @@ def test_a_name_that_arrives_late_reaches_the_device_registry() -> None:
 
     assert entry.name == "Truma LevelControl Links"
     assert entry.model == "Truma LevelControl"
+
+
+def test_the_device_lookup_is_scoped_to_this_entry() -> None:
+    """The registry lookup must not go through the deprecated API.
+
+    Measured on the van 2026-10-26 on Home Assistant 2026.10.3: every session
+    start logged, from the name reconciliation in ``coordinator.py``,
+
+        Detected that custom integration 'truma_inetx' calls
+        `device_registry.async_get_device`, which is deprecated ... This will
+        stop working in Home Assistant 2027.8.0
+
+    ``async_get_device_by_identifier`` replaced it and takes the config entry
+    as well, which is the scope this lookup always wanted: the identifier is
+    built from this entry's own ``unique_id``, and the deprecation exists
+    because an identifier stopped being unique across config entries -- two
+    entries can carry the same one, and the old call would return whichever it
+    met first.
+    """
+    stubs.DEVICE_REGISTRY.clear()
+    coord = _Coord()
+    coord._bus.discovered = True
+    registry = stubs.DEVICE_REGISTRY
+    _report(coord, BOTTLE_LEFT, "GasBtl", "FillLevelP", 49)
+    registry.async_get_or_create(**coord.device_info(BOTTLE_LEFT))
+    _report(coord, BOTTLE_LEFT, "Identify", "Name", "Truma LevelControl")
+    _report(coord, BOTTLE_LEFT, "GasBtl", "Name", "Links")
+    coord.async_sync_device_names()
+
+    wanted = ("truma_inetx", f"{coord.unique_id}_{BOTTLE_LEFT:04X}")
+    assert registry.by_identifier, "the entry-scoped lookup was never used"
+    assert set(registry.by_identifier) == {(wanted, coord.config_entry.entry_id)}, (
+        registry.by_identifier
+    )
+    assert registry.deprecated_calls == 0, (
+        "the deprecated registry call still runs, and it warns on every startup"
+    )
+
+
+def test_the_older_registry_still_works_by_capability() -> None:
+    """``hacs.json`` declares 2024.12, so the newer lookup cannot be assumed.
+
+    Same shape as ``device_info``'s ``via_device_id``: ask whether the registry
+    has the replacement and fall back when it does not, rather than gating on a
+    version number. The fallback is what an older Home Assistant runs, so it is
+    exercised rather than assumed.
+    """
+    stubs.DEVICE_REGISTRY.clear()
+    coord = _Coord()
+    coord._bus.discovered = True
+    registry = stubs.DEVICE_REGISTRY
+    _report(coord, BOTTLE_LEFT, "GasBtl", "FillLevelP", 49)
+    registry.async_get_or_create(**coord.device_info(BOTTLE_LEFT))
+    _report(coord, BOTTLE_LEFT, "Identify", "Name", "Truma LevelControl")
+    _report(coord, BOTTLE_LEFT, "GasBtl", "Name", "Links")
+
+    class _OldRegistry:
+        """A registry from before ``async_get_device_by_identifier``."""
+
+        def __init__(self, real) -> None:
+            self._real = real
+
+        def async_get_device(self, identifiers=frozenset(), connections=None):
+            return self._real.async_get_device(identifiers=identifiers)
+
+        def async_update_device(self, device_id, **changes):
+            return self._real.async_update_device(device_id, **changes)
+
+    old = _OldRegistry(registry)
+    stubs.DEVICE_REGISTRY = old
+    try:
+        assert not hasattr(old, "async_get_device_by_identifier")
+        coord.async_sync_device_names()
+        assert registry.deprecated_calls > 0, "the fallback did not run"
+        entry = registry.devices[0]
+        assert entry.name == "Truma LevelControl Links"
+    finally:
+        stubs.DEVICE_REGISTRY = registry
 
 
 def test_a_device_name_does_not_go_backwards() -> None:
