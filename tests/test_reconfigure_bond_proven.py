@@ -369,6 +369,65 @@ def test_a_reachable_panel_still_pairs() -> None:
     assert hass.config_entries.unloaded == ["E1"], "the entry must be unloaded: one dialler"
 
 
+
+def _new_flow(entry: _Entry):
+    """A flow wired to the fakes, for driving a step other than ``pair``."""
+    flow = CF.TrumaConfigFlow()
+    flow.source = "reconfigure"
+    flow._name = PANEL
+    flow._address = ADDR
+    flow.hass = _Hass()
+    flow._get_reconfigure_entry = lambda: entry
+    return flow
+
+
+def _call(flow, coro) -> tuple[object, str | None]:
+    try:
+        asyncio.run(coro)
+    except H._Shown as shown:
+        return shown, shown.step_id
+    except H._Aborted as aborted:
+        return aborted, None
+    raise AssertionError("the step neither showed a form nor aborted")
+
+
+def test_every_step_id_the_flow_returns_has_a_handler() -> None:
+    """Home Assistant raises ``UnknownStep`` for a step_id with no handler.
+
+    Measured on the van 2026-10-27: b53's refusal step reached a real browser as
+    *"Unknown error occurred"*, because this suite mocks ``async_show_form`` and
+    therefore never goes through Home Assistant's own step validation. The
+    browser is the only place that defect appears, so this tripwire lives here:
+    every step this file cares about must have its ``async_step_<id>`` method.
+    """
+    for step_id in ("user", "confirm", "pair", "pair_unreachable"):
+        assert hasattr(CF.TrumaConfigFlow, f"async_step_{step_id}"), (
+            f"step_id {step_id!r} is returned but has no async_step_{step_id}; "
+            "Home Assistant will answer 'Unknown error occurred'"
+        )
+
+
+def test_the_refusal_screen_re_checks_instead_of_dead_ending() -> None:
+    """Submit on the refusal must re-derive the answer, not repeat it forever."""
+    ROUTE[0] = None
+    HEARD[0] = False
+    SCANNERS[0] = []
+    flow = _new_flow(_Entry(_Coordinator(live=False, last_ok=None)))
+    _shown, step = _call(flow, flow.async_step_pair_unreachable({}))
+    assert step == "pair_unreachable", step
+    assert SHOWN.get("errors", {}).get("base") == "no_scanner", SHOWN
+
+    # The radio comes back and the panel is reachable: the same screen must now
+    # lead into the pairing form rather than refusing again.
+    ROUTE[0] = object()
+    HEARD[0] = True
+    SCANNERS[0] = ["hci0"]
+    CALLS.clear()
+    _shown, step = _call(flow, flow.async_step_pair_unreachable({}))
+    assert step == "pair", step
+    assert CALLS == [], "opening the pairing form must not attempt anything"
+
+
 def main() -> None:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

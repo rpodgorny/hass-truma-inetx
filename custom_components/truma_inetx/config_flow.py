@@ -149,6 +149,9 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         # The address of a panel that was heard but could not be named, kept for
         # the notice step's description.
         self._unnamed_address: str | None = None
+        # Why the last attempt was refused before it started, kept so the
+        # refusal screen can re-render itself without re-deriving it.
+        self._refusal: str | None = None
 
     async def async_step_bluetooth(
         self, discovery_info: BluetoothServiceInfoBleak
@@ -412,18 +415,7 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             # unloading the entry and before spending the timeout on it.
             refusal = await self.async_preflight_route()
             if refusal is not None:
-                # A step of its own, not the pairing step with an error on it:
-                # that step's own description lists "clear the panel's device
-                # list / power-cycle it" as the fallback, and rendering it above
-                # "the panel is not at fault, leave its list alone" puts two
-                # contradictory instructions on one screen (seen in the UI on
-                # 2026-10-27, which is why this is a separate step_id).
-                return self.async_show_form(
-                    step_id="pair_unreachable",
-                    errors={"base": refusal},
-                    data_schema=None,
-                    description_placeholders={"name": self._name},
-                )
+                return self._async_show_unreachable(refusal)
 
         if user_input is not None:
             # One dialler at a time (#33). The coordinator's reconnect loop
@@ -515,6 +507,43 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
             description_placeholders={"name": self._name},
         )
+
+    def _async_show_unreachable(self, refusal: str) -> ConfigFlowResult:
+        """Render the refusal on a step of its own.
+
+        Its own step, not the pairing step with an error on it: that step's
+        description lists "clear the panel's saved Bluetooth device list" and
+        "power-cycle the panel" as the fallback, and rendering it above *"the
+        panel is not at fault, leave its list alone"* puts two contradictory
+        instructions on one screen (seen in the UI on 2026-10-27).
+        """
+        self._refusal = refusal
+        return self.async_show_form(
+            step_id="pair_unreachable",
+            errors={"base": refusal},
+            data_schema=None,
+            description_placeholders={"name": self._name},
+        )
+
+    async def async_step_pair_unreachable(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The refusal screen. Submit re-checks, so it is not a dead end.
+
+        Home Assistant raises ``UnknownStep`` for a step_id without an
+        ``async_step_<id>`` method — measured on the van 2026-10-27: b53's
+        refusal reached a browser as *"Unknown error occurred"* because the unit
+        test mocks ``async_show_form`` and so never went through HA's step
+        validation. The screen is the only place that shows up.
+        """
+        if user_input is not None:
+            refusal = await self.async_preflight_route()
+            if refusal is None:
+                return await self.async_step_pair(None)
+            return self._async_show_unreachable(refusal)
+        if self._refusal is None:
+            return await self.async_step_pair(None)
+        return self._async_show_unreachable(self._refusal)
 
     async def async_preflight_route(self) -> str | None:
         """Answer *which half is wrong* before an attempt is spent on it.
