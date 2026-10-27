@@ -220,6 +220,11 @@ async def ensure_bonded(
     # is the only way in and must still be tried; the second is a panel that is
     # reachable and refusing, where a second dialler is exactly what to avoid.
     dialled = False
+    # Consent, and spent at most once. Dropping the host's record is
+    # destructive and irreversible, so it may only ever happen because the user
+    # ticked the box -- and then only against a refusal the panel has already
+    # given, never speculatively.
+    forgot_bond = False
     while time.monotonic() < deadline:
         device = async_resolve_device(hass, name, avoid=avoid)
         if device is None:
@@ -298,6 +303,35 @@ async def ensure_bonded(
                     "dialled; not escalating to Device1.Pair()",
                     name,
                 )
+                # ...but a record that *looks* complete while the panel no
+                # longer knows it cannot be repaired by trying again. Measured
+                # on the van 2026-10-27 (panel armed, its device list cleared,
+                # this host holding a full record): 20 connects put **zero** SMP
+                # frames on air, because BlueZ tried to encrypt with the stale
+                # LTK and the panel answered HCI 0x0E -- `bluetoothd`:
+                # `device_bonding_complete() status 0x0e`. With that record
+                # removed by hand, the same press bonded in **9** SMP frames.
+                # So when the user has ticked "forget the stale bond", spend
+                # that consent here, once: drop the host's half, redial, and let
+                # the exchange run against a record that no longer lies.
+                if (
+                    may_forget_bond
+                    and not forgot_bond
+                    and (path := _live_device_path(hass, name, adapter_path))
+                ):
+                    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+                    try:
+                        forgot_bond = await _forget(
+                            bus, path, name, adapter_path=adapter_path
+                        )
+                    finally:
+                        bus.disconnect()
+                    if forgot_bond:
+                        await _drop(client, name)
+                        # Not `avoid`: the address is fine, its record was not.
+                        avoid.discard(device.address.upper())
+                        await asyncio.sleep(1.0)
+                        continue
                 await _drop(client, name)
                 avoid.add(device.address.upper())
                 await asyncio.sleep(2.0)

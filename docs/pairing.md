@@ -74,10 +74,17 @@ You do **not** need to clear any bonds, on either side of the link. If a
 **proxy** still holds a bond the panel has forgotten, the panel rejects it on
 that one address only (`error: 97`), and the integration rotates to the panel's
 next address, which pairs normally. If **this host's own adapter** is the one
-holding it, BlueZ offers a key the panel no longer has and the panel drops the
-link before its services resolve — so pairing asks the panel first and, only
-once the panel has refused, drops the host's bond and pairs again. Nothing to
-do by hand, and nothing is dropped unless the panel has already said no.
+holding it, BlueZ tries to encrypt with a key the panel no longer has and the
+panel refuses the bond (`HCI 0x0E`) — retrying cannot help, because no pairing
+exchange is ever attempted. The flow therefore drops this host's half and dials
+again, and that drop is the one destructive act it will not take on its own: the
+first attempt fails, the form comes back with **forget the stale bond**, and
+ticking it is the consent. Nothing to do by hand, and nothing is dropped unless
+the panel has already said no.
+
+Measured on the van 2026-10-27: with a full-looking record the panel had
+forgotten, twenty connects put **zero** pairing frames on air; after the drop the
+same press bonded in nine.
 
 That second case is why pairing no longer requires a connection to succeed
 first. A panel with no bond drops every link it is offered, so on a host with

@@ -517,6 +517,7 @@ def _run_ensure_bonded(
     link_bonds: bool = False,
     local_link: bool = False,
     may_forget: bool = False,
+    forget_ok: bool = True,
     stop_after: int = 200,
 ):
     """Drive ``ensure_bonded`` and report what it tried and where it went."""
@@ -527,6 +528,7 @@ def _run_ensure_bonded(
         "bonded_over_link": 0,
         "links": [],
         "local_bond": 0,
+        "forgot": [],
     }
 
     def resolve(_hass, _name, *, avoid=(), local_only=False, prefer_identity=False):
@@ -574,6 +576,13 @@ def _run_ensure_bonded(
         log["budget"].append(kwargs.get("timeout"))
         return True
 
+    async def forget(_bus, path, _name, *, adapter_path=None):
+        log["forgot"].append((path, adapter_path))
+        return forget_ok
+
+    async def open_bus():
+        return types.SimpleNamespace(disconnect=lambda: None)
+
     # Put every one of these back afterwards. _ensure_bonded_bluez is stubbed
     # here and exercised for real in part two, and a leak between the two reads
     # as the real loop passing when it never ran.
@@ -583,6 +592,10 @@ def _run_ensure_bonded(
         "_bond_over_link": bond_over_link,
         "_bond_over_local_link": bond_over_local_link,
         "_ensure_bonded_bluez": bluez_bond,
+        # Consent-gated: the host's own dead key is dropped with RemoveDevice,
+        # which needs a D-Bus connection of its own.
+        "_forget": forget,
+        "MessageBus": lambda **_kw: types.SimpleNamespace(connect=open_bus),
         "async_has_proxy_route": lambda *_a, **_k: has_proxy,
         # Which transport the client in hand came from. A local link is the case
         # that used to drop the link and hand the bond to Device1.Pair().
@@ -720,6 +733,71 @@ def test_a_re_pair_the_panel_refuses_is_not_escalated_to_a_pair_storm(pairing) -
     assert log["links"], "never dialled at all"
     assert "disconnect" in log["links"][0].calls, (
         "left the link open after refusing to bond over it"
+    )
+
+
+def test_consent_drops_this_hosts_dead_key_and_dials_again(pairing) -> None:
+    """A full-looking record the panel has forgotten cannot be repaired by retrying.
+
+    Measured on the van 2026-10-27, and it is the reason this test exists: the
+    panel was armed and its device list cleared, this host still held a complete
+    record (IRK + both LTKs + signature keys), and `Reconfigure` spent its whole
+    timeout dialling. **Twenty connects, zero SMP frames** -- BlueZ tried to
+    encrypt with the stale LTK instead of running a fresh exchange, and the panel
+    answered HCI 0x0E (`bluetoothd`: `device_bonding_complete() status 0x0e`).
+    With that record removed by hand, the same press bonded in **9 SMP frames**.
+
+    So the consent the card asks for has to reach *this* branch, not only the
+    "no link could be dialled" one: drop the host's half, redial, bond again.
+    """
+    (bonded, client), log = _run_ensure_bonded(
+        pairing,
+        addresses=[IDENTITY],
+        bluez_sees=True,
+        connects=True,
+        own_the_link=True,
+        local_link=True,
+        link_bonds=False,
+        may_forget=True,
+    )
+    assert len(log["forgot"]) == 1, (
+        f"consent was given and the dead key was not dropped: {log['forgot']}"
+    )
+    assert log["forgot"][0][0] == DEV, "dropped a bond that is not the panel's"
+    assert log["local_bond"] >= 2, (
+        "dropped the record but never dialled again -- the redial is the point"
+    )
+    assert "disconnect" in log["links"][0].calls, "kept the link it abandoned"
+
+
+def test_the_dead_key_is_dropped_once_and_only_with_consent(pairing) -> None:
+    """Two things a destructive act must never do: repeat, or happen unbidden."""
+    (_bonded, _client), log = _run_ensure_bonded(
+        pairing,
+        addresses=[IDENTITY],
+        bluez_sees=True,
+        connects=True,
+        own_the_link=True,
+        local_link=True,
+        link_bonds=False,
+        may_forget=False,
+    )
+    assert log["forgot"] == [], "dropped the host's bond with no consent given"
+
+    # Consent given, the panel refuses every time: one removal, then stop
+    # spending it. A second one would be a RemoveDevice storm.
+    (_bonded2, _client2), log2 = _run_ensure_bonded(
+        pairing,
+        addresses=[IDENTITY],
+        bluez_sees=True,
+        connects=True,
+        own_the_link=True,
+        local_link=True,
+        link_bonds=False,
+        may_forget=True,
+    )
+    assert len(log2["forgot"]) == 1, (
+        f"the consent was spent more than once: {len(log2['forgot'])} removals"
     )
 
 
