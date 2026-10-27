@@ -476,6 +476,39 @@ def async_panel_heard_unnamed(hass: HomeAssistant, name: str) -> bool:
     return bool(infos) and not any(i.name == name for i in infos)
 
 
+def connectable_scanners(hass: HomeAssistant) -> list[str] | None:
+    """Names of the scanners this host can actually **connect** through.
+
+    ``None`` is not ``[]``, and the difference decides whether a user is told
+    something true or something hurtful: an older Home Assistant without
+    ``async_current_scanners`` cannot answer, and "cannot tell" must never be
+    read as "there is no radio on this host".
+
+    Exists because a pairing attempt is only worth making when some scanner can
+    reach the panel, and the failure it prevents is not a timeout but a *lie*:
+    measured on the van 2026-10-27 with every scanner disabled, the flow spent
+    ~90 s per submit and then told the user to clear the panel's device list and
+    power-cycle it (``research/truma-status-and-next-steps.md`` §4ak).
+    """
+    try:
+        from homeassistant.components.bluetooth import async_current_scanners
+    except Exception as exc:  # noqa: BLE001 - older HA, or bluetooth not loaded
+        LOGGER.debug("Truma: cannot read the scanner list: %s", exc)
+        return None
+    try:
+        scanners = async_current_scanners(hass)
+    except Exception as exc:  # noqa: BLE001 - as above
+        LOGGER.debug("Truma: cannot read the scanner list: %s", exc)
+        return None
+    if scanners is None:
+        return None
+    return [
+        str(getattr(scanner, "name", None) or getattr(scanner, "source", "a scanner"))
+        for scanner in scanners
+        if bool(getattr(scanner, "connectable", False))
+    ]
+
+
 def async_panel_advertising(hass: HomeAssistant, name: str) -> bool:
     """Return True when the panel is being heard **now**, by any scanner.
 

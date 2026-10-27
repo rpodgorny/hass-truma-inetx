@@ -33,9 +33,12 @@ from .bt import (
     advert_name,
     any_panel_named,
     async_known_name,
+    async_panel_advertising,
     async_resolve_device,
     async_sweep_for_names,
     async_sweep_for_names_soon,
+    async_wait_until_heard,
+    connectable_scanners,
     describe_scan_modes,
     is_panel_advert,
     note_named,
@@ -56,6 +59,12 @@ _UNNAMED_UNIQUE_ID = f"{DOMAIN}-unnamed"
 # How long the pairing step busy-loops Pair() while the panel is in add-device
 # mode before reporting failure.
 _PAIR_TIMEOUT = 60.0
+
+# How long the pairing step waits for the panel to be heard *before* spending
+# that attempt. A host with a radio but a quiet panel used to spend the full
+# timeout dialling an address from the cache and then blame the panel; eight
+# seconds is enough for the panel's 15-s-in-60 advert rhythm to answer.
+_PREFLIGHT_WAIT = 8.0
 
 # Offered on the pairing step *after* a failed attempt. Ticking it is the only
 # way an existing bond on this host is ever removed: the panel refuses an
@@ -399,6 +408,18 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             )
 
         if user_input is not None:
+            # Refuse, in one second, an attempt this host cannot make — before
+            # unloading the entry and before spending the timeout on it.
+            refusal = await self.async_preflight_route()
+            if refusal is not None:
+                return self.async_show_form(
+                    step_id="pair",
+                    errors={"base": refusal},
+                    data_schema=None,
+                    description_placeholders={"name": self._name},
+                )
+
+        if user_input is not None:
             # One dialler at a time (#33). The coordinator's reconnect loop
             # competes with this pairing for the panel's single connection slot,
             # and the panel refuses the flow's link while the session holds one.
@@ -488,6 +509,56 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
             description_placeholders={"name": self._name},
         )
+
+    async def async_preflight_route(self) -> str | None:
+        """Answer *which half is wrong* before an attempt is spent on it.
+
+        Measured on the van 2026-10-27 (``research/truma-status-and-next-steps.md``
+        §4ak): with every scanner disabled, three submits each spent ~90 s in
+        ``no connectable route`` and then reported *"Could not pair with the
+        panel. Put it back into add-device mode ... clear its saved Bluetooth
+        device list ... power-cycle the panel"* — destructive instructions
+        aimed at a panel that had done nothing wrong, for a host with no radio.
+
+        Two states are decidable from here, and they need opposite advice, so
+        they are separate answers rather than one hedged sentence:
+
+        * **no connectable scanner at all** → ``no_scanner``: the host's setup;
+        * **a scanner exists but nothing has heard the panel** → ``panel_not_heard``:
+          power, range, or the panel asleep.
+
+        Anything else returns ``None`` and the attempt runs as before: a panel
+        that is heard now but has no routable address is not decidable from this
+        side, and the attempt itself is then the honest test.
+        """
+        assert self._name is not None
+        if async_resolve_device(self.hass, self._name) is not None:
+            return None
+        scanners = connectable_scanners(self.hass)
+        if scanners is not None and not scanners:
+            LOGGER.info(
+                "Truma %s: pairing not attempted — no connectable Bluetooth "
+                "scanner on this host",
+                self._name,
+            )
+            return "no_scanner"
+        if not async_panel_advertising(self.hass, self._name):
+            # Give the panel one short window to speak before answering: its
+            # advert rhythm is 15 s in every 60 s, so a quiet cache is not yet a
+            # quiet panel, and refusing on the first miss would be the same
+            # mistake in the other direction.
+            await async_wait_until_heard(
+                self.hass, self._name, timeout=_PREFLIGHT_WAIT
+            )
+            if async_resolve_device(self.hass, self._name) is not None:
+                return None
+        if async_panel_advertising(self.hass, self._name):
+            return None
+        LOGGER.info(
+            "Truma %s: pairing not attempted — no scanner has heard the panel",
+            self._name,
+        )
+        return "panel_not_heard"
 
     def _connectable_adapter_path(self) -> str | None:
         """BlueZ adapter object path of the connectable route to the panel.
