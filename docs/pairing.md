@@ -86,6 +86,34 @@ pairing agent was never reached at all, and pairing ran out its timeout
 re-dialling (#26). A connect that fails on every address the panel is
 advertising now hands over to BlueZ, which bonds over its own connection.
 
+## "Something went wrong during pairing" on the panel — check it, do not believe it
+
+The panel may show **"Something went wrong during pairing, try again"** (wording
+varies slightly) at the end of a pairing that in fact succeeded. It is reporting
+**its own** pairing sequence, the one the Truma iNet X app would run. This
+integration makes the Bluetooth bond itself and never runs that application-level
+handshake, so the panel's sequence ends without a partner and the panel says so.
+
+The bond is unaffected, and so is the session. Seen on a Panel 1 (twice, 2026-10-25)
+and reported on a **Panel 2** (2026-10-26): the card appeared, pairing completed,
+Home Assistant went on to publish every device behind the panel, and the panel
+kept listing the host as a connected device while its screen said the pairing had
+failed.
+
+**Read these instead of the message:**
+
+- On the panel, a **small green bar above the Bluetooth button** means it sees a
+  central connected. That is the panel's own ground truth.
+- In Home Assistant, the entry loads and its entities populate within a minute.
+
+If both say the link is up, dismiss the message and change nothing. Re-arming and
+submitting again on the strength of that message is how a working pairing gets
+broken — repeated submits against a panel that is not cleanly in add-device mode
+are exactly what makes it *need* re-arming.
+
+If the entities stay empty or `unknown` instead, it was a real failure: work
+through the list above.
+
 ## Where the bond lives
 
 Pairing bonds the panel on whichever adapter or proxy Home Assistant connects

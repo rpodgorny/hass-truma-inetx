@@ -429,8 +429,9 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             return
         LOGGER.warning(
             "Truma %s: the panel is advertising and this host holds a bond for it, "
-            "but every connection is refused. The panel has most likely forgotten "
-            "this Home Assistant; remove it on the panel and re-pair",
+            "but every connection is refused. Either the panel has forgotten this "
+            "Home Assistant or this host's bond record is incomplete; one re-pair "
+            "on the host side repairs both",
             self.unique_id,
         )
         ir.async_create_issue(

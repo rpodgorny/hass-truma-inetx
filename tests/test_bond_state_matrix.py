@@ -26,8 +26,12 @@ behaviour, so it belongs in a test.
   perfectly good on the other adapter.
 * G3 — a signature-only record (S4) cannot be told from a complete one inside
   Home Assistant: ``Device1.Paired`` is true for both, and the completeness flag
-  needs a root read of ``/var/lib/bluetooth``. The card cannot do better than it
-  does; the *diagnostics* can, and that is a documented limit rather than a bug.
+  needs a root read of ``/var/lib/bluetooth``. So the *classification* is a
+  documented limit rather than a bug — but the *sentence* was fixable and was
+  fixed in b50: the card and its log line no longer assert that the panel forgot
+  us, they name both holders and put the host-side re-pair first (S8 is a
+  host-side defect, and the panel's list is not what repairs it). Pinned by
+  ``test_g3_the_refusal_card_does_not_name_one_holder``.
 * G4 — S7 (panel list full) is the one state whose advice the code already gets
   right, by accident: the host holds no bond at all, so b39's
   ``pairing_failed_no_bond`` names "clear the list, then arm" — which is S7's
@@ -231,9 +235,10 @@ def test_s8_untrusted_or_irklss_record_also_gets_s2s_cure() -> None:
 
     Measured on the van 2026-10-26 by dropping the record's IRK: BlueZ reports
     `Paired: yes` (the LTK is still there), so `host_bond_missing` cannot fire and
-    this state reaches `panel_refusing` — whose sentence blames the panel. The
-    cure it prescribes does repair it, because a re-pair writes a fresh IRK, so
-    this is a wrong sentence and not a wrong cure.
+    this state reaches `panel_refusing`. The cure it prescribes does repair it,
+    because a re-pair writes a fresh IRK — so this was a wrong *sentence*, and
+    b50 removed the wrong part: the card now names both holders and leads with
+    the host-side re-pair (see the test below).
 
     Closing it needs the record's *contents*, which D-Bus does not expose: the
     only reader is the root-side file read the soak instrument already does. If
@@ -245,6 +250,39 @@ def test_s8_untrusted_or_irklss_record_also_gets_s2s_cure() -> None:
     _refuse(c, CONST.REFUSED_SESSIONS_BEFORE_ISSUE)
     assert _only_card() == CONST.ISSUE_PANEL_REFUSING
     assert not HOST_SIDE_BOND_ISSUES & set(IR.active)
+
+
+def test_g3_the_refusal_card_does_not_name_one_holder() -> None:
+    """The half of G3 that *can* be closed: the sentence, not the detection.
+
+    Measured 2026-10-26 (§2c): dropping the record's IRK leaves ``Paired: yes``,
+    so this state lands here and the broken half is the **host**. The card used
+    to open with "the usual cause is that the panel no longer recognises this
+    Home Assistant" and put "remove this Home Assistant from the panel's device
+    list" as step 1 — a wrong claim and a physical act at the van that repairs
+    nothing in S8, while a host-side re-pair repairs every state behind the card.
+
+    So: two holders named in the head, and the host-side step first. The
+    detection limit itself stays documented (see the test above).
+    """
+    import json
+
+    for rel in ("strings.json", "translations/en.json", "translations/de.json"):
+        data = json.loads((SRC / rel).read_text())
+        desc = data["issues"]["panel_refusing"]["description"]
+        head = desc.split("1.", 1)[0]
+        low = head.lower()
+        assert ("either" in low and " or " in low) or (
+            "entweder" in low and " oder " in low
+        ), f"{rel}: the head must name both holders, not one cause"
+        assert "usual cause" not in desc.lower(), f"{rel}: still names one cause"
+        assert "meistens liegt es daran" not in desc.lower(), (
+            f"{rel}: still names one cause"
+        )
+        step1 = desc.split("1.", 1)[1].split("2.", 1)[0].lower()
+        assert "reconfigure" in step1 or "neu konfigurieren" in step1, (
+            f"{rel}: step 1 must be the host-side re-pair, not the panel's list"
+        )
 
 
 # --------------------------------------------------------------------------
