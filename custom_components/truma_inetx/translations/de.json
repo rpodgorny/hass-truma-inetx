@@ -15,6 +15,10 @@
       "confirm": {
         "description": "Möchtest du das Truma-Bedienteil {name} hinzufügen?"
       },
+      "pair_unreachable": {
+        "title": "Pair with the Truma panel",
+        "description": "Es wurde kein Kopplungsversuch unternommen."
+      },
       "pair": {
         "title": "Mit dem Truma-Bedienteil koppeln",
         "description": "Versetze das Bedienteil {name} in den Modus zum Hinzufügen eines Geräts (in der Truma-InetX-App oder am Bedienteil selbst) und wähle anschließend einmal **Absenden**. Das Koppeln kann bis zu einer Minute dauern.\n\n**Falls das Koppeln fehlschlägt, arbeite Folgendes der Reihe nach ab:**\n\n1. **Leere die gespeicherte Bluetooth-Geräteliste des Bedienteils.** Sie fasst nur etwa vier Geräte und lehnt neue Kopplungen danach stillschweigend ab. Versetze das Bedienteil wieder in den Modus zum Hinzufügen eines Geräts und versuche es erneut.\n2. **Hat das Leeren der Liste nicht geholfen, schalte das Bedienteil aus und wieder ein und beginne von vorn** -- ausschalten, einschalten, erneut in den Modus zum Hinzufügen eines Geräts versetzen und diesen Schritt wiederholen. Das Aus- und Einschalten beendet hängende Verbindungen, die einen Verbindungsplatz belegen, und lässt das Bedienteil eine frische Bluetooth-Adresse senden, die sich problemlos koppeln lässt. Damit lösen sich die meisten hartnäckigen Fälle.\n\nVersetze das Bedienteil vor jedem Versuch erneut in den Modus zum Hinzufügen eines Geräts: Es nimmt eine Kopplung nur an, während sein Kopplungsbildschirm angezeigt wird.",

@@ -412,8 +412,14 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             # unloading the entry and before spending the timeout on it.
             refusal = await self.async_preflight_route()
             if refusal is not None:
+                # A step of its own, not the pairing step with an error on it:
+                # that step's own description lists "clear the panel's device
+                # list / power-cycle it" as the fallback, and rendering it above
+                # "the panel is not at fault, leave its list alone" puts two
+                # contradictory instructions on one screen (seen in the UI on
+                # 2026-10-27, which is why this is a separate step_id).
                 return self.async_show_form(
-                    step_id="pair",
+                    step_id="pair_unreachable",
                     errors={"base": refusal},
                     data_schema=None,
                     description_placeholders={"name": self._name},

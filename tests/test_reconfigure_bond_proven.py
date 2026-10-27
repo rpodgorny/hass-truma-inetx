@@ -323,6 +323,9 @@ def test_a_host_with_no_scanner_refuses_at_once_and_clears_the_panel() -> None:
         "the flow waited for an advert on a host that has no scanner to hear one"
     )
     assert SHOWN.get("errors", {}).get("base") == "no_scanner", SHOWN
+    # Its own step: the pairing step's description tells the user to clear
+    # the panel's list and power-cycle it, which is the opposite advice.
+    assert getattr(shown, "step_id", None) == "pair_unreachable", SHOWN
 
 
 def test_consent_cannot_spend_an_attempt_the_host_cannot_make() -> None:
@@ -336,6 +339,9 @@ def test_consent_cannot_spend_an_attempt_the_host_cannot_make() -> None:
     )
     assert CALLS == [], f"consent spent an impossible attempt: {CALLS}"
     assert SHOWN.get("errors", {}).get("base") == "no_scanner", SHOWN
+    # Its own step: the pairing step's description tells the user to clear
+    # the panel's list and power-cycle it, which is the opposite advice.
+    assert getattr(shown, "step_id", None) == "pair_unreachable", SHOWN
 
 
 def test_a_panel_nobody_hears_is_not_told_to_clear_its_list() -> None:
@@ -353,6 +359,7 @@ def test_a_panel_nobody_hears_is_not_told_to_clear_its_list() -> None:
     assert CALLS == [], f"the flow dialled a panel it cannot hear: {CALLS}"
     assert WAITS == [1.0], "the flow must give the panel a short window before refusing"
     assert SHOWN.get("errors", {}).get("base") == "panel_not_heard", SHOWN
+    assert getattr(shown, "step_id", None) == "pair_unreachable", SHOWN
 
 
 def test_a_reachable_panel_still_pairs() -> None:
