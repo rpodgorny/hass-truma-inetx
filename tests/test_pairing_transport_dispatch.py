@@ -270,9 +270,9 @@ def _dispatch(*, heard_by_proxy: bool, connected_via_proxy: bool) -> str:
         chosen.append("bluez")
         return True
 
-    async def _link(_name, _client):
+    async def _link(_name, _client, **_kw):
         chosen.append("link")
-        return True
+        return True, False
 
     PAIRING.establish_connection = _connect
     PAIRING.client_is_proxy = lambda _client: connected_via_proxy

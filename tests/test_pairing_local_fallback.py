@@ -560,16 +560,18 @@ def _run_ensure_bonded(
         log["links"].append(link)
         return link
 
-    async def bond_over_link(_name, _client):
+    async def bond_over_link(_name, _client, **_kw):
+        # ``refused`` is the address-suspect signal the budget fix added; this
+        # fake models only whether the bond took, so it never claims one.
         log["bonded_over_link"] += 1
-        return bonds
+        return bonds, False
 
-    async def bond_over_local_link(_name, _client):
+    async def bond_over_local_link(_name, _client, **_kw):
         # The exchange itself is exercised directly in
         # test_bonding_over_a_dialled_link_needs_an_agent_and_proves_the_bond;
         # here what matters is whether the re-pair path reaches for it at all.
         log["local_bond"] += 1
-        return link_bonds
+        return link_bonds, False
 
     async def bluez_bond(_name, _address, **kwargs):
         log["handover"].append(kwargs.get("trust_existing_bond"))
@@ -1328,7 +1330,8 @@ def test_bonding_over_a_dialled_link_needs_an_agent_and_proves_the_bond(pairing)
     pairing.asyncio = types.SimpleNamespace(sleep=lambda _s: asyncio.sleep(0))
     _Bus.current = bluez
     try:
-        assert asyncio.run(pairing._bond_over_local_link(PANEL, link)) is True
+        bonded, _refused = asyncio.run(pairing._bond_over_local_link(PANEL, link))
+        assert bonded is True
     finally:
         for name, value in saved.items():
             setattr(pairing, name, value)

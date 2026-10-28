@@ -96,6 +96,33 @@ _DISCONNECT_TIMEOUT = 5.0
 # ambiguous path, and a panel that is refusing us is made worse by asking it
 # again (measured on the van 2026-10-25).
 _FALLBACK_BOND = 20.0
+# What one more ask on the same link can cost. The proxy client waits 30 s for
+# a pairing response (measured on the van 2026-10-28), so a retry that cannot
+# fit in what is left is not started: the caller needs its remaining budget to
+# rotate, and the rotation is the only cure for a refused bond. Costs at most
+# one attempt -- never a bond.
+_RETRY_NEEDS = 31.0
+# How long an address that failed to bond is left alone before it is dialled
+# again inside one attempt. A rejection is not transient, and re-asking a
+# refusing panel is what has cost this panel its key before (measured on the
+# van 2026-10-25: 47 x HCI 0x0E in six minutes). At the 60 s budget this still
+# allows three asks, which is what the address that heals after a panel power
+# cycle needs.
+_FAILED_DIAL_SPACING = 20.0
+# What a rejected bond looks like on the wire, in the words this stack uses.
+# Not a general classifier: the one distinction the retry loop needs is "the
+# panel said no to this address" (final -- rotate) versus "the exchange did not
+# finish" (worth another ask on the same link).
+_REFUSAL_MARKERS = (
+    "error: 97",
+    "error: 0x61",  # the same SMP failure, spelled in hex
+    "error: 0x0e",  # HCI "rejected for security reasons", panel side
+    "authenticationfailed",
+    "authentication failed",
+    "authentication rejected",
+    "insufficient authentication",
+    "not permitted",
+)
 
 
 # --- bonding -----------------------------------------------------------------
@@ -225,6 +252,10 @@ async def ensure_bonded(
     # ticked the box -- and then only against a refusal the panel has already
     # given, never speculatively.
     forgot_bond = False
+    # Addresses that were dialled and did not bond, and when each may be asked
+    # again. See _FAILED_DIAL_SPACING: a refusal must not turn into a tight
+    # re-dial loop, now that a refusal no longer blocks the loop for 60 s.
+    failed_dial: dict[str, float] = {}
     while time.monotonic() < deadline:
         device = async_resolve_device(hass, name, avoid=avoid)
         if device is None:
@@ -236,6 +267,7 @@ async def ensure_bonded(
             avoid.clear()
             await asyncio.sleep(1.5)
             continue
+        address = device.address.upper()
         wrapped = device.address.upper() in connect_failed
         # Only once dialling has actually failed at something. A link that
         # establishes and then refuses the bond is the rotation's case (the
@@ -274,6 +306,23 @@ async def ensure_bonded(
                 may_forget_bond=may_forget_bond,
             )
             return bonded, None
+
+        # A failed address is spaced, not stacked. A fresh address is never
+        # affected, so the rotation stays immediate -- which is the whole point
+        # of it, and the reason this gate sits here, after the handover above
+        # has had its chance and before this address is dialled again.
+        wait = failed_dial.get(address, 0.0) - time.monotonic()
+        if wait > 0:
+            if time.monotonic() + wait >= deadline:
+                LOGGER.debug(
+                    "Truma %s: %s did not bond and there is no budget left to "
+                    "ask it again",
+                    name,
+                    address,
+                )
+                return False, None
+            await asyncio.sleep(wait)
+            continue
         try:
             client = await establish_connection(
                 BleakClientWithServiceCache, device, device.address, max_attempts=1
@@ -294,7 +343,10 @@ async def ensure_bonded(
                 # else touches the panel, which is the point -- Device1.Pair()
                 # would dial it a second time, keep that link afterwards, and
                 # leave the panel refusing us (measured on the van 2026-10-25).
-                if await _bond_over_local_link(name, client):
+                bonded, refused = await _bond_over_local_link(
+                    name, client, deadline=deadline
+                )
+                if bonded:
                     return True, client
                 # Refused. Let the link go and report failure: falling through
                 # to the Pair() loop is what turned one refusal into 47 x 0x0E.
@@ -333,7 +385,9 @@ async def ensure_bonded(
                         await asyncio.sleep(1.0)
                         continue
                 await _drop(client, name)
-                avoid.add(device.address.upper())
+                avoid.add(address)
+                if refused:
+                    failed_dial[address] = time.monotonic() + _FAILED_DIAL_SPACING
                 await asyncio.sleep(2.0)
                 continue
             # First pairing, or a host that cannot dial: BlueZ holds the bond.
@@ -353,7 +407,8 @@ async def ensure_bonded(
             )
             return bonded, None
 
-        if await _bond_over_link(name, client):
+        bonded, refused = await _bond_over_link(name, client, deadline=deadline)
+        if bonded:
             # Hand the live, encrypted connection back to the caller -- do NOT
             # disconnect. Reusing it for the session avoids the reconnect that
             # wedges the just-bonded RPA.
@@ -361,7 +416,12 @@ async def ensure_bonded(
         # This address didn't bond -- drop the client, demote the address, and
         # let the resolver hand us the panel's other RPA if it has one.
         await _drop(client, name)
-        avoid.add(device.address.upper())
+        avoid.add(address)
+        if refused:
+            # The address itself is in question (the panel said no, or never
+            # answered): let it rest, so a refusal cannot turn into a re-dial
+            # loop now that it no longer spends the budget by itself.
+            failed_dial[address] = time.monotonic() + _FAILED_DIAL_SPACING
         await asyncio.sleep(2.0)
     LOGGER.warning("Truma %s: pairing timed out (%s)", name, last_exc)
     # A re-pair that never got a link is ambiguous, and the two readings have
@@ -415,15 +475,52 @@ def _noop_notify(_sender: object, _data: bytearray) -> None:
     """Discard notifications during the pairing bond test."""
 
 
-async def _bond_over_link(name: str, client: BleakClientWithServiceCache) -> bool:
+async def _bond_over_link(
+    name: str,
+    client: BleakClientWithServiceCache,
+    *,
+    deadline: float | None = None,
+) -> tuple[bool, bool]:
     """Bond on a live proxy-carried link: ``pair()``, then prove it took.
 
     An ESPHome proxy encrypts lazily, so pair()/encrypt first, then confirm the
     bond by subscribing to a protected characteristic -- a CCCD write only
     succeeds on an encrypted link. Retries briefly to absorb the
     encryption-setup delay.
+
+    Returns ``(bonded, refused)``. ``refused`` means the *address* is in
+    question -- the panel rejected the bond, or was asked and never answered --
+    so the caller must let it rest rather than dial it straight back. A retry
+    is only for the encryption race; it is never an answer to a bond the panel
+    has already said no to.
+
+    ⚠️ **The retry is bounded by what the transport charges, not by a count.**
+    Measured on the van 2026-10-28 13:52 (0.9.1b1, owner: *"I had to press
+    submit twice"*): the first ``pair()`` on the proxy link answered ``Pairing
+    failed due to error: 97`` in 134 ms, and the two calls after it on the same
+    link each waited out the ESPHome proxy's own **30 s** pairing timeout -- so
+    three asks were the whole 60 s ``_PAIR_TIMEOUT``. ``ensure_bonded`` then had
+    no iteration left to rotate onto the address the panel had moved to (it
+    first advertised it 6 s into the attempt), reported failure, and bonded in
+    2.5 s on the next Submit. The rotation is this module's documented cure for
+    error 97, so this loop may not spend the budget it needs.
     """
-    for _ in range(3):
+    pair_raised = False
+    for attempt in range(3):
+        if (
+            attempt
+            and deadline is not None
+            and time.monotonic() + _RETRY_NEEDS > deadline
+        ):
+            LOGGER.debug(
+                "Truma %s: only %.0fs of budget left and a pairing call may "
+                "take two of them; not re-asking this address, leaving the "
+                "rest to the rotation",
+                name,
+                max(deadline - time.monotonic(), 0.0),
+            )
+            return False, True
+        refused = False
         try:
             await client.pair()
         except Exception as exc:  # noqa: BLE001 - not all paths need it
@@ -434,19 +531,36 @@ async def _bond_over_link(name: str, client: BleakClientWithServiceCache) -> boo
             # avoid-rotation in ensure_bonded is the cure: the panel's next RPA
             # is one the proxy holds no bond for, so pairing there is clean.
             # Measured twice on the van (2026-07-26): rejected, rotated,
-            # bonded, ~9s total.
+            # bonded, ~9s total. So a refusal ends this address now, while
+            # there is still budget to rotate with.
             LOGGER.debug("Truma %s pair(): %s", name, exc)
+            pair_raised = True
+            refused = _is_refusal(exc)
         try:
             # A protected CCCD write only lands on an encrypted (bonded) link --
             # success here means the bond took.
             await client.start_notify(CHAR_CMD, _noop_notify)
             await client.stop_notify(CHAR_CMD)
             LOGGER.info("Truma %s bonded", name)
-            return True
+            return True, False
         except Exception as exc:  # noqa: BLE001 - retry through encrypt race
             LOGGER.debug("Truma %s bond check: %s", name, exc)
+            if refused:
+                return False, True
             await asyncio.sleep(1.5)
-    return False
+    return False, pair_raised
+
+
+def _is_refusal(exc: BaseException) -> bool:
+    """Whether ``pair()`` failed because the panel refused the bond.
+
+    The distinction the loop needs and nothing more: a refusal is final for the
+    address (the cure is a different one), while a call that timed out or
+    answered "already in progress" says nothing about the address and is worth
+    another ask on the same link.
+    """
+    text = str(exc).lower()
+    return any(marker in text for marker in _REFUSAL_MARKERS)
 
 
 # --- local BlueZ pairing (D-Bus) — when HA connects over a host adapter -----
@@ -489,8 +603,11 @@ async def _agent_registered(bus: MessageBus):
 
 
 async def _bond_over_local_link(
-    name: str, client: BleakClientWithServiceCache
-) -> bool:
+    name: str,
+    client: BleakClientWithServiceCache,
+    *,
+    deadline: float | None = None,
+) -> tuple[bool, bool]:
     """Bond over the local link Home Assistant already dialled.
 
     The same exchange ``_bond_over_link`` runs for a proxy, plus the agent the
@@ -507,10 +624,10 @@ async def _bond_over_local_link(
                     "cannot be confirmed",
                     name,
                 )
-            return await _bond_over_link(name, client)
+            return await _bond_over_link(name, client, deadline=deadline)
     except Exception as exc:  # noqa: BLE001 - reported by the caller
         LOGGER.debug("Truma %s: bonding over the dialled link: %s", name, exc)
-        return False
+        return False, True
     finally:
         bus.disconnect()
 
