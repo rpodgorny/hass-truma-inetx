@@ -45,7 +45,8 @@
       "no_devices_found": "No Truma iNet X panels found. Make sure the panel is powered on and in Bluetooth range.",
       "already_configured": "This Truma panel is already configured.",
       "awaiting_name": "Waiting for the Truma panel to advertise its name before pairing.",
-      "reconfigure_successful": "Re-paired with the Truma panel successfully."
+      "reconfigure_successful": "Re-paired with the Truma panel successfully.",
+      "card_in_progress": "A setup dialog for this panel is already open. Use it, or close it and let the panel be discovered again."
     }
   },
   "exceptions": {

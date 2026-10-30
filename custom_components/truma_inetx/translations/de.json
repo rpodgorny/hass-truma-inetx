@@ -45,7 +45,8 @@
       "no_devices_found": "Kein Truma iNet X Bedienteil gefunden. Stelle sicher, dass das Bedienteil eingeschaltet und in Bluetooth-Reichweite ist.",
       "already_configured": "Dieses Truma-Bedienteil ist bereits eingerichtet.",
       "awaiting_name": "Es wird darauf gewartet, dass das Truma-Bedienteil vor dem Koppeln seinen Namen sendet.",
-      "reconfigure_successful": "Das Truma-Bedienteil wurde erfolgreich neu gekoppelt."
+      "reconfigure_successful": "Das Truma-Bedienteil wurde erfolgreich neu gekoppelt.",
+      "card_in_progress": "Für dieses Bedienteil ist bereits ein Einrichtungsdialog offen. Verwende ihn, oder schließe ihn und lasse das Bedienteil erneut suchen."
     }
   },
   "exceptions": {

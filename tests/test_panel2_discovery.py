@@ -99,6 +99,8 @@ class _Info:
 
 
 ADVERTS: list[_Info] = []
+# Every flow the discovery steps retired, in order (the card a rotation replaced).
+ABORTED: list[str] = []
 # Every issue the integration raised or cleared, in order: ("create"|"delete",
 # domain, issue_id[, kwargs]).
 ISSUES: list = []
@@ -132,10 +134,22 @@ class _Hass:
     def __init__(self) -> None:
         self.data: dict = {}
         self.background: list[str] = []
+        self.config_entries = _ConfigEntries()
 
     def async_create_background_task(self, coro, name, eager_start=True):
         self.background.append(name)
         coro.close()
+
+
+class _FlowManager:
+    """The only flow-manager call the discovery steps make."""
+
+    def async_abort(self, flow_id: str) -> None:
+        ABORTED.append(flow_id)
+
+
+class _ConfigEntries:
+    flow = _FlowManager()
 
 
 class _ConfigFlow:
@@ -146,6 +160,11 @@ class _ConfigFlow:
     hass = _Hass()
     unique_id: str | None = None
     source = "bluetooth"
+    flow_id = "flow-under-test"
+
+    def _async_in_progress(self, include_uninitialized=False, match_context=None):
+        """No other flow for this panel in these checks: one panel, one card."""
+        return []
 
     def __init_subclass__(cls, **kwargs) -> None:  # domain=DOMAIN
         super().__init_subclass__()
@@ -190,6 +209,7 @@ def _load():
     _mod("homeassistant.core", HomeAssistant=object, callback=lambda f: f)
     _mod(
         "homeassistant.config_entries",
+        SOURCE_BLUETOOTH="bluetooth",
         SOURCE_RECONFIGURE="reconfigure",
         ConfigEntry=dict,
         # config_flow imports the enum to tell a loaded entry from an unloaded

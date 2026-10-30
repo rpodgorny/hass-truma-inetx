@@ -20,6 +20,7 @@ from homeassistant.components.bluetooth import (
     async_discovered_service_info,
 )
 from homeassistant.config_entries import (
+    SOURCE_BLUETOOTH,
     SOURCE_RECONFIGURE,
     ConfigEntry,
     ConfigEntryState,
@@ -204,7 +205,26 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._unnamed_address = discovery_info.address.upper()
                 return await self.async_step_unnamed()
             return self.async_abort(reason="awaiting_name")
-        await self.async_set_unique_id(name)
+        # One panel, one card -- and the card follows the address that is on air.
+        #
+        # The RPA rotates roughly every 15 minutes, and every rotation arrives
+        # here as a *new* flow keyed on the same stable name. With the default
+        # `raise_on_progress=True` this new flow aborted itself against the older
+        # card's unique_id -- *after* Home Assistant had already recorded the
+        # match for the new address (BluetoothMatcherIndex.match_domains fires
+        # once per address until that address disappears), so the new address's
+        # one discovery trigger was spent on a flow that died on arrival. The old
+        # card then went on pointing at an address that was no longer on air;
+        # when it expired (195 s, plus up to 300 s until the manager's
+        # unavailable tick) core dismissed the card and nothing replaced it until
+        # the panel rotated *again* -- up to another quarter of an hour with no
+        # way to add the panel. So take the unique_id unconditionally and retire
+        # the older card instead, which leaves exactly one card, always at the
+        # address the panel is advertising now.
+        await self.async_set_unique_id(name, raise_on_progress=False)
+        withdraw = self._async_retire_older_cards(name, discovery_info.address)
+        if withdraw is not None:
+            return self.async_abort(reason=withdraw)
         # The RPA rotates roughly every 15 minutes and every rotation lands
         # here with a new address. `reload_on_update` defaults to True, which
         # reloaded the whole config entry on each one -- tearing down and
@@ -277,6 +297,38 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
         return True
 
+    def _async_retire_older_cards(self, name: str, address: str) -> str | None:
+        """Abort an older discovery card for this panel; ``None`` means carry on.
+
+        The newest advertisement owns the card because it is the only one that
+        can be dialled (see :meth:`async_step_bluetooth`). Two kinds of flow are
+        never retired, and in both cases this flow withdraws instead:
+
+        * a card the user has pressed Submit on -- Home Assistant marks it
+          ``dismiss_protected`` precisely so discovery cannot pull the device
+          away mid-pairing, and the panel goes quiet during arming anyway;
+        * a manual "Add integration" flow, which is a user in the middle of
+          choosing. Taking that panel away would be worse than one rotation of
+          waiting.
+        """
+        for flow in self._async_in_progress(
+            include_uninitialized=True, match_context={"unique_id": name}
+        ):
+            context = flow["context"]
+            if (
+                context.get("source") != SOURCE_BLUETOOTH
+                or context.get("dismiss_protected")
+            ):
+                return "card_in_progress"
+            LOGGER.debug(
+                "Truma %s: the card at %s is stale, replaced by the one at %s",
+                name,
+                getattr(flow.get("init_data"), "address", "?"),
+                address,
+            )
+            self.hass.config_entries.flow.async_abort(flow["flow_id"])
+        return None
+
     async def async_step_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -285,12 +337,55 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
         assert self._name is not None
         if user_input is not None:
             self._address = self._discovery_info.address
+            # The card can outlive the address it was created with -- a
+            # protected card is deliberately not replaced on a rotation, so the
+            # user may press Submit on an advertisement one rotation old.
+            await self._async_refresh_address()
             return await self.async_step_pair()
         self._set_confirm_only()
         return self.async_show_form(
             step_id="confirm",
             description_placeholders={"name": self._name},
         )
+
+    async def _async_refresh_address(self) -> None:
+        """Dial the address the panel is advertising now, not the card's.
+
+        Only the *pairing loop* re-resolves by name on every pass of its
+        rotation (``pairing.ensure_bonded``); what this fixes is the one place
+        that dials blind -- the pre-dial BlueZ bond, ``_ensure_bonded_bluez(name,
+        address, ...)``, and the key the live link is handed to the coordinator
+        under. Both took the address captured when the card was created.
+
+        Replacing that address unconditionally would be wrong in the other
+        direction: after a bond the panel advertises a *phantom* RPA beside the
+        live one, and "freshest" prefers the phantom (pairing.py's rotation
+        exists for exactly that). So the rule is narrow -- if the card's address
+        is still being advertised, keep it; only when it has gone silent and
+        something else with this name is on air does the newer one win. Silence
+        with nothing to replace it means keep: the pairing loop will wait for an
+        address rather than dial a guess.
+        """
+        if self._name is None:
+            return
+        heard = [
+            info
+            for info in async_discovered_service_info(self.hass)
+            if is_panel_advert(info)
+            and (advert_name(info) or "").upper() == self._name.upper()
+        ]
+        if not heard:
+            return
+        if (self._address or "").upper() in {info.address.upper() for info in heard}:
+            return
+        newest = max(heard, key=lambda info: getattr(info, "time", 0.0))
+        LOGGER.debug(
+            "Truma %s: the address rotated while the card was open (%s -> %s)",
+            self._name,
+            self._address,
+            newest.address,
+        )
+        self._address = newest.address.upper()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

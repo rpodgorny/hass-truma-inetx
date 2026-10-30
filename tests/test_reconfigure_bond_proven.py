@@ -130,6 +130,10 @@ class _Entry:
 
 
 class _ConfigEntries:
+    # The discovery steps retire a stale card through the flow manager; these
+    # checks never take over a card, but the attribute must exist.
+    flow = H._FlowManager()
+
     def __init__(self) -> None:
         self.unloaded: list[str] = []
         self.setup: list[str] = []
