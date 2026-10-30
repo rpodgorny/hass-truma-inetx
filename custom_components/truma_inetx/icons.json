@@ -1,6 +1,9 @@
 {
   "entity": {
     "binary_sensor": {
+      "air_heating_active": {
+        "default": "mdi:radiator"
+      },
       "demo_mode": {
         "default": "mdi:store-outline"
       },
@@ -33,6 +36,9 @@
     "select": {
       "cooling_mode": {
         "default": "mdi:snowflake"
+      },
+      "energy_priority": {
+        "default": "mdi:swap-horizontal"
       }
     },
     "sensor": {
@@ -75,6 +81,9 @@
       "logic_supply": {
         "default": "mdi:flash-outline"
       },
+      "outside_temp": {
+        "default": "mdi:home-thermometer-outline"
+      },
       "panel_clock": {
         "default": "mdi:clock-outline"
       },
@@ -101,6 +110,9 @@
       "faster_water_heating": {
         "default": "mdi:water-boiler"
       },
+      "gas_switch": {
+        "default": "mdi:gas-cylinder"
+      },
       "panel_screensaver": {
         "default": "mdi:monitor-star"
       },
@@ -112,6 +124,9 @@
       },
       "water_boost": {
         "default": "mdi:water-thermometer"
+      },
+      "water_heating": {
+        "default": "mdi:water-boiler"
       },
       "water_pump": {
         "default": "mdi:water-pump"
