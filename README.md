@@ -93,6 +93,11 @@ address with everything it published and what the panel says each parameter
 Reconnects can still wedge for minutes and clear by themselves; that and the
 rest are in [known limitations](docs/limitations.md).
 
+## FAQ
+
+**Q: Can I bind the Truma panel to a specific Bluetooth adapter (hci0, hci1, or a specific ESPHome proxy)?**
+A: Not supported by Home Assistant itself. The Bluetooth integration manages all adapters and chooses the path automatically; there is no user-facing pinning option today. See [Bluetooth adapter pinning — upstream links](docs/bluetooth-adapter-pinning.md) for the upstream issues tracking this capability — add a +1 there if it matters to you.
+
 ## Docs
 
 - [Upgrading from 0.8.x](docs/upgrading.md) — the entity rename, and what to do
