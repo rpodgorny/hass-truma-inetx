@@ -14,7 +14,8 @@ why. Three cases are pinned here, because getting any of them wrong turns a
 UX fix into either a dead end or a lie:
 
 1. **a live session** -> nothing is attempted, the entry is never unloaded, and
-   the form re-shows with *forget the stale bond* as the way to insist;
+   the form re-shows with *Forget this host's existing bond and retry* as the
+   way to insist;
 2. **a bond that is not live** (the panel forgot us, the bus is deaf) -> the
    attempt runs exactly as before, because that is the only case a re-pair is
    for;
@@ -275,7 +276,7 @@ def test_a_stale_session_timestamp_is_not_proof_of_a_working_bond() -> None:
 
 
 def test_consent_outranks_our_evidence() -> None:
-    """A deliberate 'forget the stale bond' must always be able to run."""
+    """Ticking the forget-bond box must always be able to run an attempt."""
     shown, hass = _submit(_Entry(_Coordinator(live=True, last_ok=time.time())),
                           {"forget_bond": True})
     assert len(CALLS) == 1, f"consent was ignored: {CALLS}"
@@ -333,7 +334,7 @@ def test_a_host_with_no_scanner_refuses_at_once_and_clears_the_panel() -> None:
 
 
 def test_consent_cannot_spend_an_attempt_the_host_cannot_make() -> None:
-    """Ticking *forget the stale bond* is consent, not a radio."""
+    """Ticking *Forget this host's existing bond and retry* is consent, not a radio."""
     shown, _hass = _submit(
         _Entry(_Coordinator(live=False, last_ok=None)),
         {"forget_bond": True},

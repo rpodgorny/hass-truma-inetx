@@ -363,7 +363,8 @@ async def ensure_bonded(
                 # LTK and the panel answered HCI 0x0E -- `bluetoothd`:
                 # `device_bonding_complete() status 0x0e`. With that record
                 # removed by hand, the same press bonded in **9** SMP frames.
-                # So when the user has ticked "forget the stale bond", spend
+                # So when the user has ticked "Forget this host's existing bond
+                # and retry", spend
                 # that consent here, once: drop the host's half, redial, and let
                 # the exchange run against a record that no longer lies.
                 if (
@@ -1087,7 +1088,8 @@ async def _ensure_bonded_bluez(
                         "forgotten this host, so dropping the bond on this "
                         "evidence can destroy a working one. Put the panel into "
                         "add-device mode and retry; if the bond really is "
-                        "stale, retry with 'forget the stale bond' selected.",
+                        "stale, retry with 'Forget this host's existing bond "
+                        "and retry' selected.",
                         name,
                         path,
                     )

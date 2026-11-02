@@ -490,7 +490,8 @@ class TrumaConfigFlow(ConfigFlow, domain=DOMAIN):
             # the entry, called Pair() -- which BlueZ answered without putting a
             # single SMP frame on air -- and reloaded it, for ~30 s of outage and
             # nothing learnt. A bond carrying a session cannot be half-held, so
-            # decline here, tell the truth, and leave "forget the stale bond" as
+            # decline here, tell the truth, and leave "Forget this host's
+            # existing bond and retry" as
             # the way to insist.
             LOGGER.info(
                 "Truma %s: reconfigure declined — this bond is carrying a session",

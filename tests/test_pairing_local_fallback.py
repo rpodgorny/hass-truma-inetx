@@ -637,7 +637,7 @@ def test_a_re_pair_that_cannot_dial_still_bonds_through_bluez(pairing) -> None:
 
     The case this exists for: the panel's device list was cleared, so it holds no
     bond and drops every link -- #26's shape, and the state a S3 repair leaves.
-    The user ticking "forget the stale bond" is what says so; without it the
+    The user ticking the forget-bond box is what says so; without it the
     fallback must not run (below).
     """
     (bonded, client), log = _run_ensure_bonded(
@@ -1041,7 +1041,7 @@ def test_a_working_bond_survives_an_unarmed_attempt(pairing) -> None:
     working bond and then failed (proven offline 2026-10-22; this is what
     pressing the documented Reconfigure button with an idle panel used to do).
     Removal therefore requires the caller to ask, and the config flow maps that
-    to the user ticking "forget the stale bond" after a failed attempt. Without
+    to the user ticking the forget-bond box after a failed attempt. Without
     that consent: pair, fail, and leave the key where it is.
     """
     bluez = _Bluez(paired=True, accepts=True)

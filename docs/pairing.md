@@ -78,9 +78,9 @@ holding it, BlueZ tries to encrypt with a key the panel no longer has and the
 panel refuses the bond (`HCI 0x0E`) — retrying cannot help, because no pairing
 exchange is ever attempted. The flow therefore drops this host's half and dials
 again, and that drop is the one destructive act it will not take on its own: the
-first attempt fails, the form comes back with **forget the stale bond**, and
-ticking it is the consent. Nothing to do by hand, and nothing is dropped unless
-the panel has already said no.
+first attempt fails, the form comes back with **Forget this host's existing bond
+and retry**, and ticking it is the consent. Nothing to do by hand, and nothing is
+dropped unless the panel has already said no.
 
 Measured on the van 2026-10-27: with a full-looking record the panel had
 forgotten, twenty connects put **zero** pairing frames on air; after the drop the
@@ -138,9 +138,9 @@ working session to re-bond over a bond that already works costs about half a
 minute of data and changes nothing (measured on a real panel: one press, zero
 SMP frames on air, zero refusals, bond untouched). A re-pair is for a panel that
 has forgotten this host: remove this Home Assistant on the panel, clear its
-saved device list, put the panel into add-device mode, then tick *forget the
-stale bond* — that consent always runs the attempt, whatever the flow believes
-about the bond.
+saved device list, put the panel into add-device mode, then tick *Forget this
+host's existing bond and retry* — that consent always runs the attempt, whatever
+the flow believes about the bond.
 
 **A failure says which case you are in.** If this host held no bond at all when
 the attempt started, the error asks you to clear the panel's device list *first*
