@@ -109,6 +109,12 @@ _RETRY_NEEDS = 31.0
 # allows three asks, which is what the address that heals after a panel power
 # cycle needs.
 _FAILED_DIAL_SPACING = 20.0
+
+# After a proxy has dropped its bond, how long to let adverts arrive before the
+# next dial. Until then Home Assistant's cache only knows the pseudo-address the
+# proxy reported while it still resolved the panel's RPAs; the real ones show up
+# with the next adverts (seconds, the panel advertises continuously).
+_PROXY_FORGET_SETTLE = 5.0
 # What a rejected bond looks like on the wire, in the words this stack uses.
 # Not a general classifier: the one distinction the retry loop needs is "the
 # panel said no to this address" (final -- rotate) versus "the exchange did not
@@ -252,6 +258,10 @@ async def ensure_bonded(
     # ticked the box -- and then only against a refusal the panel has already
     # given, never speculatively.
     forgot_bond = False
+    # The same consent, for the half a proxy holds. Separate from
+    # ``forgot_bond`` because the two live in different places: BlueZ's record
+    # is dropped over D-Bus, an ESPHome proxy's over its API. Also spent once.
+    forgot_proxy_bond = False
     # Addresses that were dialled and did not bond, and when each may be asked
     # again. See _FAILED_DIAL_SPACING: a refusal must not turn into a tight
     # re-dial loop, now that a refusal no longer blocks the loop for 60 s.
@@ -332,6 +342,20 @@ async def ensure_bonded(
             LOGGER.debug("Truma %s pairing connect: %s", name, exc)
             avoid.add(device.address.upper())
             connect_failed.add(device.address.upper())
+            # A proxy that still holds a bond the panel has dropped never gets
+            # a link at all: it resolves every RPA with the old IRK and reports
+            # the panel under the address it bonded with, so the rotation only
+            # ever sees that one address, and connects to it time out. Measured
+            # on a van 2026-11-05 (#52): ~10 re-pairs with the box ticked, all
+            # timing out on the same pseudo-address for 1.5 h; erasing the
+            # proxy's NVS brought the real RPAs back and the next press bonded.
+            if may_forget_bond and not forgot_proxy_bond:
+                forgot_proxy_bond = True
+                if await _forget_on_proxies(hass, name):
+                    avoid.clear()
+                    connect_failed.clear()
+                    await asyncio.sleep(_PROXY_FORGET_SETTLE)
+                    continue
             await asyncio.sleep(2.0)
             continue
         dialled = True
@@ -417,6 +441,16 @@ async def ensure_bonded(
         # This address didn't bond -- drop the client, demote the address, and
         # let the resolver hand us the panel's other RPA if it has one.
         await _drop(client, name)
+        if refused and may_forget_bond and not forgot_proxy_bond:
+            # The proxy-side twin of the BlueZ forget above: the link came up
+            # but the bond was refused, which on a proxy is the stale-key case
+            # too. Only with the user's consent, and only once.
+            forgot_proxy_bond = True
+            if await _forget_on_proxies(hass, name):
+                avoid.clear()
+                connect_failed.clear()
+                await asyncio.sleep(_PROXY_FORGET_SETTLE)
+                continue
         avoid.add(address)
         if refused:
             # The address itself is in question (the panel said no, or never
@@ -462,6 +496,79 @@ async def ensure_bonded(
             None,
         )
     return False, None
+
+
+def _esphome_api(hass: HomeAssistant, source: str):
+    """The ESPHome API client of the proxy whose Bluetooth MAC is ``source``.
+
+    ``bleak_esphome``'s own ``unpair()`` refuses without a live connection, but
+    the proxy firmware does not need one (``BLUETOOTH_DEVICE_REQUEST_TYPE_UNPAIR``
+    just calls ``esp_ble_remove_bond_device``) -- and a live connection is
+    exactly what a stale bond prevents. So this goes to the API client the
+    ESPHome integration already holds for that proxy.
+    """
+    wanted = source.upper()
+    for entry in hass.config_entries.async_entries("esphome"):
+        data = getattr(entry, "runtime_data", None)
+        info = getattr(data, "device_info", None)
+        mac = (getattr(info, "bluetooth_mac_address", "") or "").upper()
+        if mac and mac == wanted:
+            return getattr(data, "client", None)
+    return None
+
+
+async def _forget_on_proxies(hass: HomeAssistant, name: str) -> bool:
+    """Drop the bond every ESPHome proxy holds for this panel. Best effort.
+
+    The forget-bond consent used to reach BlueZ only (``_forget``), so on a
+    proxy it did nothing and a stale bond there blocked every re-pair (#52).
+    Each proxy is asked for every address it reports the panel under; an
+    address it holds no bond for answers ``success=False``, which costs
+    nothing. Returns whether any proxy actually dropped one.
+    """
+    try:
+        from .bt import async_panel_addresses_by_proxy
+
+        by_proxy = async_panel_addresses_by_proxy(hass, name)
+    except Exception as exc:  # noqa: BLE001 - best effort
+        LOGGER.debug("Truma %s proxy forget: %s", name, str(exc)[:80])
+        return False
+    dropped = False
+    for source, addresses in sorted(by_proxy.items()):
+        api = _esphome_api(hass, source)
+        if api is None:
+            LOGGER.debug(
+                "Truma %s: no ESPHome API client for proxy %s; cannot drop "
+                "its bond",
+                name,
+                source,
+            )
+            continue
+        for address in sorted(addresses):
+            try:
+                response = await asyncio.wait_for(
+                    api.bluetooth_device_unpair(int(address.replace(":", ""), 16)),
+                    timeout=_PAIR_CALL_TIMEOUT,
+                )
+            except Exception as exc:  # noqa: BLE001 - best effort
+                LOGGER.debug(
+                    "Truma %s proxy forget %s on %s: %s",
+                    name,
+                    address,
+                    source,
+                    str(exc)[:80],
+                )
+                continue
+            if getattr(response, "success", False):
+                dropped = True
+                LOGGER.info(
+                    "Truma %s: dropped the bond proxy %s held for %s; the "
+                    "panel had refused it",
+                    name,
+                    source,
+                    address,
+                )
+    return dropped
 
 
 async def _drop(client: BleakClientWithServiceCache, name: str) -> None:

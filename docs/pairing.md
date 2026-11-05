@@ -93,6 +93,17 @@ pairing agent was never reached at all, and pairing ran out its timeout
 re-dialling (#26). A connect that fails on every address the panel is
 advertising now hands over to BlueZ, which bonds over its own connection.
 
+A proxy can hide the rotation too (#52). One that still holds the panel's IRK
+resolves every RPA the panel advertises and reports the panel only under the
+address it bonded with, so the integration never sees another address to rotate
+to, and connects to that one time out. The same consent covers this: with the
+box ticked, a dial through a proxy that fails, or a bond it gets refused, makes
+the flow ask every ESPHome proxy that reports the panel to drop its bond (over
+the ESPHome API, no live link needed), then dial again once the panel's real
+addresses show up. Measured on a van 2026-11-05: without that, about ten presses
+failed the same way for 1.5 h; erasing the proxy's NVS by hand brought the real
+RPAs back, and the next press bonded.
+
 ## "Something went wrong during pairing" on the panel — check it, do not believe it
 
 The panel may show **"Something went wrong during pairing, try again"** (wording

@@ -562,6 +562,32 @@ def address_kind(name: str, address: str) -> str:
     return ADDR_RPA
 
 
+def async_panel_addresses_by_proxy(
+    hass: HomeAssistant, name: str
+) -> dict[str, set[str]]:
+    """Which addresses of this panel each remote proxy reports, by scanner source.
+
+    For clearing a bond, not for choosing a route -- the only other caller
+    allowed to branch on the kind of scanner besides ``local_only``. A bond is
+    per adapter, and on an ESPHome proxy it lives in the proxy's own flash, so
+    whoever drops it has to know which proxy to ask and for which address.
+
+    The address matters: a proxy that holds the panel's IRK resolves every RPA
+    the panel advertises and reports the panel under the address it bonded
+    with, not under the address on air. That reported address is the one its
+    bond is stored under.
+    """
+    found: dict[str, set[str]] = {}
+    for info in _panel_infos(hass, name):
+        for sd in bluetooth.async_scanner_devices_by_address(
+            hass, info.address, connectable=True
+        ):
+            source = getattr(sd.scanner, "source", None)
+            if source and is_remote_scanner(sd.scanner):
+                found.setdefault(str(source).upper(), set()).add(info.address.upper())
+    return found
+
+
 def async_has_proxy_route(hass: HomeAssistant, name: str) -> bool:
     """Whether a remote (proxy) scanner can currently reach the panel.
 
