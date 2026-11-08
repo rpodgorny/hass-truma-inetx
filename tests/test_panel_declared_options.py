@@ -271,8 +271,11 @@ def test_every_option_a_select_offers_can_be_selected() -> None:
         if any(row.platform == "select" for row in rows):
             coordinator.report(topic, param, 0, HEATER)
 
+    # One select per parameter, not per row: a parameter can carry a row per
+    # make of appliance (see Row.when), and a device is given one of them.
     assert len(made) == sum(
-        row.platform == "select" for rows in PROFILES.ROWS.values() for row in rows
+        any(row.platform == "select" for row in rows)
+        for rows in PROFILES.ROWS.values()
     ), _keys(made)
     for entity in made:
         assert entity.options, _keys([entity])

@@ -51,7 +51,7 @@ from homeassistant.const import (
     UnitOfTime,
 )
 
-from .bus import ActiveState
+from .bus import ActiveState, Device
 
 # Wire scale for a temperature: the protocol carries tenths of a degree.
 TENTHS = 0.1
@@ -144,6 +144,40 @@ class Row:
     # raises inside Home Assistant on every coordinator update rather than
     # once -- measured, with BleDeviceManagement.NrFreeSlots.
     reduce: Callable[[Any], Any] | None = None
+
+    # For a parameter two makes of appliance publish under one name and mean
+    # differently by: whether this device is one this row is for. Anything
+    # but True leaves the row unbuilt for now, and it is asked again at the
+    # next update.
+    when: Callable[[Device], bool] | None = None
+
+
+def _supplier(device: Device) -> str | None:
+    """Who made the device, as it says itself in ``Identify.Supplier``."""
+    value = device.get("Identify", "Supplier")
+    return value if isinstance(value, str) and value else None
+
+
+def _is_alde(device: Device) -> bool:
+    """Whether the device has said it is an Alde.
+
+    An Alde Compact sits behind an iNet X panel on the same topics a Combi
+    uses -- measured on a Compact 3020 HE at 0x0404, ``Identify.Supplier``
+    "Alde" -- and means some of them differently: its electric element has
+    three steps of 1 kW, and its gas and hot water are the user's to switch.
+    """
+    return _supplier(device) == "Alde"
+
+
+def _not_alde(device: Device) -> bool:
+    """Everything that has not said it is an Alde, as before Alde rows existed.
+
+    A device that names no supplier keeps the rows it always had, once
+    discovery is over and it is clear none is coming. Until then a row gated
+    on the make waits for ``Identify.Supplier`` (see ``async_add_rows``),
+    because a device's name and its supplier can arrive in separate frames.
+    """
+    return not _is_alde(device)
 
 
 def _free_slots(value: object) -> int | None:
@@ -326,6 +360,13 @@ def _timer_attrs(value: object) -> dict:
 # what automations match on and they have already been renamed once.
 _WATER_MODE_LABELS = {0: "Eco (40 °C)", 1: "Comfort (60 °C)", 2: "Hot (70 °C)"}
 _ELECTRIC_LABELS = {0: "off", 1: "900 W", 2: "1800 W"}
+# An Alde Compact's element, which its panel enumerates as "Electric off" /
+# 1kW / 2kW / 3kW (Compact 3020 HE). The Combi's wattages would mislabel both
+# of the steps they share and leave 3 kW out entirely.
+_ALDE_ELECTRIC_LABELS = {0: "off", 1: "1 kW", 2: "2 kW", 3: "3 kW"}
+# EnergySrc.EnergySourcePrio, enumerated by the same panel as 0 = Electric,
+# 1 = Gas: which source the Alde reaches for first when both are enabled.
+_ENERGY_PRIO_LABELS = {0: "Electric", 1: "Gas"}
 _AIR_MODE_LABELS = {0: "Fast", 1: "Comfort"}
 # A roof air conditioner's own stages, measured on a Dometic FreshJet 2200 by
 # switching all six at the panel one at a time (2026-09-02), and since read
@@ -557,10 +598,28 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
     # gas/electric Combi 6 E switching the electric element off moved the gas
     # source on by itself, with nothing sent from here. A switch presented as
     # the user's to own would fight the heater and flap.
+    #
+    # Except on an Alde, where gas is an energy source the owner enables at
+    # the panel beside the electric steps, and nothing has been seen moving it
+    # by itself. There it is a switch, and elsewhere still a reflection.
     ("EnergySrc", "GasLevel"): (
         Row(
             platform=Platform.BINARY_SENSOR,
             translation_key="gas",
+            when=_not_alde,
+        ),
+        Row(
+            platform=Platform.SWITCH,
+            translation_key="gas_switch",
+            device_class=SwitchDeviceClass.SWITCH,
+            when=_is_alde,
+        ),
+    ),
+    ("EnergySrc", "EnergySourcePrio"): (
+        Row(
+            platform=Platform.SELECT,
+            translation_key="energy_priority",
+            labels=_ENERGY_PRIO_LABELS,
         ),
     ),
     ("EnergySrc", "DieselLevel"): (
@@ -570,11 +629,60 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
             device_class=SwitchDeviceClass.SWITCH,
         ),
     ),
+    # One select either way -- the two rows share a platform, so they share a
+    # unique_id -- named in the steps of the element that is actually fitted.
     ("EnergySrc", "ElectricLevel"): (
         Row(
             platform=Platform.SELECT,
             translation_key="electric_level",
             labels=_ELECTRIC_LABELS,
+            when=_not_alde,
+        ),
+        Row(
+            platform=Platform.SELECT,
+            translation_key="electric_level",
+            labels=_ALDE_ELECTRIC_LABELS,
+            when=_is_alde,
+        ),
+    ),
+    # -- alde ------------------------------------------------------------
+    # What a Compact 3020 HE publishes that a Combi does not, or publishes in
+    # a shape the Combi's rows do not fit.
+    #
+    # Its outdoor sensor, in tenths of a degree; the panel republishes the
+    # same value as Temperature.External.
+    ("AirHeating", "ExtTemp"): (
+        Row(
+            platform=Platform.SENSOR,
+            translation_key="outside_temp",
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            unit=UnitOfTemperature.CELSIUS,
+            scale=TENTHS,
+            precision=1,
+        ),
+    ),
+    # The heater's own flag, beside the panel's FlameStatus -- which on this
+    # vehicle is the panel's and reads 0 regardless. Type 105, read as the
+    # Active family reads.
+    ("AirHeating", "Active"): (
+        Row(
+            platform=Platform.BINARY_SENSOR,
+            translation_key="air_heating_active",
+            device_class=BinarySensorDeviceClass.RUNNING,
+            on_values=(ActiveState.ACTIVE,),
+        ),
+    ),
+    # An Alde's hot water has no temperature steps -- it publishes
+    # WaterHeating.Active and BoostMode and no Mode at all -- so the Combi's
+    # select, which carries its off on this parameter, never appears, and
+    # without this nothing switches the water. A Combi keeps the select.
+    ("WaterHeating", "Active"): (
+        Row(
+            platform=Platform.SWITCH,
+            translation_key="water_heating",
+            device_class=SwitchDeviceClass.SWITCH,
+            when=_is_alde,
         ),
     ),
     # -- air -------------------------------------------------------------
