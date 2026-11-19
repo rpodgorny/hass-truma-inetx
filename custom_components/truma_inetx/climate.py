@@ -19,6 +19,20 @@ from .bus import ActiveState, Bus
 from .coordinator import TrumaConfigEntry, TrumaCoordinator
 from .entity import TrumaEntity, async_add_per_device
 
+# Home Assistant 2026.11 moved the climate entity's temperatures to ``native_``
+# names, as sensors did long ago: the entity reports in its own unit and Home
+# Assistant converts for display. The old names -- ``current_temperature``,
+# ``target_temperature`` and ``_attr_temperature_unit`` -- are deprecated there
+# and stop working in 2027.11, which would leave the room climate with no
+# reading and no setpoint.
+#
+# Asked of the type rather than of the version number, the way the coordinator
+# asks DeviceInfo about ``via_device_id``: hacs.json still declares 2024.12, and
+# a Home Assistant that predates the native names reads only the old ones. So
+# the native names are always what this entity defines, and the old ones are
+# kept as aliases of them only where nothing else would read the value.
+_NATIVE_TEMPERATURE = hasattr(ClimateEntity, "native_current_temperature")
+
 # Entities are coordinator-driven and have no update() method, so Home
 # Assistant would create no semaphore anyway; stated explicitly.
 PARALLEL_UPDATES = 0
@@ -143,7 +157,10 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
     """
 
     _attr_name = None  # primary feature → uses the device name
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    if _NATIVE_TEMPERATURE:
+        _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
+    else:
+        _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 1
 
     def __init__(self, coordinator: TrumaCoordinator, addr: int) -> None:
@@ -215,7 +232,7 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
         return FAN_OFF if level == 0 else str(level)
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         """Current room temperature, as this appliance measures it."""
         return Bus.wire_to_celsius(self.device.get("AirHeating", "Temp"))
 
@@ -251,10 +268,18 @@ class TrumaClimate(TrumaEntity, ClimateEntity):
         return self._addr, "AirHeating"
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Target temperature of the mode that is running."""
         addr, topic = self._setpoint()
         return Bus.wire_to_celsius(self.bus.device(addr).get(topic, "TgtTemp"))
+
+    if not _NATIVE_TEMPERATURE:
+        # A Home Assistant before 2026.11 reads only these. On a newer one
+        # they must not be defined at all: the base class derives them from
+        # the native values, and overriding them is what the deprecation
+        # warning is about.
+        current_temperature = native_current_temperature
+        target_temperature = native_target_temperature
 
     @property
     def min_temp(self) -> float:
