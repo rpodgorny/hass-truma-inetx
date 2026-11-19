@@ -231,6 +231,56 @@ class TrumaBleClient:
         )
 
     @property
+    def link_up(self) -> bool:
+        """Whether the BLE link itself is still up, whatever the session's state.
+
+        ``connected`` answers "can the next packet go out", and reads False the
+        moment a send leaves the stream ambiguous. This answers the question
+        underneath it: is there still a link to restart a session on? The two
+        differ exactly in the case :meth:`reset_session` exists for -- a session
+        that has gone wrong on a link that has not.
+        """
+        return self._client is not None and self._client.is_connected
+
+    async def reset_session(self) -> bool:
+        """Start a fresh session on the link that is already up.
+
+        Clears everything that belongs to the session that is ending -- the
+        assigned bus address, the registration, a half-received message, the
+        transfer that was in flight -- and leaves the BLE link alone. The
+        caller runs startup again afterwards, which re-registers with the panel
+        and re-subscribes, exactly as on a new link.
+
+        The point is the link the panel does not see go away. Closing it is
+        what makes the panel refuse every new connection until it is
+        power-cycled (seen on the van over and over, and the reason the
+        ESPHome component for this panel never closes a working link itself).
+        A session that stalled or lost track of its acknowledgements is a
+        protocol problem, and restarting the protocol is enough to recover
+        from one.
+
+        Returns False, and changes nothing, when there is no link to restart
+        on; the caller then falls back to closing and reconnecting.
+
+        Taken under the send lock so that no transfer can be half-way through
+        while its state is wiped. The caller is expected to have waited out any
+        late reply first: Ready and DataAck carry no transfer identity, so one
+        that arrives after the reset would otherwise answer the next transfer.
+        """
+        async with self._send_lock:
+            if not self.link_up:
+                return False
+            self._receive_size = None
+            self._receive_buffer.clear()
+            self._transport_event = None
+            self._transport_ack = None
+            self._transport_expected = ()
+            self.assigned_addr = DEV_APP_DEFAULT
+            self.registered = False
+            self._transport_invalidated = False
+            return True
+
+    @property
     def transport(self) -> str | None:
         """Which adapter this link runs over: proxy, local, or None if down.
 
@@ -616,10 +666,18 @@ class TrumaBleClient:
                 # ambiguous, and the only safe answer is to end the session
                 # before the send lock is released -- otherwise the packet
                 # behind us is acknowledged by an ack that was never its own.
-                # The coordinator reconnects; a dropped write is cheaper than a
-                # write that reports success into thin air.
+                # A dropped write is cheaper than a write that reports success
+                # into thin air.
+                #
+                # The session ends here; the link does not. Invalidating is
+                # what stops the next packet (every send returns False from
+                # here on, and ``connected`` reads False for the hold loop),
+                # and it is all the ambiguity needs. Whether the link goes too
+                # is the coordinator's decision: it restarts the session on
+                # this link if it can (see :meth:`reset_session`) and closes it
+                # only if that fails, because a closed link is what makes the
+                # panel refuse every reconnect until it is power-cycled.
                 self._transport_invalidated = True
                 self.assigned_addr = DEV_APP_DEFAULT
                 self.registered = False
-                await self.disconnect()
         return success

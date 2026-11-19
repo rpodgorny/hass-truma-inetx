@@ -9,6 +9,7 @@ sent it. Reconnects with backoff on drop.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 
@@ -101,6 +102,29 @@ _DATA_STALL_TIMEOUT = 90  # seconds
 # step that hangs in a way its own timeout does not cover, so that the session
 # ends and is retried instead of sitting "connected" and delivering nothing.
 _STARTUP_TIMEOUT = 120  # seconds
+
+# A session that fails on a link that is still up -- a stall, a startup that
+# never finished, a send whose acknowledgement went missing -- is restarted on
+# that same link before anything is closed. Closing the link is what makes the
+# panel refuse every new connection until it is power-cycled: measured on the
+# van over and over (2026-10/11), and the reason the ESPHome component for this
+# panel never closes a working link itself, restarting its session over the
+# radio link instead. A protocol that went wrong is restarted at the protocol.
+#
+# Twice, then the old way. A link that takes nothing will fail both restarts
+# in under a minute (registration times out, or the first write does), and the
+# session then closes and reconnects exactly as it always did -- so the worst
+# case costs that minute, while the common case keeps the panel answering.
+_IN_LINK_RESTARTS_MAX = 2
+# How long to let a restarted session's predecessor finish talking before the
+# transport state is wiped. Ready and DataAck carry no transfer identity, so a
+# late reply has to land while nothing is waiting for one; this is the ack
+# timeout the transport itself uses, with room to spare.
+_IN_LINK_SETTLE = 4  # seconds
+# A restarted session that then runs this long has proved the restart worked,
+# so a later failure on the same link starts the count from zero again rather
+# than being held against the one that was recovered from.
+_IN_LINK_HEALTHY = 600  # seconds
 
 # Poll mode: 0 keeps the link open (the default and what most people want --
 # state arrives the instant the panel changes it). A non-zero interval connects,
@@ -253,6 +277,14 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         self._wake_event = asyncio.Event()
         self._connected_event = asyncio.Event()
         self._writes_pending = 0
+        # Set while this coordinator is closing a link itself, so the link's
+        # disconnect callback can tell our own close from one that came from
+        # outside -- the one question every "it dropped again" report turns on,
+        # and one nothing in the log used to answer.
+        self._closing_link = False
+        # Why the session that is ending ended, in words, for the line that
+        # says the link is being closed. None while a session is running.
+        self._end_reason: str | None = None
 
     async def _async_update_data(self) -> Bus:
         """Return the shared bus (updated by BLE notifications)."""
@@ -672,22 +704,78 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         )
         await close_link(client, self.unique_id)
 
-    async def _disconnect_client(self) -> None:
+    async def _disconnect_client(self, reason: str | None = None) -> None:
         """Disconnect and drop the current BLE client, best effort.
 
         Frees the connection slot on whichever adapter or proxy carried it,
         so the next attempt starts clean.
+
+        ``reason`` is said out loud when there is still a live link to close,
+        because this is the one place a link gets closed *by us* -- and a
+        closed link is what the panel answers by refusing every reconnect
+        until it is power-cycled. A log that cannot say whether we closed it or
+        something else did cannot say what to fix. Closing because Home
+        Assistant is stopping or a poll is done is the plan, so that is info;
+        any other reason is a session that failed, so that is a warning.
         """
         client = self._client
         self._client = None
         if client is None:
             LOGGER.debug("Truma %s: no live BLE link to close", self.unique_id)
             return
+        if reason is None and self._stop:
+            reason = "the integration is stopping"
+        if getattr(client, "link_up", False):
+            planned = reason is None or reason in (
+                "the integration is stopping",
+                "the poll is complete",
+            )
+            LOGGER.log(
+                logging.INFO if planned else logging.WARNING,
+                "Truma %s: closing the BLE link (%s, %s)",
+                self.unique_id,
+                (reason or "session ended").removeprefix(f"Truma {self.unique_id}: "),
+                client.transport or "unknown transport",
+            )
+        self._closing_link = True
         try:
             await client.disconnect()
             LOGGER.debug("Truma %s: BLE link closed cleanly", self.unique_id)
         except Exception as exc:  # noqa: BLE001 - teardown must not raise
             LOGGER.debug("Truma %s disconnect: %s", self.unique_id, exc)
+        finally:
+            self._closing_link = False
+
+    @callback
+    def _on_link_dropped(self, _client: object) -> None:
+        """Say so when the link goes away and it was not us who closed it.
+
+        bleak calls this for every disconnect, our own included, which is what
+        ``_closing_link`` is for. What is left is a link closed from outside:
+        the ESPHome proxy restarting or losing its API connection to Home
+        Assistant (a proxy holds no link without one), the panel dropping it,
+        or the radio between them. Which of those it was is not something the
+        link can tell us; what this line adds is *that* it was one of them,
+        and when, and how long the panel had been quiet before -- which,
+        next to the proxy's own uptime and Wi-Fi sensors, usually is enough.
+        """
+        if self._closing_link or self._stop:
+            return
+        client = self._client
+        quiet = (
+            self.hass.loop.time() - self._last_frame if self._last_frame else None
+        )
+        LOGGER.warning(
+            "Truma %s: the BLE link was closed from outside -- by the %s, the "
+            "panel or the radio between them, not by this integration (last "
+            "frame %s ago)",
+            self.unique_id,
+            "ESPHome proxy"
+            if client is not None and client.transport == "proxy"
+            else "Bluetooth adapter",
+            f"{quiet:.0f}s" if quiet is not None else "never",
+        )
+        self._end_reason = "the link was closed from outside"
 
     async def _load_stored_state(self) -> None:
         """Load the persisted app identity and address-kind memory.
@@ -753,6 +841,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         while not self._stop:
             connected = False
             silent = False
+            self._end_reason = None
             try:
                 connected = await self._connect_and_run()
             except session.BusSilent as exc:
@@ -761,18 +850,24 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
                 # state worse (measured 2026-10-25), so count it, say so once,
                 # and leave the panel alone for a while.
                 LOGGER.debug("Truma session ended: %s", exc)
+                self._end_reason = self._end_reason or str(exc)
                 self._note_attempt_failed()
                 self._note_session_silent()
                 silent = True
             except Exception as exc:  # noqa: BLE001
                 LOGGER.debug("Truma session ended: %s", exc)
+                self._end_reason = self._end_reason or str(exc)
                 self._note_attempt_failed()
                 await self._async_note_session_refused()
             finally:
                 # Always tear the client down before the next attempt so a
                 # half-open link never lingers holding a connection slot (the
-                # ghost that otherwise needs a manual power-cycle).
-                await self._disconnect_client()
+                # ghost that otherwise needs a manual power-cycle). By the time
+                # we get here a session on a live link has already been
+                # restarted in place as often as it is allowed to be (see
+                # _finish_startup), so this close is the last resort it was
+                # always meant to be.
+                await self._disconnect_client(self._end_reason)
                 self._connected_event.clear()
             if connected and self.poll_interval and not self._stop:
                 # Poll mode: the link going away is the plan, not a fault. The
@@ -958,7 +1053,7 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             LOGGER.debug(
                 "Truma %s: connecting without a fresh advert", self.unique_id
             )
-        await client.connect(ble_device)
+        await client.connect(ble_device, disconnected_callback=self._on_link_dropped)
         # The connection established, so this address is not the phantom —
         # clear the blame marker so a later failure (startup, a mid-session
         # drop) does not wrongly banish a perfectly good address.
@@ -1174,8 +1269,88 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
 
         Shared by the fresh-connect and adopted-handoff paths. Returns ``True``
         (the connection is up, so the caller resets the backoff).
+
+        A session that fails while its link is still up is restarted on that
+        link (see _IN_LINK_RESTARTS_MAX) before it is handed back to be
+        closed: a startup that failed or timed out, a hold that went quiet, a
+        send whose acknowledgement went missing. Only a link that is gone, a
+        stop, or the restarts running out end the session as before.
         """
-        await self._run_startup(client)
+        restarts = 0
+        while True:
+            try:
+                await self._run_startup(client)
+            except HomeAssistantError as exc:
+                if not self._may_restart_in_link(client, restarts):
+                    raise
+                restarts += 1
+                await self._restart_in_link(client, str(exc), restarts)
+                continue
+            ended = await self._run_session(client)
+            if ended is None:
+                return True
+            reason, held = ended
+            if held >= _IN_LINK_HEALTHY:
+                # It ran long enough to prove the last restart worked; this is
+                # a new failure, not the same one coming back.
+                restarts = 0
+            if not self._may_restart_in_link(client, restarts):
+                self._end_reason = reason
+                return True
+            restarts += 1
+            await self._restart_in_link(client, reason, restarts)
+
+    def _may_restart_in_link(self, client: TrumaBleClient, restarts: int) -> bool:
+        """Whether a failed session may be restarted on its own link.
+
+        Not in poll mode, where the link is closed after every reading anyway
+        and the next poll is the restart. Not while stopping. And only on a
+        link that is actually still up: one that is gone has nothing to
+        restart on, and is reconnected as before.
+        """
+        return (
+            not self._stop
+            and not self.poll_interval
+            and restarts < _IN_LINK_RESTARTS_MAX
+            and getattr(client, "link_up", False)
+        )
+
+    async def _restart_in_link(
+        self, client: TrumaBleClient, reason: str, attempt: int
+    ) -> None:
+        """Restart the session on the link that is still up.
+
+        Waits out any late reply first (see _IN_LINK_SETTLE), then wipes the
+        transport's session state and leaves startup to register and subscribe
+        again. Raises if the link went away meanwhile, which hands the session
+        back to the loop to be reconnected as before.
+        """
+        LOGGER.warning(
+            "Truma %s: %s -- restarting the session on the link that is still "
+            "up (attempt %d of %d) instead of closing it, because a closed link "
+            "makes the panel refuse new connections until it is power-cycled",
+            self.unique_id,
+            reason.removeprefix(f"Truma {self.unique_id}: "),
+            attempt,
+            _IN_LINK_RESTARTS_MAX,
+        )
+        self._connected_event.clear()
+        await asyncio.sleep(_IN_LINK_SETTLE)
+        if self._stop or not await client.reset_session():
+            raise HomeAssistantError(
+                f"Truma {self.unique_id}: the link went away while the session "
+                "was being restarted on it"
+            )
+        self._last_frame = self.hass.loop.time()
+
+    async def _run_session(self, client: TrumaBleClient) -> tuple[str, float] | None:
+        """Hold an established session until it ends.
+
+        Returns None when it ended the way it is meant to -- a stop, a
+        completed poll, or a link that went away -- and ``(reason, seconds
+        held)`` when it ended on a link that may still be up, which is the case
+        the caller can restart in place.
+        """
         # Every device on the bus has now been asked to describe itself, so
         # whatever has not named itself by here is not going to: anything
         # waiting for a device's identity may stop waiting (see
@@ -1234,11 +1409,13 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
                 self.unique_id,
                 self.poll_interval,
             )
-            return True
+            self._end_reason = "the poll is complete"
+            return None
 
         # Connected mode: hold the link, watching for a data stall and keeping
         # the on-demand sensors measuring.
-        next_measure = self.hass.loop.time() + _MEASURE_INTERVAL
+        held_from = self.hass.loop.time()
+        next_measure = held_from + _MEASURE_INTERVAL
         while not self._stop and client.connected:
             await asyncio.sleep(1)
             now = self.hass.loop.time()
@@ -1249,13 +1426,25 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
                 next_measure = now + _MEASURE_INTERVAL
                 await self._request_measurements(client)
             if self.hass.loop.time() - self._last_frame > _DATA_STALL_TIMEOUT:
-                LOGGER.warning(
-                    "Truma %s: no data for %ss; link is stale, reconnecting",
-                    self.unique_id,
-                    _DATA_STALL_TIMEOUT,
+                # Said by _restart_in_link, or by the close that follows when
+                # the link cannot be restarted on -- not here, where it would
+                # promise a reconnect that may not happen.
+                return (
+                    f"no data for {_DATA_STALL_TIMEOUT}s",
+                    self.hass.loop.time() - held_from,
                 )
-                break
-        return True
+        if self._stop:
+            return None
+        if getattr(client, "link_up", False):
+            # The link is there and the session is not: a send went
+            # unacknowledged and the transport gave the session up (see
+            # TrumaBleClient._send_locked).
+            return (
+                "a send went unacknowledged and the transport gave the session up",
+                self.hass.loop.time() - held_from,
+            )
+        self._end_reason = self._end_reason or "the link went away"
+        return None
 
     async def _run_startup(self, client: TrumaBleClient) -> None:
         """Run the session's startup sequence on a connected client.
@@ -1327,7 +1516,14 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         poll will not hang up while the write is outstanding.
         """
         client = self._client
-        if client is not None and client.connected:
+        if (
+            client is not None
+            and client.connected
+            # Not while a session is being restarted on its link: until the
+            # panel has registered us again, a write would go out from the
+            # default address, which the panel does not route.
+            and getattr(client, "registered", True)
+        ):
             return client
         if not self.poll_interval:
             raise HomeAssistantError("Truma panel is not connected")

@@ -28,6 +28,32 @@ nothing, until the link was forced down from outside — and would have sat ther
 for as long as Home Assistant ran. Writes, the disconnect and startup as a whole
 are each bounded now, so that link is given up after five seconds and retried.
 
+## A closed link makes the panel refuse reconnects — avoided where it can be
+
+Once a link to the panel is closed, the panel can refuse every new connection
+until it is power-cycled. Seen on the van over and over in October and November
+2026: a session ended, the integration closed the link and reconnected, and the
+panel answered nothing until its 12 V supply was switched off and on.
+
+Most of those closes were the integration's own and had nothing to do with the
+link — a 90 s data stall, a startup that did not finish, a send whose
+acknowledgement went missing. A session that fails like that on a link that is
+**still up** is now restarted on that link instead: the transport's session
+state is wiped after a short wait for late replies, and startup registers and
+subscribes again, exactly as on a new link. Twice at most; if both restarts fail
+the link is closed and reconnected as before, so a link that really carries
+nothing costs about a minute more than it used to. Not in poll mode, where the
+link is closed after every reading on purpose. The ESPHome component written for
+this panel does the same: it never closes a working link itself.
+
+What this cannot avoid is a close that does not come from the integration. A
+proxy holds no BLE link without its API connection to Home Assistant, so a
+restart of Home Assistant, of the proxy, or a Wi-Fi drop between them closes the
+link from outside. The log now says which it was: `closing the BLE link (…)`
+names the reason whenever the integration closes a live link itself, and `the
+BLE link was closed from outside` marks every close it did not make, with how
+long the panel had been quiet before.
+
 ## Reloading the config entry used to leave it unloaded — fixed
 
 Anything that reloaded the entry while a session was live tore the integration

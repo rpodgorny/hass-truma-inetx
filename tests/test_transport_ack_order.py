@@ -213,7 +213,10 @@ async def test_a_cancelled_transfer_cannot_acknowledge_the_next_one() -> None:
     assert not await second, "A's delayed ack was accepted as B's success"
     assert sent == [b"A"], "a cancelled session admitted a new payload"
     assert not client.connected
-    assert not link.is_connected
+    # The session ends; the link is left for the coordinator to restart a
+    # session on (see TrumaBleClient.reset_session), because closing it is
+    # what makes the panel refuse every reconnect until it is power-cycled.
+    assert link.is_connected and client.link_up
     assert client._transport_event is None
     assert client._transport_expected == ()
 
@@ -244,7 +247,11 @@ async def test_cancelling_a_queued_send_leaves_the_active_one_alone() -> None:
 
 
 async def test_a_failed_transfer_cannot_acknowledge_the_next_one(failure: str) -> None:
-    """However a send fails, the stream is ambiguous afterwards. End it."""
+    """However a send fails, the stream is ambiguous afterwards. End it.
+
+    "It" is the session, not the link: every send is refused from here on,
+    and the link stays up for the coordinator to restart a session on.
+    """
     client = BLE.TrumaBleClient({})
     started = asyncio.Event()
     payloads = []
@@ -285,7 +292,8 @@ async def test_a_failed_transfer_cannot_acknowledge_the_next_one(failure: str) -
         assert not await second, f"{failure}: a stale ack was accepted for B"
         assert b"B" not in payloads
         assert link.announcements == 1
-        assert not client.connected and not link.is_connected
+        assert not client.connected, f"{failure}: the session survived"
+        assert link.is_connected, f"{failure}: the transport closed the link itself"
         assert client._transport_event is None
         assert client._transport_expected == ()
     finally:
@@ -337,6 +345,64 @@ async def test_a_write_that_is_never_answered_gives_the_session_up() -> None:
         BLE._WRITE_TIMEOUT = write_timeout
 
 
+async def test_a_reset_session_carries_on_over_the_same_link() -> None:
+    """The session ends on a lost ack; a reset starts a new one on the link.
+
+    What the coordinator does instead of closing the link: wait out late
+    replies, then reset. The new session must be able to send, start from the
+    default app address and an unregistered state, and the link must never
+    have been closed -- that close is what makes the panel refuse every
+    reconnect until it is power-cycled.
+    """
+    client = BLE.TrumaBleClient({})
+    link = _Link()
+    client._client = link
+    client.assigned_addr = 0x0505
+    client.registered = True
+    answer = {"ack": False}
+
+    async def write(char, data):
+        if char == "cmd":
+            client._handle_notification("cmd", READY)
+        elif answer["ack"]:
+            client._handle_notification("cmd", ACK)
+
+    client._write = write
+    ack_timeout = BLE._ACK_TIMEOUT
+    BLE._ACK_TIMEOUT = 0.01
+    try:
+        assert not await client.send(b"lost")
+        assert not client.connected and client.link_up
+        assert not await client.send(b"refused"), "sent on an invalidated session"
+
+        # A late reply to the lost transfer, arriving while nothing waits.
+        client._handle_notification("cmd", ACK)
+
+        assert await client.reset_session()
+        assert client.connected and link.is_connected
+        assert client.assigned_addr == BLE.DEV_APP_DEFAULT
+        assert client.registered is False
+        answer["ack"] = True
+        assert await client.send(b"register"), "the new session could not send"
+    finally:
+        BLE._ACK_TIMEOUT = ack_timeout
+
+
+async def test_a_reset_session_needs_a_link() -> None:
+    """With the link gone there is nothing to restart on; say so, change nothing."""
+    client = BLE.TrumaBleClient({})
+    link = _Link()
+    link.is_connected = False
+    client._client = link
+    client._transport_invalidated = True
+
+    assert not await client.reset_session()
+    assert client._transport_invalidated, "a refused reset revived the session"
+
+    client._client = None
+    assert not await client.reset_session()
+
+
 async def test_a_disconnect_that_never_returns_is_let_go() -> None:
     """Measured on the van: BlueZ's Device1.Disconnect can hang.
 
@@ -366,6 +432,8 @@ if __name__ == "__main__":
     asyncio.run(test_an_unanswered_probe_leaves_the_session_alone())
     asyncio.run(test_a_write_that_is_never_answered_gives_the_session_up())
     asyncio.run(test_a_disconnect_that_never_returns_is_let_go())
+    asyncio.run(test_a_reset_session_carries_on_over_the_same_link())
+    asyncio.run(test_a_reset_session_needs_a_link())
     for _failure in (
         "ready_timeout",
         "ack_timeout",

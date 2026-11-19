@@ -229,6 +229,14 @@ class _Coord:
 
     _request_measurements = COORD.TrumaCoordinator._request_measurements
     _finish_startup = COORD.TrumaCoordinator._finish_startup
+    # The hold loop lives here now, and _finish_startup asks these two whether
+    # a session that ended on a live link may be restarted on it. The doubles
+    # here have no ``link_up``, so the answer is always no and the hold loop
+    # behaves exactly as it did before restarts existed.
+    _run_session = COORD.TrumaCoordinator._run_session
+    _may_restart_in_link = COORD.TrumaCoordinator._may_restart_in_link
+    _restart_in_link = COORD.TrumaCoordinator._restart_in_link
+    _end_reason = None
     _on_frame = COORD.TrumaCoordinator._on_frame
     # Borrowed too: _on_frame reconciles device names on every frame
     # that changes anything, so a double without it is not the
