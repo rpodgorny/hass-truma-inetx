@@ -767,13 +767,14 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
         )
         LOGGER.warning(
             "Truma %s: the BLE link was closed from outside -- by the %s, the "
-            "panel or the radio between them, not by this integration (last "
-            "frame %s ago)",
+            "panel or the radio between them, not by this integration (%s)",
             self.unique_id,
             "ESPHome proxy"
             if client is not None and client.transport == "proxy"
             else "Bluetooth adapter",
-            f"{quiet:.0f}s" if quiet is not None else "never",
+            f"last frame {quiet:.0f}s ago"
+            if quiet is not None
+            else "no frame received on it yet",
         )
         self._end_reason = "the link was closed from outside"
 

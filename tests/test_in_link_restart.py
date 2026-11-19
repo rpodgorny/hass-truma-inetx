@@ -403,7 +403,7 @@ def test_a_link_closed_from_outside_is_said_to_be() -> None:
     assert len(warnings) == 1, [r.getMessage() for r in log.records]
     message = warnings[0].getMessage()
     assert "closed from outside" in message and "ESPHome proxy" in message
-    assert "3s ago" in message, message
+    assert "last frame 3s ago" in message, message
     assert coord._end_reason == "the link was closed from outside"
 
 
