@@ -190,10 +190,7 @@ async def async_sweep_for_names(
     a host that is already active-scanning, and cannot rescue one pinned to
     passive: no window is ever opened there and no name is ever learnt.
     """
-    try:
-        from homeassistant.components.bluetooth import async_request_active_scan
-    except ImportError:  # pragma: no cover - Home Assistant before 2026.9
-        return False
+    from homeassistant.components.bluetooth import async_request_active_scan
     now = time.monotonic()
     last = hass.data.get(_SWEEP_LAST)
     if cooldown and last is not None and now - last < cooldown:

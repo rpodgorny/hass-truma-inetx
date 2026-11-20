@@ -321,7 +321,7 @@ def _load():
 
 
 CONST, BT, CF = _load()
-BLUETOOTH = sys.modules["homeassistant.components.bluetooth"]
+
 
 
 def _reset() -> None:
@@ -503,20 +503,6 @@ def test_an_unrelated_device_is_neither_offered_nor_swept_for() -> None:
     assert _manual_choices() == []
     # One window, because the room looked empty -- not one per device.
     assert SWEEPS == [BT.SWEEP_SECONDS], SWEEPS
-
-
-def test_a_home_assistant_without_the_api_still_discovers() -> None:
-    """The sweep is an improvement, not a dependency."""
-    _reset()
-    ADVERTS.append(_Info(name=PANEL, uuids=(SERVICE_UUID,)))
-    missing = BLUETOOTH.async_request_active_scan
-    del BLUETOOTH.async_request_active_scan
-    try:
-        assert asyncio.run(BT.async_sweep_for_names(_ConfigFlow.hass)) is False
-        assert SWEEPS == []
-        assert _manual_choices() == [PANEL]
-    finally:
-        BLUETOOTH.async_request_active_scan = missing
 
 
 def test_a_sweep_that_raises_is_not_a_failed_discovery() -> None:

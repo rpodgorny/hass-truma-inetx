@@ -288,7 +288,6 @@ def test_two_of_a_kind_are_two_named_devices() -> None:
     assert coord.device_info(BOTTLE_LEFT)["via_device_id"] == "panel-device-id"
     # ...and the panel is that hub rather than a device below it.
     assert "via_device_id" not in coord.device_info(PANEL)
-    assert "via_device" not in coord.device_info(PANEL)
 
 
 def test_a_device_that_names_itself_nothing_is_named_by_its_address() -> None:
@@ -320,34 +319,27 @@ def test_the_panels_bluetooth_side_is_named_though_it_names_nothing() -> None:
     assert coord.device_info(BLE_MGMT)["via_device_id"] == "panel-device-id"
 
 
-def test_the_hub_is_named_the_way_this_home_assistant_names_hubs() -> None:
-    """``via_device`` is deprecated as of 2026.8 and stops working in 2027.8.
+def test_the_hub_link_appears_once_the_panel_has_an_id() -> None:
+    """Devices hang off the panel by the registry's id for it.
 
-    ``via_device_id`` replaced it, and names the panel by the device
-    registry's own id rather than by its identifiers -- which is why setup
-    registers the panel before any platform is forwarded, and hands the id
-    back here.
-
-    Both are kept, because this runs on whatever Home Assistant the vehicle
-    has: an older one does not merely ignore the new key, it rejects the
-    device info whole, and the vehicle ends up with no devices at all rather
-    than with a flat list.
+    ``via_device_id`` names the hub by the device registry's own id rather
+    than by its identifiers -- which is why setup registers the panel before
+    any platform is forwarded (see ``__init__.py``), and hands the id back
+    here. Before setup has that id there is nothing to hang off, and the
+    device stands alone rather than pointing somewhere wrong.
     """
     coord = _Coord()
     _report(coord, BLE_MGMT, "BleDeviceManagement", "NrFreeSlots", 2)
 
-    # Setup has not run yet, or this Home Assistant has never heard of the
-    # new key: the old one still says where the device belongs.
+    # Setup has not registered the panel yet: no link at all, rather than a
+    # deprecated or wrong one.
     coord.hub_device_id = None
     info = coord.device_info(BLE_MGMT)
-    assert info["via_device"] == ("truma_inetx", coord.unique_id)
     assert "via_device_id" not in info
+    assert "via_device" not in info
 
     coord.hub_device_id = "panel-device-id"
-    info = coord.device_info(BLE_MGMT)
-    assert info["via_device_id"] == "panel-device-id"
-    # Never both: Home Assistant would have two answers to one question.
-    assert "via_device" not in info
+    assert coord.device_info(BLE_MGMT)["via_device_id"] == "panel-device-id"
 
 
 def test_a_device_that_names_itself_there_keeps_its_own_name() -> None:
@@ -703,47 +695,6 @@ def test_the_device_lookup_is_scoped_to_this_entry() -> None:
     assert registry.deprecated_calls == 0, (
         "the deprecated registry call still runs, and it warns on every startup"
     )
-
-
-def test_the_older_registry_still_works_by_capability() -> None:
-    """``hacs.json`` declares 2024.12, so the newer lookup cannot be assumed.
-
-    Same shape as ``device_info``'s ``via_device_id``: ask whether the registry
-    has the replacement and fall back when it does not, rather than gating on a
-    version number. The fallback is what an older Home Assistant runs, so it is
-    exercised rather than assumed.
-    """
-    stubs.DEVICE_REGISTRY.clear()
-    coord = _Coord()
-    coord._bus.discovered = True
-    registry = stubs.DEVICE_REGISTRY
-    _report(coord, BOTTLE_LEFT, "GasBtl", "FillLevelP", 49)
-    registry.async_get_or_create(**coord.device_info(BOTTLE_LEFT))
-    _report(coord, BOTTLE_LEFT, "Identify", "Name", "Truma LevelControl")
-    _report(coord, BOTTLE_LEFT, "GasBtl", "Name", "Links")
-
-    class _OldRegistry:
-        """A registry from before ``async_get_device_by_identifier``."""
-
-        def __init__(self, real) -> None:
-            self._real = real
-
-        def async_get_device(self, identifiers=frozenset(), connections=None):
-            return self._real.async_get_device(identifiers=identifiers)
-
-        def async_update_device(self, device_id, **changes):
-            return self._real.async_update_device(device_id, **changes)
-
-    old = _OldRegistry(registry)
-    stubs.DEVICE_REGISTRY = old
-    try:
-        assert not hasattr(old, "async_get_device_by_identifier")
-        coord.async_sync_device_names()
-        assert registry.deprecated_calls > 0, "the fallback did not run"
-        entry = registry.devices[0]
-        assert entry.name == "Truma LevelControl Links"
-    finally:
-        stubs.DEVICE_REGISTRY = registry
 
 
 def test_a_device_name_does_not_go_backwards() -> None:

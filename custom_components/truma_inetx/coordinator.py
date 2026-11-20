@@ -76,16 +76,6 @@ type TrumaConfigEntry = ConfigEntry[TrumaCoordinator]
 # DEVICE_SEED for the same reason.
 _KNOWN_NAMES = {DEV_BLE_MGMT: "Bluetooth management"}
 
-# Whether this Home Assistant hangs a device off its hub by the hub's registry
-# id rather than by its identifiers.
-#
-# ``via_device`` is deprecated as of 2026.8 and stops working in 2027.8;
-# ``via_device_id`` replaced it. Asked of the type rather than of the version
-# number, because the question is exactly "does this DeviceInfo take that
-# key" -- and an older one does not merely ignore it, it rejects the device
-# info whole and leaves the vehicle with no devices at all.
-_VIA_DEVICE_ID = "via_device_id" in DeviceInfo.__annotations__
-
 # Reconnect backoff. Start quick (a healthy link that just dropped should come
 # back fast) and grow exponentially to a cap when the panel stays unreachable,
 # so an out-of-range/unbonded device does not hammer — and monopolize — the
@@ -1080,21 +1070,13 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             model=device.name,
             serial_number=device.serial,
         )
-        # Hung off the panel, by whichever of the two names for that this
-        # Home Assistant takes.
-        #
-        # ``via_device`` names the hub by its identifiers and is deprecated as
-        # of 2026.8 -- it stops working in 2027.8. ``via_device_id`` names it
-        # by the registry's own id for it, which is why the panel is
-        # registered before any platform is forwarded (see __init__.py): the
-        # id does not exist until it is. Both are kept because this runs on
-        # whatever Home Assistant the vehicle has, and the older one does not
-        # know the new key at all -- it would reject the whole device info and
-        # leave the vehicle with no devices rather than with a flat list.
-        if _VIA_DEVICE_ID and self.hub_device_id is not None:
+        # Hung off the panel by the device registry's own id for it, which is
+        # why the panel is registered before any platform is forwarded (see
+        # __init__.py): the id does not exist until it is. Before setup has
+        # it there is nothing to hang off, and the device stands alone rather
+        # than pointing somewhere wrong.
+        if self.hub_device_id is not None:
             info["via_device_id"] = self.hub_device_id
-        else:
-            info["via_device"] = (DOMAIN, self.unique_id)
         return info
 
     def device_is_named(self, addr: int) -> bool:
@@ -1162,18 +1144,13 @@ class TrumaCoordinator(DataUpdateCoordinator[Bus]):
             if not self.device_is_named(addr):
                 continue
             identifier = (DOMAIN, f"{self.unique_id}_{addr:04X}")
-            # ``async_get_device`` is deprecated as of 2026.10 and stops
-            # working in 2027.8; ``async_get_device_by_identifier`` replaced it
-            # and takes the config entry as well, which is the scope this
-            # lookup always wanted -- an identifier is no longer unique across
-            # entries. Asked of the registry rather than of a version, because
-            # hacs.json still declares 2024.12.
-            if hasattr(registry, "async_get_device_by_identifier"):
-                entry = registry.async_get_device_by_identifier(
-                    identifier, self.config_entry.entry_id
-                )
-            else:
-                entry = registry.async_get_device(identifiers={identifier})
+            # ``async_get_device_by_identifier`` takes the config entry as
+            # well, which is the scope this lookup always wanted: the
+            # identifier is built from this entry's own unique_id, and an
+            # identifier is no longer unique across config entries.
+            entry = registry.async_get_device_by_identifier(
+                identifier, self.config_entry.entry_id
+            )
             if entry is None:
                 continue
             info = self.device_info(addr)

@@ -262,17 +262,13 @@ def install_homeassistant() -> None:
         IssueSeverity=SimpleNamespace(WARNING="warning"),
     ))
     # DeviceInfo is a TypedDict in Home Assistant, so at runtime this is the
-    # same thing. Declared rather than aliased to plain ``dict`` because the
-    # coordinator asks it which keys this Home Assistant takes -- ``dict``
-    # has no ``__annotations__`` at all, and answering that question wrongly
-    # is how a device ends up hung off nothing.
+    # same thing.
     class DeviceInfo(TypedDict, total=False):
         identifiers: set
         name: str
         manufacturer: str
         model: str
         serial_number: str
-        via_device: tuple
         via_device_id: str
 
     mod("homeassistant.helpers.device_registry", DeviceInfo=DeviceInfo,

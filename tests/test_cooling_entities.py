@@ -186,12 +186,12 @@ def test_the_setpoint_follows_the_running_mode() -> None:
     coordinator.report("RoomClimate", "TgtTemp", 270, PANEL)
 
     coordinator.report("RoomClimate", "Mode", 3, PANEL)
-    assert climate.target_temperature == 22.0
+    assert climate.native_target_temperature == 22.0
     asyncio.run(climate.async_set_temperature(temperature=21))
     assert coordinator.writes[-1] == (HEATER, "AirHeating", "TgtTemp", 210)
 
     coordinator.report("RoomClimate", "Mode", 2, PANEL)
-    assert climate.target_temperature == 17.0, (
+    assert climate.native_target_temperature == 17.0, (
         "cooling showed the heater's setpoint"
     )
     asyncio.run(climate.async_set_temperature(temperature=18))
@@ -203,13 +203,13 @@ def test_the_setpoint_follows_the_running_mode() -> None:
     # measurement -- it is the field left over, and the panel is what decides
     # in automatic -- so it is pinned here to be found when it turns out wrong.
     coordinator.report("RoomClimate", "Mode", 1, PANEL)
-    assert climate.target_temperature == 27.0
+    assert climate.native_target_temperature == 27.0
     asyncio.run(climate.async_set_temperature(temperature=24))
     assert coordinator.writes[-1] == (PANEL, "RoomClimate", "TgtTemp", 240)
 
     # Off keeps the heater's resting target, the way it always did.
     coordinator.report("RoomClimate", "Mode", 0, PANEL)
-    assert climate.target_temperature == 22.0
+    assert climate.native_target_temperature == 22.0
 
 
 def test_a_bus_without_an_air_conditioner_keeps_the_heaters_field() -> None:
@@ -219,7 +219,7 @@ def test_a_bus_without_an_air_conditioner_keeps_the_heaters_field() -> None:
     coordinator.report("AirHeating", "TgtTemp", 220, HEATER)
     coordinator.report("RoomClimate", "Mode", 2, PANEL)
 
-    assert climate.target_temperature == 22.0
+    assert climate.native_target_temperature == 22.0
     asyncio.run(climate.async_set_temperature(temperature=21))
     assert coordinator.writes[-1] == (HEATER, "AirHeating", "TgtTemp", 210)
 
