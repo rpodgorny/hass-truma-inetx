@@ -125,6 +125,7 @@ PARAM_VALIDATION = {
     "WaterHeating.BoostMode": [0, 1],
     "WaterHeating.FasterHeatingMode": [0, 1],
     "EnergySrc.DieselLevel": [0, 1],
+    "EnergySrc.GasLevel": [0, 1],
     "EnergySrc.ElectricLevel": [0, 1, 2],
     "Switches.FreshWaterPump": [0, 1],
     "FreshWater.Autofill": [0, 1],

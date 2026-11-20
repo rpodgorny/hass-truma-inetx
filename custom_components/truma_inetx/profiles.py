@@ -552,15 +552,27 @@ ROWS: dict[tuple[str, str], tuple[Row, ...]] = {
         ),
     ),
     # -- energy ----------------------------------------------------------
-    # Gas is reflected, never commanded (#16). EnergySrc.GasLevel is writable
-    # and a write does go through, but the heater writes it too: on a
-    # gas/electric Combi 6 E switching the electric element off moved the gas
-    # source on by itself, with nothing sent from here. A switch presented as
-    # the user's to own would fight the heater and flap.
+    # Gas is commanded the way the panel commands it (#16, reopened). The
+    # read-only shape was decided on one observation -- the heater moving
+    # the gas source on by itself -- and the reporter's later measurements
+    # on the same Combi 6 E carry the rest of the rule: the setting is
+    # honoured while any permitted source remains (whole nights on the
+    # 900 W element, cylinders open, gas untouched), and it is overridden
+    # in exactly one situation, the last source removed under a standing
+    # demand, 90 ms later -- which the Combi manual itself documents ("if
+    # the 230 V supply is unplugged or fails, the heater switches to gas
+    # automatically"). The parameter is a permission, not a supply: it
+    # reads 1 with both cylinders closed and a failed ignition raising a
+    # fault. So the switch owns the permission, its state stays whatever
+    # the appliance reports back -- nothing here sets state optimistically
+    # -- and the override is documented appliance behaviour rather than a
+    # fight between two writers. Where a panel marks the parameter
+    # read-only, the write is refused for it.
     ("EnergySrc", "GasLevel"): (
         Row(
-            platform=Platform.BINARY_SENSOR,
+            platform=Platform.SWITCH,
             translation_key="gas",
+            device_class=SwitchDeviceClass.SWITCH,
         ),
     ),
     ("EnergySrc", "DieselLevel"): (

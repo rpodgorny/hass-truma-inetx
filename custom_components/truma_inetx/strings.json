@@ -102,9 +102,6 @@
       "error": {
         "name": "Fault"
       },
-      "gas": {
-        "name": "Gas"
-      },
       "heating_active": {
         "name": "Heating"
       },
@@ -256,6 +253,9 @@
       },
       "faster_water_heating": {
         "name": "Faster water heating"
+      },
+      "gas": {
+        "name": "Gas"
       },
       "panel_screensaver": {
         "name": "Screensaver"

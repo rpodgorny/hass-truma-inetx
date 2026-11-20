@@ -4,9 +4,6 @@
       "demo_mode": {
         "default": "mdi:store-outline"
       },
-      "gas": {
-        "default": "mdi:gas-cylinder"
-      },
       "needs_energy": {
         "default": "mdi:lightning-bolt-outline"
       }
@@ -100,6 +97,9 @@
       },
       "faster_water_heating": {
         "default": "mdi:water-boiler"
+      },
+      "gas": {
+        "default": "mdi:gas-cylinder"
       },
       "panel_screensaver": {
         "default": "mdi:monitor-star"

@@ -102,9 +102,6 @@
       "error": {
         "name": "Störung"
       },
-      "gas": {
-        "name": "Gas"
-      },
       "heating_active": {
         "name": "Heizung"
       },
@@ -256,6 +253,9 @@
       },
       "faster_water_heating": {
         "name": "Schnelles Wasseraufheizen"
+      },
+      "gas": {
+        "name": "Gas"
       },
       "panel_screensaver": {
         "name": "Bildschirmschoner"

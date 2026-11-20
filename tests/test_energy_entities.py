@@ -8,11 +8,18 @@ and read.
 
 Why this exists:
 
-- **#16.** ``EnergySrc.GasLevel`` was not mapped at all, so a gas/electric
-  Combi had no gas reading. It is writable, and a write does go through -- but
-  the heater writes it too: measured on that vehicle, switching the electric
-  element off moved the gas source on by itself. A switch would fight the
-  heater and flap, so gas is reflected and never commanded.
+- **#16.** ``EnergySrc.GasLevel`` was not mapped at all, then mapped as a
+  read-only reflection, and is a switch now. The September sensor was decided
+  on one observation -- the heater moving the gas source on by itself -- and
+  the reporter's later measurements on the same Combi 6 E carry the rest of
+  the rule: the setting is honoured while any permitted source remains (whole
+  nights on the 900 W element, cylinders open, gas untouched), and it is
+  overridden in exactly one situation, the last source removed under a
+  standing demand, 90 ms later -- which the Combi manual itself documents.
+  The parameter is a permission, not a supply: it reads 1 with both cylinders
+  closed and a failed ignition raising a fault. So the switch owns the
+  permission, its state stays whatever the appliance reports, and where a
+  panel describes the parameter read-only the write is refused.
 - The same issue exposes the mirror-image bug: the diesel switch was created on
   every vehicle, including gas Combis with no diesel burner and no
   ``EnergySrc.DieselLevel`` at all.
@@ -34,8 +41,9 @@ What it pins:
 
 1. gas, diesel and both batteries reach the entities built on them, on the
    device that published them,
-2. gas is a read-only reflection -- its row is a binary sensor, and no
-   platform writes ``EnergySrc.GasLevel``,
+2. gas is a switch whose state stays the appliance's -- the write goes out,
+   nothing sets state optimistically, and a panel that calls the parameter
+   read-only refuses the write,
 3. each of them is created when, and only when, its parameter is reported,
 4. the batteries are scaled by ten, not by a thousand,
 5. the heating status is named -- off, running, idle -- and keeps the number
@@ -104,39 +112,91 @@ def test_the_params_reach_the_entities_built_on_them() -> None:
     assert bus.device(BOARD).get("L1Bat", "Voltage") == 126
 
 
-def test_gas_is_reflected_and_never_commanded() -> None:
-    """#16: the heater writes GasLevel itself, so a switch would flap.
-
-    Measured on a gas/electric Combi 6 E: NeedsEnergySrc read 1 throughout and
-    switching the electric element off moved the gas source on with nothing
-    written from Home Assistant.
+def test_gas_is_commanded_and_its_state_stays_the_appliances() -> None:
+    """#16, reopened: the panel offers gas as a control, and the appliance
+    honours it everywhere but one situation -- the last source removed under
+    a standing demand, 90 ms later, which the Combi manual documents. So the
+    switch writes the permission and mirrors whatever comes back; it never
+    decides the state itself.
     """
     rows = PROFILES.ROWS[("EnergySrc", "GasLevel")]
-    assert [row.platform for row in rows] == ["binary_sensor"], (
-        "gas was given a control again"
-    )
+    assert [row.platform for row in rows] == ["switch"], "gas is not commandable"
 
     # ...and no platform names the parameter at all: the table decides, and
-    # the table makes it a reading.
+    # the table makes it a switch like the diesel one.
     for platform in ("switch", "select", "number", "climate", "binary_sensor"):
         text = (SRC / f"{platform}.py").read_text()
         assert "GasLevel" not in text, f"{platform}.py names EnergySrc.GasLevel"
 
+    import asyncio  # noqa: PLC0415
 
-def test_the_gas_sensor_appears_only_on_a_heater_that_burns_gas() -> None:
     coordinator = _coordinator()
-    made = stubs.setup_platform(BINARY, coordinator)
-    # The link sensor is not a bus parameter and cannot wait for one.
-    assert _keys(made) == ["connection"], made
+    made = stubs.setup_platform(SWITCH, coordinator)
+    coordinator.report("EnergySrc", "GasLevel", 1, HEATER)
+    gas = _by_key(made, "gas")
+
+    asyncio.run(gas.async_turn_off())
+    assert coordinator.writes == [(HEATER, "EnergySrc", "GasLevel", 0)]
+    # Authoritative state: the appliance has not answered, so the switch
+    # still shows what the appliance last said. One that flipped here would
+    # present a hope as a fact -- and mask a refused or unanswered write.
+    assert gas.is_on is True
+
+    coordinator.report("EnergySrc", "GasLevel", 0, HEATER)
+    assert gas.is_on is False
+
+    asyncio.run(gas.async_turn_on())
+    assert coordinator.writes[-1] == (HEATER, "EnergySrc", "GasLevel", 1)
+    assert gas.is_on is False
+
+
+def test_a_gas_write_is_refused_where_the_panel_calls_it_read_only() -> None:
+    """The same parameter, on a panel that marks it perm 0.
+
+    The bus-level half is pinned in tests/test_param_meta.py: perm 0 makes
+    validate_write refuse. This is the entity half -- the switch hands the
+    write to the coordinator and the refusal surfaces, rather than being
+    swallowed into a state that never was.
+    """
+    import asyncio  # noqa: PLC0415
+
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SWITCH, coordinator)
+    coordinator.describe(
+        "EnergySrc",
+        "GasLevel",
+        HEATER,
+        perm=0,
+        enum={"0": "Gas off", "1": "Gas on"},
+        v=1,
+    )
+    gas = _by_key(made, "gas")
+    assert gas.is_on is True
+
+    try:
+        asyncio.run(gas.async_turn_off())
+    except RuntimeError as refused:
+        assert "read-only" in str(refused), refused
+    else:
+        raise AssertionError("a read-only parameter accepted a write")
+    assert coordinator.writes == []
+    # ...and the state is still the appliance's, not the refused write's.
+    assert gas.is_on is True
+
+
+def test_the_gas_switch_appears_only_on_a_heater_that_burns_gas() -> None:
+    coordinator = _coordinator()
+    made = stubs.setup_platform(SWITCH, coordinator)
+    assert made == [], "a diesel Combi was given a gas switch"
 
     coordinator.report("EnergySrc", "GasLevel", 1, HEATER)
-    assert _keys(made)[-1] == "gas", made
+    assert _keys(made) == ["gas"], made
     assert made[-1].is_on is True
     assert made[-1]._addr == HEATER
 
     # ...and only once, however many frames follow.
     coordinator.report("EnergySrc", "GasLevel", 0, HEATER)
-    assert len(made) == 2, made
+    assert len(made) == 1, made
     assert made[-1].is_on is False
 
 
@@ -273,11 +333,12 @@ def test_the_heating_flag_follows_the_electric_element_too() -> None:
     """
     coordinator = _coordinator()
     made = stubs.setup_platform(BINARY, coordinator)
+    switches = stubs.setup_platform(SWITCH, coordinator)
     coordinator.report("EnergySrc", "GasLevel", 0, HEATER)
     coordinator.report("EnergySrc", "ElectricLevel", 2, HEATER)
     coordinator.report("System", "FlameStatus", 1, HEATER)
 
-    assert _by_key(made, "gas").is_on is False
+    assert _by_key(switches, "gas").is_on is False
     assert _by_key(made, "heating_active").is_on is True
 
     # Nothing anybody reads claims a flame, in any language.
